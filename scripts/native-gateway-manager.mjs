@@ -67,22 +67,42 @@ function freePort() {
 }
 
 export async function gatewayHealth(state, timeoutMs = 2_000) {
-  if (!state?.port || !state?.token) return false;
+  if (!state?.port || !state?.token) return { reachable: false, pid: null };
   try {
     const response = await fetch(`http://127.0.0.1:${state.port}/${state.token}/_health`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return response.ok;
+    if (!response.ok) return { reachable: false, pid: null };
+    const health = await response.json();
+    return {
+      reachable: health?.ok === true,
+      pid: Number.isInteger(health?.pid) && health.pid > 0 ? health.pid : null,
+    };
   } catch {
-    return false;
+    return { reachable: false, pid: null };
   }
+}
+
+function pidStatus(state, health) {
+  if (!health.reachable) return "unreachable";
+  if (health.pid === null) return "unverified";
+  return health.pid === state.pid ? "match" : "mismatch";
+}
+
+function assertGatewayIdentity(state, health) {
+  const status = pidStatus(state, health);
+  if (status === "match") return;
+  throw new Error(`Native gateway health identity is ${status}; refusing to start or control another instance.`);
 }
 
 async function waitForHealth(paths, timeoutMs) {
   const started = Date.now();
   for (;;) {
     const state = await readGatewayState(paths);
-    if (state && await gatewayHealth(state)) return state;
+    if (state) {
+      const health = await gatewayHealth(state);
+      if (pidStatus(state, health) === "match") return state;
+    }
     if (Date.now() - started >= timeoutMs) {
       throw new Error(`Native gateway did not become healthy; inspect ${paths.log} and ${paths.state}.`);
     }
@@ -93,11 +113,19 @@ async function waitForHealth(paths, timeoutMs) {
 export async function ensureGateway({ paths = gatewayPaths(), spawnImpl = spawn } = {}) {
   await mkdir(paths.dir, { recursive: true, mode: 0o700 });
   const existing = await readGatewayState(paths);
-  if (existing && await gatewayHealth(existing)) return { state: existing, started: false };
+  if (existing) {
+    const health = await gatewayHealth(existing);
+    if (pidStatus(existing, health) === "match") return { state: existing, started: false };
+    if (health.reachable) assertGatewayIdentity(existing, health);
+  }
 
   return withFileLock(paths.lock, async () => {
     const again = await readGatewayState(paths);
-    if (again && await gatewayHealth(again)) return { state: again, started: false };
+    if (again) {
+      const health = await gatewayHealth(again);
+      if (pidStatus(again, health) === "match") return { state: again, started: false };
+      if (health.reachable) assertGatewayIdentity(again, health);
+    }
     if (again && isAlive(again.pid)) {
       throw new Error(`Native gateway state exists for a live PID ${again.pid} but health failed; refusing to start a second instance. Inspect ${paths.log}.`);
     }
@@ -125,10 +153,15 @@ export async function ensureGateway({ paths = gatewayPaths(), spawnImpl = spawn 
 export async function stopGateway({ paths = gatewayPaths() } = {}) {
   const state = await readGatewayState(paths);
   if (!state) return { stopped: false, reason: "not_running" };
-  if (!isAlive(state.pid)) {
+  const health = await gatewayHealth(state);
+  const status = pidStatus(state, health);
+  if (status === "mismatch") return { stopped: false, reason: "pid_mismatch", state_pid: state.pid, live_pid: health.pid };
+  if (status === "unverified") return { stopped: false, reason: "pid_unverified", state_pid: state.pid };
+  if (status === "unreachable" && !isAlive(state.pid)) {
     rmSync(paths.state, { force: true });
     return { stopped: false, reason: "stale_state_removed" };
   }
+  if (status === "unreachable") return { stopped: false, reason: "health_unreachable", state_pid: state.pid };
   const response = await fetch(`http://127.0.0.1:${state.port}/${state.token}/_shutdown`, {
     method: "POST",
     headers: { "x-sol-luna-token": state.token },
@@ -137,9 +170,10 @@ export async function stopGateway({ paths = gatewayPaths() } = {}) {
   if (!response.ok) throw new Error(`Native gateway shutdown was rejected with HTTP ${response.status}`);
   const deadline = Date.now() + STOP_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (!(await gatewayHealth(state))) {
+    const currentHealth = await gatewayHealth(state);
+    if (pidStatus(state, currentHealth) !== "match") {
       const current = await readGatewayState(paths);
-      if (current?.token === state.token) rmSync(paths.state, { force: true });
+      if (current?.token === state.token && current?.pid === state.pid) rmSync(paths.state, { force: true });
       return { stopped: true, pid: state.pid };
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -150,9 +184,14 @@ export async function stopGateway({ paths = gatewayPaths() } = {}) {
 export async function gatewayStatus({ paths = gatewayPaths() } = {}) {
   const state = await readGatewayState(paths);
   if (!state) return { running: false, state: null };
+  const health = await gatewayHealth(state);
+  const status = pidStatus(state, health);
   return {
-    running: await gatewayHealth(state),
-    pid: state.pid,
+    running: status === "match",
+    pid: status === "match" ? health.pid : null,
+    state_pid: state.pid,
+    live_pid: health.pid,
+    pid_status: status,
     port: state.port,
     model: state.model || null,
     started_at: state.started_at || null,

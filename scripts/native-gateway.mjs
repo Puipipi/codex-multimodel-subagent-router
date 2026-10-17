@@ -152,7 +152,7 @@ export function createNativeGateway({
         credential = { present: true, mode: auth.mode };
       } catch { /* report credential availability without exposing parser errors */ }
       json(res, 200, {
-        ok: true, model: PICKER_SLUG, deepseek_credential: credential,
+        ok: true, pid: process.pid, model: PICKER_SLUG, deepseek_credential: credential,
         requests: stats.requests, relay_calls: stats.relay_calls,
         relay_cache_hits: stats.relay_cache_hits,
       });

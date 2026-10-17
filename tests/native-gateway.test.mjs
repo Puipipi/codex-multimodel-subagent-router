@@ -54,6 +54,10 @@ const port = await gateway.start();
 const base = `http://127.0.0.1:${port}/${token}/v1/responses`;
 
 try {
+  const health = await fetch(`http://127.0.0.1:${port}/${token}/_health`);
+  const healthBody = await health.json();
+  equal(healthBody.pid, process.pid, "health identifies the real gateway process PID");
+
   const chatgptBody = JSON.stringify({ model: "gpt-6.1-sol", input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "main" }] }] });
   const gpt = await fetch(base, {
     method: "POST",
