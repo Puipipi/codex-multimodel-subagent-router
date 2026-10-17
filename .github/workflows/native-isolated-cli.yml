@@ -102,6 +102,19 @@ jobs:
           restore-keys: |
             windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-
 
+      - name: Restore legacy debug-only Cargo cache
+        if: ${{ steps.cargo-cache.outputs.cache-matched-key == '' }}
+        id: cargo-cache-legacy-debug
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            codex-rs/target/debug
+          key: windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-${{ hashFiles('router/patches/native-isolated-cli.patch', 'codex-rs/Cargo.lock') }}
+          restore-keys: |
+            windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-
+
       - name: Run Cargo.lock normalizer test
         shell: pwsh
         working-directory: codex-rs
