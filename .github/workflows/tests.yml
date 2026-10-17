@@ -54,6 +54,7 @@ jobs:
             'native-gateway-account-auth',
             'native-state',
             'native-agent',
+            'native-isolated-config',
             'native-install',
             'native-manager',
             'native-autostart',
