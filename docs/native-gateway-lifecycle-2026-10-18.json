@@ -11,5 +11,52 @@
     "this_probe": "All owned temporary task, processes, and directories were cleaned successfully.",
     "earlier_attempt": "Two empty log files in an older temporary directory remain because deletion was blocked by policy; this is separate from the successful probe cleanup."
   },
+  "recovery_and_port_conflict_probe": {
+    "evidence_type": "private_temporary_windows_mock_lifecycle_probe",
+    "shell": "Windows PowerShell 7",
+    "exit_code": 0,
+    "result": "passed",
+    "baseline": {
+      "passed": true,
+      "visible_window_counts_zero": true
+    },
+    "crash_recovery": {
+      "passed": true,
+      "new_process_after_crash": true,
+      "same_identity_port": true,
+      "task_running": true,
+      "single_hidden_launcher": true,
+      "direct_fallback": false
+    },
+    "port_conflict": {
+      "expected_bounded_timeout": true,
+      "manager_error_code": "NATIVE_GATEWAY_START_TIMEOUT",
+      "failure_category": "operation_timeout",
+      "deadline_ms": 900,
+      "deadline_scope": "manager health-wait deadline; not a whole Task Scheduler operation deadline",
+      "elapsed_ms": 4206,
+      "elapsed_scope": "whole measured operation including Task Scheduler overhead",
+      "task_ready_after_failure": true,
+      "automatic_retry": false,
+      "direct_fallback": false
+    },
+    "after_release_recovery": {
+      "passed": true,
+      "same_identity_port": true,
+      "task_running": true,
+      "single_hidden_launcher": true,
+      "visible_window_count": 0
+    },
+    "cleanup": {
+      "pending": false,
+      "passed_exit_condition": "script exits success only when all assertions pass and cleanup is complete"
+    },
+    "scope": {
+      "temporary_mock_gateway": true,
+      "production_gateway_touched": false,
+      "model_or_upstream_request": false
+    },
+    "limitation": "This successful run does not establish the cause of the earlier failed attempt; its sanitized record remains separate. The test driver is private and is not packaged in this repository."
+  },
   "installation_and_desktop_acceptance": "pending"
 }
