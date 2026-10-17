@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -143,4 +144,183 @@ try {
   await rm(dir, { recursive: true, force: true });
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function bounded(promise, label, timeoutMs = 1_000) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not complete within ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function listen(server) {
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return server.address().port;
+}
+
+async function closeOwnedServer(server) {
+  server.closeAllConnections?.();
+  await new Promise((resolve) => server.close(resolve));
+}
+
+async function deepSeekRequest(gateway, signal) {
+  const url = `http://127.0.0.1:${gateway.port}/${gateway.token}/v1/responses`;
+  return fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "deepseek/deepseek-flash", input: [] }),
+    signal,
+  });
+}
+
+async function withOwnedGateway(options, callback) {
+  const ownedDir = await mkdtemp(path.join(os.tmpdir(), "native-gateway-timeout-"));
+  const gateway = createNativeGateway({
+    deepSeekKey: "test-only",
+    logPath: path.join(ownedDir, "gateway.jsonl"),
+    deepSeekTimeoutMs: 200,
+    ...options,
+  });
+  const port = await gateway.start();
+  try {
+    await callback({ gateway, port, token: gateway.token, logPath: path.join(ownedDir, "gateway.jsonl") });
+  } finally {
+    await gateway.close();
+    await rm(ownedDir, { recursive: true, force: true });
+  }
+}
+
+assert.throws(
+  () => createNativeGateway({ logPath: "unused-test-path", deepSeekTimeoutMs: 0 }),
+  RangeError,
+  "DeepSeek timeout configuration must be positive and bounded",
+);
+
+{
+  const upstreamReceived = deferred();
+  const upstreamClosed = deferred();
+  let upstreamRequests = 0;
+  const upstream = createServer((_req, res) => {
+    upstreamRequests += 1;
+    upstreamReceived.resolve();
+    res.on("close", () => upstreamClosed.resolve());
+  });
+  const upstreamPort = await listen(upstream);
+  try {
+    await withOwnedGateway({ deepSeekBase: `http://127.0.0.1:${upstreamPort}` }, async ({ gateway, port, token }) => {
+      const response = await deepSeekRequest({ port, token }, AbortSignal.timeout(1_000));
+      assert.equal(response.status, 504, "DeepSeek header timeout returns an explicit 504");
+      deepEqual(await response.json(), { error: { message: "DeepSeek request timed out" } }, "header timeout has a stable error body");
+      await bounded(upstreamReceived.promise, "upstream request arrival");
+      await bounded(upstreamClosed.promise, "timed-out upstream cancellation");
+      assert.equal(upstreamRequests, 1, "a timed-out DeepSeek request is not retried");
+      const health = await fetch(`http://127.0.0.1:${port}/${token}/_health`);
+      assert.equal(health.status, 200, "gateway remains healthy after DeepSeek timeout");
+    });
+  } finally {
+    await closeOwnedServer(upstream);
+  }
+}
+
+{
+  let upstreamRequests = 0;
+  const upstream = createServer((_req, res) => {
+    upstreamRequests += 1;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(`data: ${JSON.stringify({ type: "response.completed", response: { usage: { total_tokens: 1 } } })}\n\n`);
+  });
+  const upstreamPort = await listen(upstream);
+  try {
+    await withOwnedGateway({ deepSeekBase: `http://127.0.0.1:${upstreamPort}`, deepSeekTimeoutMs: 150 }, async ({ port, token, logPath }) => {
+      const response = await deepSeekRequest({ port, token }, AbortSignal.timeout(1_000));
+      assert.equal(response.status, 200, "a completed DeepSeek stream succeeds before its deadline");
+      await response.text();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(upstreamRequests, 1, "a completed request is not retried");
+      const records = (await readFile(logPath, "utf8")).trim().split("\n").map(JSON.parse);
+      assert.equal(records.some((record) => record.kind === "deepseek_timeout"), false, "completed requests clear their timeout timer");
+      assert.equal((await fetch(`http://127.0.0.1:${port}/${token}/_health`)).status, 200, "gateway remains healthy after normal completion");
+    });
+  } finally {
+    await closeOwnedServer(upstream);
+  }
+}
+
+{
+  const upstreamReceived = deferred();
+  const upstreamClosed = deferred();
+  let upstreamRequests = 0;
+  const upstream = createServer((_req, res) => {
+    upstreamRequests += 1;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: {\"type\":\"response.created\"}\n\n");
+    upstreamReceived.resolve();
+    res.on("close", () => upstreamClosed.resolve());
+  });
+  const upstreamPort = await listen(upstream);
+  try {
+    await withOwnedGateway({ deepSeekBase: `http://127.0.0.1:${upstreamPort}` }, async ({ gateway, port, token, logPath }) => {
+      const response = await deepSeekRequest({ port, token }, AbortSignal.timeout(1_000));
+      assert.equal(response.status, 200, "DeepSeek stream headers arrive before the body timeout");
+      await bounded(upstreamReceived.promise, "streaming upstream request arrival");
+      await assert.rejects(response.text(), "the client stream terminates when the DeepSeek body stalls");
+      await bounded(upstreamClosed.promise, "timed-out streaming upstream cancellation");
+      assert.equal(upstreamRequests, 1, "a timed-out stream is not retried");
+      const records = (await readFile(logPath, "utf8")).trim().split("\n").map(JSON.parse);
+      assert.ok(records.some((record) => record.kind === "deepseek_timeout" && record.stream_started === true));
+      const health = await fetch(`http://127.0.0.1:${port}/${token}/_health`);
+      assert.equal(health.status, 200, "gateway remains healthy after stream timeout");
+    });
+  } finally {
+    await closeOwnedServer(upstream);
+  }
+}
+
+{
+  const upstreamReceived = deferred();
+  const upstreamClosed = deferred();
+  const upstream = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: {\"type\":\"response.created\"}\n\n");
+    upstreamReceived.resolve();
+    res.on("close", () => upstreamClosed.resolve());
+  });
+  const upstreamPort = await listen(upstream);
+  try {
+    await withOwnedGateway({ deepSeekBase: `http://127.0.0.1:${upstreamPort}`, deepSeekTimeoutMs: 5_000 }, async ({ port, token, logPath }) => {
+      const clientAbort = new AbortController();
+      const request = deepSeekRequest({ port, token }, clientAbort.signal);
+      await bounded(upstreamReceived.promise, "disconnect upstream request arrival");
+      const response = await request;
+      assert.equal(response.status, 200, "client receives DeepSeek stream headers before disconnecting");
+      const reader = response.body.getReader();
+      await bounded(reader.read(), "first streamed DeepSeek chunk");
+      clientAbort.abort();
+      await assert.rejects(reader.read(), "the caller observes stream cancellation");
+      await bounded(upstreamClosed.promise, "disconnected upstream cancellation");
+      const records = (await readFile(logPath, "utf8")).trim().split("\n").map(JSON.parse);
+      assert.ok(records.some((record) => record.kind === "deepseek_client_disconnect" && record.stream_started === true));
+      const health = await fetch(`http://127.0.0.1:${port}/${token}/_health`);
+      assert.equal(health.status, 200, "gateway remains healthy after client disconnect");
+    });
+  } finally {
+    await closeOwnedServer(upstream);
+  }
+}
+
+console.log("PASS DeepSeek loopback timeout and disconnect assertions");
 console.log(`PASS ${checks} native gateway assertions`);

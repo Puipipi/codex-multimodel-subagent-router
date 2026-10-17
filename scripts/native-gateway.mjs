@@ -24,6 +24,7 @@ const NATIVE_RELAY_HEADERS = new Set([
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const MAX_DECODED_BYTES = 128 * 1024 * 1024;
 const RELAY_RESPONSE_MAX = 4 * 1024 * 1024;
+const MAX_DEEPSEEK_TIMEOUT_MS = 2_147_483_647;
 
 function defaultStateDir() {
   const base = process.env.LOCALAPPDATA
@@ -118,9 +119,13 @@ export function createNativeGateway({
   token = randomBytes(32).toString("base64url"),
   maxRelayCalls = Infinity,
   relayTimeoutMs = 120_000,
+  deepSeekTimeoutMs = 120_000,
   onShutdown = null,
 } = {}) {
   if (!logPath) throw new Error("native gateway logPath is required");
+  if (!Number.isInteger(deepSeekTimeoutMs) || deepSeekTimeoutMs < 1 || deepSeekTimeoutMs > MAX_DEEPSEEK_TIMEOUT_MS) {
+    throw new RangeError(`deepSeekTimeoutMs must be an integer between 1 and ${MAX_DEEPSEEK_TIMEOUT_MS}`);
+  }
   const cache = new RelayCache();
   const stats = {
     requests: 0, openai_requests: 0, deepseek_requests: 0,
@@ -240,27 +245,61 @@ export function createNativeGateway({
           "user-agent": req.headers["user-agent"] || "sol-luna-native-gateway",
         });
         for (const [name, value] of Object.entries(auth.headers || {})) headers.set(name, value);
-        const upstream = await fetchImpl(`${deepSeekBase.replace(/\/$/, "")}/responses`, {
-          method: "POST", headers, body: JSON.stringify(body), redirect: "error",
-        });
-        stats.statuses.push(upstream.status);
-        stats.deepseek_latencies_ms.push(Date.now() - started);
-        if (upstream.status !== 200) {
-          const errorBody = Buffer.from(await upstream.arrayBuffer());
-          stats.deepseek_usages.push(null);
-          log({ kind: "deepseek_error", status: upstream.status, body: errorBody.toString("utf8").slice(0, 800) });
-          res.writeHead(upstream.status, Object.fromEntries(responseHeaders(upstream).entries()));
-          res.end(errorBody);
+        if (req.aborted || res.destroyed) {
+          log({ kind: "deepseek_client_disconnect", status: 499, stream_started: false });
           return;
         }
-        res.writeHead(upstream.status, Object.fromEntries(responseHeaders(upstream).entries()));
-        if (!upstream.body) { stats.deepseek_usages.push(null); res.end(); return; }
-        const [toClient, toMonitor] = upstream.body.tee();
-        Readable.fromWeb(toClient).on("error", (error) => res.destroy(error)).pipe(res);
-        await monitorUsage(toMonitor, (usage) => {
-          stats.deepseek_usages.push(usage || null);
-          log({ kind: "deepseek", status: upstream.status, model: PICKER_SLUG, usage: usage || null, latency_ms: Date.now() - started });
-        });
+        const controller = new AbortController();
+        let timedOut = false;
+        let clientDisconnected = false;
+        let streamStarted = false;
+        const onClientClose = () => {
+          if (!res.writableEnded && !timedOut) {
+            clientDisconnected = true;
+            log({ kind: "deepseek_client_disconnect", status: 499, stream_started: streamStarted || res.headersSent });
+            controller.abort(new Error("client disconnected"));
+          }
+        };
+        res.once("close", onClientClose);
+        const timeout = setTimeout(() => {
+          if (res.writableEnded) return;
+          timedOut = true;
+          log({ kind: "deepseek_timeout", status: 504, timeout_ms: deepSeekTimeoutMs, stream_started: streamStarted || res.headersSent, latency_ms: Date.now() - started });
+          controller.abort(new Error("DeepSeek upstream request timed out"));
+          if (!res.headersSent) json(res, 504, { error: { message: "DeepSeek request timed out" } });
+          else res.destroy();
+        }, deepSeekTimeoutMs);
+        try {
+          const upstream = await fetchImpl(`${deepSeekBase.replace(/\/$/, "")}/responses`, {
+            method: "POST", headers, body: JSON.stringify(body), redirect: "error",
+            signal: controller.signal,
+          });
+          stats.statuses.push(upstream.status);
+          stats.deepseek_latencies_ms.push(Date.now() - started);
+          if (upstream.status !== 200) {
+            const errorBody = Buffer.from(await upstream.arrayBuffer());
+            stats.deepseek_usages.push(null);
+            log({ kind: "deepseek_error", status: upstream.status, body: errorBody.toString("utf8").slice(0, 800) });
+            res.writeHead(upstream.status, Object.fromEntries(responseHeaders(upstream).entries()));
+            res.end(errorBody);
+            return;
+          }
+          res.writeHead(upstream.status, Object.fromEntries(responseHeaders(upstream).entries()));
+          streamStarted = true;
+          if (!upstream.body) { stats.deepseek_usages.push(null); res.end(); return; }
+          const [toClient, toMonitor] = upstream.body.tee();
+          Readable.fromWeb(toClient).on("error", (error) => res.destroy(error)).pipe(res);
+          await monitorUsage(toMonitor, (usage) => {
+            stats.deepseek_usages.push(usage || null);
+            log({ kind: "deepseek", status: upstream.status, model: PICKER_SLUG, usage: usage || null, latency_ms: Date.now() - started });
+          });
+        } catch (error) {
+          if (timedOut || clientDisconnected) return;
+          throw error;
+        } finally {
+          clearTimeout(timeout);
+          res.off("close", onClientClose);
+        }
         return;
       }
 
