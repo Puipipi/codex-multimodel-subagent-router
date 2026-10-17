@@ -29,7 +29,7 @@ ok(plan.name.startsWith("SolLunaNativeGateway-"), "task name is namespaced");
 equal(plan.name, gatewayTaskPlan({ paths: { ...paths } }).name, "task name is stable for the gateway directory");
 ok(plan.marker.includes(plan.name.slice("SolLunaNativeGateway-".length)), "ownership marker is bound to the directory hash");
 ok(plan.launcher.content.includes(", 0, True)"), "launcher hides Node and synchronously waits for its full lifetime");
-ok(plan.launcher.content.includes("native-gateway.mjs") && plan.launcher.content.includes("--serve"), "launcher runs the formal native gateway server entry point");
+ok(plan.launcher.content.includes("native-gateway.mjs") && plan.launcher.content.includes("--serve") && plan.launcher.content.includes("--deepseek-only"), "launcher runs the formal DeepSeek-only gateway server entry point");
 ok(plan.launcher.content.includes("gateway.json") && plan.launcher.content.includes("identity.json") && plan.launcher.content.includes("gateway.log"), "launcher passes only gateway paths to the server");
 ok(plan.launcher.content.includes('""C:\\Program Files\\nodejs\\node.exe""'), "launcher escapes Windows paths with spaces and quotes");
 ok(!/api[_-]?key|token|secret|password/i.test(plan.launcher.content), "launcher contains no credential fields");

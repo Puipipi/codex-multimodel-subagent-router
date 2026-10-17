@@ -4,6 +4,8 @@ This repository contains the canonical standalone routing skill and an optional 
 
 The formal gateway lifecycle is an owned current-user Task Scheduler task started and health-checked at DeepSeek dispatch. A private Windows PowerShell 7 probe passed for a self-owned Job teardown with a mock loopback service: the direct helper/gateway died with the Job, while the scheduled gateway survived and remained hidden. This did not close a real DSH tree or validate the installed gateway or desktop child UI; see the [lifecycle test receipt](docs/native-gateway-lifecycle-2026-10-18.md). The native route does not create DSH sessions, agents, or workspaces. `native-autostart.mjs` is retained only as an optional legacy Startup launcher.
 
+The formal Task starts `native-gateway.mjs --serve --deepseek-only`. Strict mode rejects GPT/unknown models and encrypted collaboration inputs, performs no GPT relay, and is accepted by dispatch only when health reports `deepseek_only=true` and `relay_allowed=false` while the owned Task is Running. This source/test contract does not claim that real API or desktop acceptance has completed.
+
 ## Components
 
 | Path | Purpose |

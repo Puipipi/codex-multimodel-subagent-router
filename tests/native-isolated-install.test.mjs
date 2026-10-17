@@ -84,9 +84,9 @@ async function fixture(label) {
   };
   const gatewayScriptPath = fileURLToPath(new URL("../scripts/native-gateway.mjs", import.meta.url));
   const common = { versionDir, codexHome, gatewayDir, startupDir, journalPath, gatewayScriptPath, expectedMainModel: "gpt-current", expectedMainProvider: null, expectedRootBaseUrl: null, envAdapter, autostartAdapter, taskAdapter, ensureGateway, stopGateway, smokeCheck };
-  const activateFixture = (options = {}, dependencies = {}) => activate({ journalPath, envAdapter, autostartAdapter, taskAdapter, ...options }, { ensureGateway, gatewayHealth: async (value) => ({ reachable: true, pid: value.pid }), stopGateway, ...dependencies });
+  const activateFixture = (options = {}, dependencies = {}) => activate({ journalPath, envAdapter, autostartAdapter, taskAdapter, ...options }, { ensureGateway, gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }), stopGateway, ...dependencies });
   const rollbackFixture = (options = {}) => rollback({ journalPath, envAdapter, autostartAdapter, taskAdapter, ...options }, {
-    gatewayHealth: async (value) => ({ reachable: true, pid: value.pid }), stopGateway,
+    gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }), stopGateway,
     readGatewayIdentity, readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
   });
   return { dir, versionDir, codexHome, gatewayDir, startupDir, journalPath, environment, envAdapter, startup, autostartAdapter, taskAdapter, state, ensureCalls, taskCalls, stopCalls, common, activateFixture, rollbackFixture };
@@ -231,6 +231,22 @@ try {
   equal(await readFile(path.join(uncertainStart.codexHome, "config.toml"), "utf8"), 'model = "gpt-current"\n', "uncertain gateway startup does not alter the user's config files");
   equal(uncertainStart.startup.size, 1, "uncertain gateway startup preserves the previous Startup entry");
 
+  const nonStrictActivation = await fixture("non-strict-activation");
+  await prepare(nonStrictActivation.common);
+  await rejects(() => nonStrictActivation.activateFixture({}, {
+    gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: false, relay_allowed: true }),
+  }), /does not enforce DeepSeek-only routing/i, "activation refuses a healthy gateway that permits GPT relay");
+  equal((await status({ journalPath: nonStrictActivation.journalPath })).phase, "activation_failed", "a mismatched strict health response is recorded as failed activation");
+
+  const readyActivation = await fixture("ready-task-activation");
+  await prepare(readyActivation.common);
+  const readyAdapter = {
+    ...readyActivation.taskAdapter,
+    async status(plan) { const result = await readyActivation.taskAdapter.status(plan); return { ...result, state: "Ready" }; },
+  };
+  await rejects(() => readyActivation.activateFixture({ taskAdapter: readyAdapter }), /Task Scheduler gateway task is not Running/i,
+    "activation refuses a healthy gateway while the owned Task is only Ready");
+
   const success = await fixture("success");
   await prepare(success.common);
   const activated = await success.activateFixture();
@@ -246,20 +262,33 @@ try {
   const dispatch = await ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: success.taskAdapter }, {
     ensureGateway: success.common.ensureGateway,
     readGatewayIdentity,
-    gatewayHealth: async (value) => ({ reachable: true, pid: value.pid }),
+    gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
   });
   equal(dispatch.ready, true, "DeepSeek dispatch gate confirms configured files, owned task and healthy isolated gateway");
   equal((await readFile(configPath, "utf8")).includes('model = "new-sol-model"'), true, "dispatch permits a later user-selected main model without freezing the parent catalog");
+  const stopsBeforeNonStrict = success.stopCalls.length;
+  await rejects(() => ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: success.taskAdapter }, {
+    ensureGateway: async () => ({ state: { ...success.state, port: (await readGatewayIdentity(gatewayPaths(success.gatewayDir))).port, token: (await readGatewayIdentity(gatewayPaths(success.gatewayDir))).token }, started: false }),
+    readGatewayIdentity,
+    gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: false, relay_allowed: true }),
+  }), /does not enforce DeepSeek-only routing/i, "a healthy legacy/direct gateway is refused for native dispatch");
+  equal(success.stopCalls.length, stopsBeforeNonStrict, "dispatch refuses a non-strict gateway without stopping its PID");
+  const readyTaskAdapter = { ...success.taskAdapter, async status() { return { exists: true, owned: true, specMatches: true, enabled: true, state: "Ready" }; } };
+  await rejects(() => ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: readyTaskAdapter }, {
+    ensureGateway: async () => ({ state: { ...success.state, port: (await readGatewayIdentity(gatewayPaths(success.gatewayDir))).port, token: (await readGatewayIdentity(gatewayPaths(success.gatewayDir))).token }, started: false }),
+    readGatewayIdentity,
+    gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+  }), /Task Scheduler task is not Running/i, "a Ready task with an external healthy server is refused");
   const editedProviderConfig = changedMainConfig.replace('wire_api = "responses"', 'wire_api = "chat_completions"');
   await writeFile(configPath, editedProviderConfig);
   const ensureBeforeMissingTask = success.ensureCalls.length;
   await rejects(() => ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: success.taskAdapter }, {
-    ensureGateway: success.common.ensureGateway, readGatewayIdentity, gatewayHealth: async (value) => ({ reachable: true, pid: value.pid }),
+    ensureGateway: success.common.ensureGateway, readGatewayIdentity, gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
   }), /provider or role block changed/i, "dispatch rejects edits to the isolated provider wiring");
   equal(success.ensureCalls.length, ensureBeforeMissingTask, "edited provider wiring is rejected before task launch");
   await writeFile(configPath, activatedConfig);
   await rejects(() => ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: { ...success.taskAdapter, async status() { return { exists: false, owned: false, specMatches: false, enabled: false }; } } }, {
-    ensureGateway: success.common.ensureGateway, readGatewayIdentity, gatewayHealth: async () => ({ reachable: true }),
+    ensureGateway: success.common.ensureGateway, readGatewayIdentity, gatewayHealth: async () => ({ reachable: true, deepseek_only: true, relay_allowed: false }),
   }), /task is missing, changed, or disabled/i, "dispatch gate fails closed without registering or falling back when task is missing");
   equal(success.ensureCalls.length, ensureBeforeMissingTask, "missing task is rejected before any direct gateway launch or health request");
   await success.rollbackFixture();

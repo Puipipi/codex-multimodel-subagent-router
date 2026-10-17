@@ -377,6 +377,11 @@ export async function activate({ journalPath, envAdapter = createWindowsUserEnvi
     }
     const live = await (dependencies.gatewayHealth || gatewayHealth)(state);
     if (live?.reachable !== true || live.pid !== state.pid) throw new Error("Task Scheduler gateway health PID could not be verified");
+    const taskStatus = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
+    if (taskStatus.state !== "Running") throw new Error("Task Scheduler gateway task is not Running after startup");
+    if (live.deepseek_only !== true || live.relay_allowed !== false) {
+      throw new Error("Task Scheduler gateway is healthy but does not enforce DeepSeek-only routing");
+    }
     journal.gateway.startedByTransaction = started.started === true;
     journal.gateway.pid = started.started === true ? state.pid : null;
     journal.completed.gateway = true; await writeJournal(journalPath, journal); gatewayVerified = true;
@@ -573,6 +578,11 @@ export async function ensureNativeDeepseekDispatch({ journalPath, envAdapter = c
   }
   const live = await (gateway.gatewayHealth || gatewayHealth)(state);
   if (live?.reachable !== true || live.pid !== state.pid) throw new Error("isolated gateway is not healthy for native DeepSeek dispatch");
+  const currentTask = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
+  if (currentTask.state !== "Running") throw new Error("isolated gateway Task Scheduler task is not Running");
+  if (live.deepseek_only !== true || live.relay_allowed !== false) {
+    throw new Error("isolated gateway is healthy but does not enforce DeepSeek-only routing");
+  }
   return { ready: true, taskName: journal.gateway.taskPlan.name, gatewayDir: paths.dir, pid: state.pid };
 }
 

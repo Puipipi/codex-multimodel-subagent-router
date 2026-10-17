@@ -7,3 +7,5 @@
 - helper 状态字段：wrapper 向 `WaitReady` 传错 `state` 字段会造成假超时。诊断要同时核对实际退出码和 ready/state 证据，不凭等待超时推断服务未启动。
 - 配置验证：DeepSeek dispatch 不能对整个 `config.toml` 做字节相等校验，否则用户更新 Sol 主模型会被误拦。只验证本模块拥有的配置区块及 gateway 身份，同时允许用户修改区块外主配置。
 - 临时目录清理：精确临时目录删除若被策略阻止，应记录清理失败并保留证据，不得换用其他工具绕过策略；可能遗留空日志文件时只记录通用现象，不记录私人路径、token 或随机标识。
+- DeepSeek 直连计费隔离：正式 Task 的 `--serve` 旧默认仍启用 GPT relay（`maxRelayCalls=Infinity`），因此不能仅凭 DeepSeek provider 配置声称已消除 GPT 桥接。原因是 strict flag 未进入正式 serve command/constructor；修复方向为显式 `--deepseek-only`，仅接受已知 DeepSeek 模型、封锁加密 GPT relay 输入并将 relay cap 设为 0。尚未真实触发 GPT relay 或产生计费；只用 loopback/fake-fetch 验证。
+- 多工作目录：临时 probe 目录不是 Git 仓库；Git 审计、提交与推送必须显式指定实际源码仓库的 workdir，避免把 not-a-repository 当成仓库故障。

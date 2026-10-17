@@ -114,7 +114,7 @@ export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPat
   const marker = `${OWNERSHIP_PREFIX}${hash}`;
   const launcherPath = path.join(dir, "gateway-task.vbs");
   const command = [
-    windowsQuote(node), windowsQuote(gateway), "--serve",
+    windowsQuote(node), windowsQuote(gateway), "--serve", "--deepseek-only",
     "--state", windowsQuote(state), "--identity", windowsQuote(identity), "--log", windowsQuote(log),
   ].join(" ");
   const launcherContent = [

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createNativeGateway } from "../scripts/native-gateway.mjs";
+import { gatewayHealth } from "../scripts/native-gateway-manager.mjs";
 import { resolveDeepSeekAuth } from "../scripts/native-credentials.mjs";
 
 const dir = await mkdtemp(path.join(os.tmpdir(), "native-gateway-account-auth-"));
@@ -34,6 +35,9 @@ try {
   assert.equal(calls[0].redirect, "error");
   const health = await fetch(`http://127.0.0.1:${port}/local-token/_health`);
   assert.deepEqual((await health.json()).deepseek_credential, { present: true, mode: "account" });
+  const managerHealth = await gatewayHealth({ port, token: "local-token" });
+  assert.equal(managerHealth.deepseek_only, false);
+  assert.equal(managerHealth.relay_allowed, true);
   current = fixture("account-token-two");
   response = await request();
   assert.equal(response.status, 200);

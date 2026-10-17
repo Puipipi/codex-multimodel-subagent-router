@@ -68,6 +68,12 @@ assert.match(skill, /omit `model`/i, 'SKILL.md must not send an explicit DeepSee
 assert.match(skill, /current `CODEX_HOME\/models_cache\.json`/, 'SKILL.md must resolve Luna from the live catalog');
 assert.doesNotMatch(skill, /shared-root gateway path is the formal|root `openai_base_url`[^\n]*formal route/i, 'SKILL.md must not use shared root routing as the formal path');
 assert.match(skill, /native-isolated-install\.mjs/);
+assert.match(skill, /--deepseek-only/);
+assert.match(skill, /relay_allowed=false/);
+assert.match(readme, /rejects GPT\/unknown models and encrypted collaboration input before any upstream call/i);
+assert.match(readme, /relay cap is forced to zero/i);
+assert.match(pluginDoc, /--deepseek-only/);
+assert.match(nativeInstaller, /Task 状态为 `Running`/);
 assert.match(skill, /--install-journal/);
 assert.match(skill, /before each DeepSeek `followup_task`/);
 assert.match(skill, /does not create native Codex child sessions/);

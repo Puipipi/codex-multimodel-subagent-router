@@ -118,11 +118,14 @@ export function createNativeGateway({
   fetchImpl = fetch,
   token = randomBytes(32).toString("base64url"),
   maxRelayCalls = Infinity,
+  deepSeekOnly = false,
   relayTimeoutMs = 120_000,
   deepSeekTimeoutMs = 120_000,
   onShutdown = null,
 } = {}) {
   if (!logPath) throw new Error("native gateway logPath is required");
+  const deepSeekOnlyEnabled = deepSeekOnly === true;
+  const relayCallLimit = deepSeekOnlyEnabled ? 0 : maxRelayCalls;
   if (!Number.isInteger(deepSeekTimeoutMs) || deepSeekTimeoutMs < 1 || deepSeekTimeoutMs > MAX_DEEPSEEK_TIMEOUT_MS) {
     throw new RangeError(`deepSeekTimeoutMs must be an integer between 1 and ${MAX_DEEPSEEK_TIMEOUT_MS}`);
   }
@@ -158,6 +161,7 @@ export function createNativeGateway({
       } catch { /* report credential availability without exposing parser errors */ }
       json(res, 200, {
         ok: true, pid: process.pid, model: PICKER_SLUG, deepseek_credential: credential,
+        deepseek_only: deepSeekOnlyEnabled, relay_allowed: !deepSeekOnlyEnabled,
         requests: stats.requests, relay_calls: stats.relay_calls,
         relay_cache_hits: stats.relay_cache_hits,
       });
@@ -185,6 +189,19 @@ export function createNativeGateway({
       stats.requests += 1;
       log({ kind: "request", route: direction, model: parsed.model, thread_id: threadId, parent_thread_id: parentThreadId, bytes: raw.length });
 
+      if (deepSeekOnlyEnabled && direction !== "deepseek") {
+        json(res, 403, { error: { message: "This gateway accepts DeepSeek models only" } });
+        return;
+      }
+      if (deepSeekOnlyEnabled && Array.isArray(parsed.input)
+          && parsed.input.some((item) => item?.type === "agent_message"
+            && Array.isArray(item.content)
+            && item.content.some((part) => part?.type === "encrypted_content"
+              && typeof part.encrypted_content === "string" && part.encrypted_content.length > 0))) {
+        json(res, 403, { error: { message: "Encrypted collaboration input is disabled in DeepSeek-only mode" } });
+        return;
+      }
+
       if (direction === "deepseek") {
         let auth;
         try {
@@ -209,7 +226,7 @@ export function createNativeGateway({
           if (!authorization) throw Object.assign(new Error("native relay requires ChatGPT authentication"), { status: 401 });
           const { key } = relayCacheKey({ authorization, account: req.headers["chatgpt-account-id"] || "", ciphertext: encrypted });
           const payload = await cache.run(key, async () => {
-            if (stats.relay_calls >= maxRelayCalls) throw Object.assign(new Error("native relay call cap reached"), { status: 429 });
+            if (stats.relay_calls >= relayCallLimit) throw Object.assign(new Error("native relay call cap reached"), { status: 429 });
             stats.relay_calls += 1;
             const relayStarted = Date.now();
             const response = await fetchImpl(`${nativeBase.replace(/\/$/, "")}/responses`, {
@@ -337,6 +354,7 @@ export function createNativeGateway({
   return {
     server,
     token,
+    deepSeekOnly: deepSeekOnlyEnabled,
     stats,
     cache,
     async start(port = 0) {
@@ -374,6 +392,7 @@ async function serve(argv) {
     try { identity = JSON.parse(readFileSync(identityFile, "utf8")); } catch { identity = null; }
   }
   const token = identity?.token || randomBytes(32).toString("base64url");
+  const deepSeekOnly = argv.includes("--deepseek-only");
   const preferredPort = Number.isInteger(identity?.port) ? identity.port : 0;
   const logAt = argv.indexOf("--log");
   const logPath = logAt >= 0 && argv[logAt + 1]
@@ -381,7 +400,7 @@ async function serve(argv) {
     : path.join(path.dirname(stateFile), "gateway.log");
   let closing = false;
   const gateway = createNativeGateway({
-    logPath, token,
+    logPath, token, deepSeekOnly,
     onShutdown: () => {
       if (closing) return;
       closing = true;
@@ -404,7 +423,7 @@ async function serve(argv) {
   writeStateAtomic(stateFile, {
     version: 1, pid: process.pid, port, token,
     started_at: new Date().toISOString(), model: PICKER_SLUG, log: logPath,
-    identity: identityFile,
+    identity: identityFile, deepseek_only: deepSeekOnly,
   });
   const shutdown = () => {
     if (closing) return;
@@ -423,7 +442,7 @@ async function serve(argv) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (!process.argv.includes("--serve")) {
-    process.stderr.write("usage: node scripts/native-gateway.mjs --serve --state <private-state.json> [--log <private.log>]\n");
+    process.stderr.write("usage: node scripts/native-gateway.mjs --serve [--deepseek-only] --state <private-state.json> [--log <private.log>]\n");
     process.exitCode = 2;
   } else {
     serve(process.argv.slice(2)).catch((error) => {

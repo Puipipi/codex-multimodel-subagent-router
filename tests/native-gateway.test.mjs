@@ -324,3 +324,62 @@ assert.throws(
 
 console.log("PASS DeepSeek loopback timeout and disconnect assertions");
 console.log(`PASS ${checks} native gateway assertions`);
+
+// Formal Task mode must route only to DeepSeek and must never bridge encrypted
+// collaboration input through the signed-in OpenAI account.
+{
+  const strictDir = await mkdtemp(path.join(os.tmpdir(), "native-gateway-strict-"));
+  const strictCalls = [];
+  const strictGateway = createNativeGateway({
+    deepSeekKey: "test-only", logPath: path.join(strictDir, "gateway.jsonl"),
+    deepSeekOnly: true, maxRelayCalls: Infinity,
+    nativeBase: "https://strict-openai.test", deepSeekBase: "https://strict-deepseek.test",
+    fetchImpl: async (url, options) => {
+      strictCalls.push({ url, options });
+      if (url.startsWith("https://strict-deepseek.test")) return sse();
+      throw new Error("strict mode attempted an OpenAI request");
+    },
+  });
+  const strictPort = await strictGateway.start();
+  const strictBase = `http://127.0.0.1:${strictPort}/${strictGateway.token}`;
+  const requestModel = async (model, input = []) => fetch(`${strictBase}/v1/responses`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: "Bearer chatgpt-present" },
+    body: JSON.stringify({ model, input }),
+  });
+  try {
+    const strictHealth = await (await fetch(`${strictBase}/_health`)).json();
+    equal(strictHealth.deepseek_only, true, "health reports strict DeepSeek-only mode");
+    equal(strictHealth.relay_allowed, false, "health reports that GPT relay is disabled");
+    equal(strictHealth.relay_calls, 0, "strict mode starts with no relay calls despite an infinite configured cap");
+
+    const direct = await requestModel("deepseek/deepseek-flash");
+    equal(direct.status, 200, "strict DeepSeek request succeeds");
+    equal(strictCalls.length, 1, "strict DeepSeek request performs exactly one upstream call");
+    ok(strictCalls[0].url.startsWith("https://strict-deepseek.test"), "strict DeepSeek request reaches only DeepSeek");
+    equal(new Headers(strictCalls[0].options.headers).get("authorization"), "Bearer test-only", "DeepSeek uses its configured credential, not the incoming ChatGPT credential");
+    equal(new Headers(strictCalls[0].options.headers).get("chatgpt-account-id"), null, "ChatGPT account identity is not sent upstream");
+
+    for (const model of ["gpt-6.1-sol", "unknown/custom-model"]) {
+      const rejected = await requestModel(model);
+      equal(rejected.status, 403, `${model} is rejected in strict mode`);
+      await rejected.arrayBuffer();
+    }
+    equal(strictCalls.length, 1, "GPT and unknown models cause no upstream calls");
+    equal(strictGateway.stats.openai_requests, 0, "strict rejection never increments the OpenAI upstream request count");
+
+    const encrypted = await requestModel("deepseek/deepseek-flash", [{
+      type: "agent_message",
+      content: [
+        { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
+        { type: "encrypted_content", encrypted_content: "gAAAAAnative-opaque" },
+      ],
+    }]);
+    equal(encrypted.status, 403, "encrypted collaboration input is refused even when ChatGPT auth is present");
+    await encrypted.arrayBuffer();
+    equal(strictCalls.length, 1, "strict encrypted input performs no relay or DeepSeek upstream call");
+    equal(strictGateway.stats.relay_calls, 0, "strict relay cap remains zero");
+  } finally {
+    await strictGateway.close();
+    await rm(strictDir, { recursive: true, force: true });
+  }
+}
