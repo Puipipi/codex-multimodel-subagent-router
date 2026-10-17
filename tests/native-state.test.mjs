@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { canonicalWorkspace } from "../scripts/plugin-state.mjs";
 import { NativeTasks, NativeWriterLease } from "../scripts/native-state.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -57,8 +58,16 @@ try {
   checks += 1;
 
   const leases = new NativeWriterLease({ stateDir });
+  const realWorkspaceA = await realpath(workspaceA);
+  const expectedCanonicalA = process.platform === "win32" ? realWorkspaceA.toLowerCase() : realWorkspaceA;
   const reserved = await leases.reserve({ workspace: workspaceA, parentThreadId: "parent-A", taskNonce: "task-nonce-A" });
-  equal(reserved.workspace, workspaceA.toLowerCase(), "writer reservation canonicalizes the workspace");
+  equal(reserved.workspace, expectedCanonicalA, "writer reservation canonicalizes via the OS real path");
+  equal(await canonicalWorkspace(workspaceA), await canonicalWorkspace(realWorkspaceA), "short/long aliases canonicalize to one workspace");
+  await assert.rejects(
+    leases.reserve({ workspace: realWorkspaceA, parentThreadId: "parent-B", taskNonce: "alias-task-nonce" }),
+    /already reserved by another native task/,
+  );
+  checks += 1;
   equal(reserved.state, "reserved", "lease starts reserved before spawn");
   const bound = await leases.bind({ workspace: workspaceA, parentThreadId: "parent-A", taskNonce: "task-nonce-A", childThreadId: "child-A" });
   equal(bound.state, "active", "lease binds the child explicitly");
