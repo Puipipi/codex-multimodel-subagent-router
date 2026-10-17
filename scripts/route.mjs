@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const DEEPSEEK_NATIVE_SLUG = 'deepseek/deepseek-flash';
+
 const HOLIDAYS_2026 = [
   ['2026-01-01', '2026-01-03'],
   ['2026-02-15', '2026-02-23'],
@@ -148,10 +150,20 @@ export async function decideRoute({
     timezone: CHINA_TIMEZONE,
     calendarVersion: localDate(instant, CHINA_TIMEZONE).startsWith('2026-') ? 'china-public-holidays-2026' : 'missing',
   };
-  if (executor !== undefined) return { ...scheduled, executor, source: 'one_time_override', reason: `one-time explicit executor override: ${executor}` };
-  const sticky = await readOverride(sessionId, stateDir);
-  if (sticky) return { ...scheduled, executor: sticky, source: 'session_override', reason: `sticky executor override for this chat: ${sticky}` };
-  return scheduled;
+  let result = scheduled;
+  if (executor !== undefined) {
+    result = { ...scheduled, executor, source: 'one_time_override', reason: `one-time explicit executor override: ${executor}` };
+  } else {
+    const sticky = await readOverride(sessionId, stateDir);
+    if (sticky) result = { ...scheduled, executor: sticky, source: 'session_override', reason: `sticky executor override for this chat: ${sticky}` };
+  }
+  return {
+    ...result,
+    native_spawn: {
+      fork_turns: 'none',
+      model: result.executor === 'deepseek' ? DEEPSEEK_NATIVE_SLUG : null,
+    },
+  };
 }
 
 function usage() {

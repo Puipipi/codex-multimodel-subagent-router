@@ -56,6 +56,12 @@ for (const [name, text] of [['README.md', readme], ['SKILL.md', skill]]) {
     `${name} must not require a new chat for peak switching`);
 }
 
+assert.match(skill, /用户可见的进度与最终报告必须使用简体中文；代码、命令和内部 GPT-DeepSeek 通信可保持原文。/,
+  'SKILL.md must put the Chinese child-output instruction in every spawn/followup message');
+assert.match(skill, /role=null/, 'SKILL.md must not rely on the null-role file for language instructions');
+assert.doesNotMatch(skill, /at most one shell(?:\/exec)? attempt/i,
+  'SKILL.md must not generalize the one-attempt P3 test cap to product work');
+
 for (const [name, text] of [['README.md', readme], ['SKILL.md', skill]]) {
   assert.doesNotMatch(text, /[A-Za-z]:\\Users\\/i, `${name} must not contain a Windows user path`);
   assert.doesNotMatch(text, /\/(?:Users|home)\/[^/\s]+\//, `${name} must not contain a local Unix home path`);

@@ -1,6 +1,6 @@
-# Codex plugin: Sol Luna DeepSeek Router
+# Codex plugin: Sol Luna Native + Legacy DSH
 
-This directory is both the existing routing skill and a local Codex plugin. The plugin adds a guarded MCP surface over the published `dsh-subagent-mcp@0.7.0` bridge. It does not add another model loop, another DeepSeek client, or another agent runtime.
+This directory is both the existing routing skill and a local Codex plugin. The current formal path is native collaboration through the hidden loopback gateway; the plugin also keeps the published `dsh-subagent-mcp@0.7.0` bridge as an explicit legacy compatibility surface. It does not add another model loop, another DeepSeek client, or another agent runtime.
 
 ## Components
 
@@ -9,7 +9,11 @@ This directory is both the existing routing skill and a local Codex plugin. The 
 | `.codex-plugin/plugin.json` | Codex plugin manifest. Declares the MCP companion; it does not declare a second skill. |
 | `.agents/plugins/marketplace.json` | Portable repo marketplace. Its `source.path` is `./`, inside the marketplace root, so local and GitHub clone installs resolve without an absolute path. |
 | `.mcp.json` | Starts `scripts/plugin-mcp.mjs` with `cwd: "."` (the plugin root), a long tool timeout for unbounded waits, and a minimal environment allowlist. |
-| `scripts/plugin-mcp.mjs` | MCP stdio wrapper. Requires trusted `_meta.threadId`, enforces ownership, filters lists, leases writers, and exposes `dsh_trace`. |
+| `scripts/native-routing.mjs`, `native-relay.mjs`, `native-gateway.mjs` | Exact DeepSeek slug routing, native/GPT collaboration normalization, relay cache, transparent GPT forwarding, and per-request usage. |
+| `scripts/native-gateway-manager.mjs`, `native-autostart.mjs` | Hidden single-instance gateway with stable private port/token identity, explicit stop, and Windows login launcher. |
+| `scripts/native-catalog.mjs`, `native-install.mjs` | Merge the existing Sol/Luna catalog, add the exact DeepSeek entry, manage the root config block, and roll back only owned changes. |
+| `scripts/native-state.mjs`, `native-agent.mjs` | Parent/child ownership, reserve-before-spawn writer leases, and catalog-supported native Luna/DeepSeek model resolution. |
+| `scripts/plugin-mcp.mjs` | Legacy MCP stdio wrapper. Requires trusted `_meta.threadId`, enforces ownership, filters lists, leases writers, and exposes `dsh_trace`. |
 | `scripts/plugin-state.mjs` | Durable hashed ownership store and canonical same-workspace writer leases. |
 | `scripts/plugin-trace.mjs` | Escaped, read-only loopback HTML trace with single-use ticket exchange, per-view scoped cookies/paths, coexisting tabs, clickable details, and Simplified Chinese user-visible labels/help/errors. |
 | `scripts/dsh-mcp-client.mjs` | Existing `runClient`, extended additively for `dsh_events`, `dsh_close`, `dsh_rename`, trusted `_meta` forwarding, and the per-message Chinese output instruction. It spawns an exact verified published `dsh-subagent-mcp@0.7.0` entrypoint from a trusted location, or falls back to the pinned npx transport. |
@@ -121,9 +125,13 @@ Read-only `dsh_status` / `dsh_events` measurements on completed agent `ffbbbc39-
 
 The npx resolver cost about 1.0 s per call (roughly 77%). The fast path removes it while keeping the exact published 0.7.0 backend. The ownership hook adds about 5 ms per call. The remaining ~280 ms is fresh Node/MCP SDK/CLI startup; the 2–5 ms bridge floor is not used because persistent reuse would add unsafe lifecycle and mutating-replay risk. Helper calls use two node processes instead of three; the plugin host adds one child instead of two. Concurrent work, antivirus, and host load can increase these times. No mutating call is retried automatically, and no backend/provider/model/effort is silently changed.
 
-## Native Responses alternative
+## Native gateway path
 
-A reference-project review suggested native Responses global routing as a possible alternative. This plugin does not install that reference and does not change the global model, provider, or base URL. Native DeepSeek spawning on Windows is unverified, so it is not treated as a supported replacement. The published DSH 0.7 bridge remains the only implemented executor path.
+The current path keeps the main `openai` provider and current Sol model. `native-install.mjs` starts one hidden gateway before writing the marker-owned root `openai_base_url`/`model_catalog_json` block. The stable private identity keeps the same port and capability token across restarts, so a reboot does not leave Codex pointed at a dead random endpoint. The Windows login VBS launcher is implemented as opt-in and is not run by tests.
+
+Unrecognized models remain raw GPT traffic. The exact `deepseek/deepseek-flash` slug goes to the official DeepSeek Responses API. GPT authorization is never forwarded to DeepSeek. Native GPT ciphertext collaboration items are relayed once and cached by account+ciphertext; plaintext DeepSeek payloads stored in `encrypted_content` are restored directly. Main GPT streaming usage, DeepSeek per-request usage, and relay usage are recorded separately; absence is reported as unknown, never estimated.
+
+Native child spawning uses `spawn_agent` with `task_name`, `model: "deepseek/deepseek-flash"`, and `fork_turns: "none"`. Do not pass `agent_type`; current v2 does not expose it. The role file is compatibility documentation only. Writer ownership reserves the workspace before spawn, binds the child explicitly, and requires explicit terminal release; it is not based on a short-lived helper PID. The accepted evidence is in `docs/native-deepseek-acceptance-2026-10-17.md`; the desktop UI is still unverified because the local Node REPL ACL file lock blocks the interface check.
 
 ## Failure behavior
 
@@ -149,7 +157,17 @@ codex plugin add sol-luna-deepseek-router@sol-luna --json
 This refresh copies the current intended source/docs/tests and updates the cache hashes. It does not mark hooks trusted, change the main model/provider/base URL, or restart the DSH backend. A running Codex host may still need a plugin reload to discover new tools; the automated release itself does not restart it. Reopen `/hooks` after an update to review the new hook hashes.
 
 1. Install Node.js 24+ with npm. Confirm `node --version` and `npm --version`.
-2. Install the published DSH bridge at a deliberate setup point with the upstream companion skill disabled:
+2. For the current native path, review the diff and run the dry-run first:
+
+   ```powershell
+   node .\scripts\native-install.mjs install --dry-run
+   node .\scripts\native-config-validate.mjs --source-home $env:USERPROFILE\.codex
+   node .\scripts\native-install.mjs install --autostart
+   node .\scripts\native-gateway-manager.mjs status --json
+   ```
+
+   The install starts the hidden gateway before writing config, keeps the main model/provider unchanged, and writes only the marker-owned root keys. `--autostart` writes the hidden Startup-folder VBS launcher; do not use it where login startup is not authorized.
+3. The DSH bridge below is legacy compatibility only. Install it at a deliberate setup point with the upstream companion skill disabled:
 
    ```powershell
    npx --yes dsh-subagent-mcp@0.7.0 setup --no-skill --service background
@@ -175,6 +193,7 @@ The manifest and MCP companion follow the Codex plugin contract described in the
 ### State and privacy
 
 - Plugin state: `%LOCALAPPDATA%\sol-luna-deepseek-router\plugin`.
+- Native gateway identity/state/logs: `%LOCALAPPDATA%\sol-luna-deepseek-router\native-gateway`; the stable port/token identity is private and never printed.
 - The plugin stores no API keys, tokens, or raw thread IDs on disk. The trace capability cookie lives only in the browser and expires quickly.
 - Trace content is derived from DSH events. It can contain repository text, commands, and paths. Treat the single-use exchange URL and cookie as sensitive until they expire.
 - The trace server is loopback-only and short-lived, but it is not a replacement for reviewing the repository and test evidence.
@@ -182,6 +201,15 @@ The manifest and MCP companion follow the Codex plugin contract described in the
 ## Validation
 
 ```powershell
+node .\tests\native-routing.test.mjs
+node .\tests\native-relay.test.mjs
+node .\tests\native-gateway.test.mjs
+node .\tests\native-state.test.mjs
+node .\tests\native-agent.test.mjs
+node .\tests\native-install.test.mjs
+node .\tests\native-manager.test.mjs
+node .\tests\native-autostart.test.mjs
+node .\tests\native-config-read.test.mjs
 node .\tests\plugin-state.test.mjs
 node .\tests\plugin-cross-process.test.mjs
 node .\tests\plugin-trace.test.mjs

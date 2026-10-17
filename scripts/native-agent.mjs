@@ -1,0 +1,67 @@
+import { existsSync, readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { PICKER_SLUG } from "./native-routing.mjs";
+
+const LUNA_MAP = {
+  "gpt-6.1-sol": "gpt-6-luna",
+  "gpt-6-sol": "gpt-6-luna",
+  "gpt-5.6-sol": "gpt-5.6-luna",
+};
+
+export function defaultModelsCachePath(env = process.env) {
+  const home = env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  return path.join(home, "models_cache.json");
+}
+
+export function modelsFromCache(cache) {
+  if (!cache || !Array.isArray(cache.models)) throw new Error("models_cache.json has no models");
+  return cache.models.map((model) => model?.slug).filter((slug) => typeof slug === "string");
+}
+
+export function resolveNativeAgent({ executor, mainModel, models = [] }) {
+  if (executor === "deepseek") {
+    return {
+      executor: "deepseek",
+      model: PICKER_SLUG,
+      fork_turns: "none",
+    };
+  }
+  if (executor !== "luna") throw new Error("executor must be luna or deepseek");
+  const available = new Set(models);
+  const preferred = LUNA_MAP[mainModel];
+  const lunaModels = models.filter((slug) => /luna/i.test(slug));
+  const model = (preferred && available.has(preferred) ? preferred : null)
+    || lunaModels.find((slug) => /^gpt-6-luna$/i.test(slug))
+    || lunaModels[0];
+  if (!model) throw new Error("No supported native Luna model is present in the current catalog; do not invent one");
+  return {
+    executor: "luna",
+    model,
+    fork_turns: "none",
+  };
+}
+
+function main(argv) {
+  const get = (name, fallback) => {
+    const at = argv.indexOf(`--${name}`);
+    return at >= 0 ? argv[at + 1] : fallback;
+  };
+  const executor = get("executor");
+  const mainModel = get("main-model");
+  if (executor === "deepseek") {
+    process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel, models: [] }))}\n`);
+    return;
+  }
+  if (executor !== "luna") throw new Error("executor must be luna or deepseek");
+  const cacheAt = path.resolve(get("models-cache", defaultModelsCachePath()));
+  if (!existsSync(cacheAt)) throw new Error(`models_cache.json is missing at ${cacheAt}; Luna resolution never substitutes a model`);
+  const cache = JSON.parse(readFileSync(cacheAt, "utf8"));
+  const result = resolveNativeAgent({ executor, mainModel, models: modelsFromCache(cache) });
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { main(process.argv.slice(2)); } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 2; }
+}

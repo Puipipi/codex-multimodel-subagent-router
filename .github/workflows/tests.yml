@@ -43,5 +43,30 @@ jobs:
             node $_.FullName
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Native gateway tests (mocked/free, no model)
+        shell: pwsh
+        run: |
+          $tests = @(
+            'native-routing',
+            'native-relay',
+            'native-gateway',
+            'native-state',
+            'native-agent',
+            'native-install',
+            'native-manager',
+            'native-autostart'
+          )
+          foreach ($name in $tests) {
+            node "tests/$name.test.mjs"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      # Local gate only. The real config/read test needs a local Codex CLI and
+      # models_cache.json; it is opt-in so hosted CI cannot silently skip it and
+      # report a false green. Enable with the repository variable
+      # RUN_NATIVE_CONFIG_READ=true on a runner that has Codex installed.
+      - name: Native config/read local gate (requires local Codex)
+        if: ${{ vars.RUN_NATIVE_CONFIG_READ == 'true' }}
+        shell: pwsh
+        run: node tests/native-config-read.test.mjs
       - shell: pwsh
         run: ./tests/dsh-agent-helper.test.ps1

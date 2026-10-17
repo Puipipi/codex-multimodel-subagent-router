@@ -23,7 +23,7 @@ equal(manifest.mcpServers, './.mcp.json', 'the manifest points at the MCP compan
 ok(!Object.hasOwn(manifest, 'skills'), 'the plugin does not declare a second scheduling skill');
 ok(!existsSync(new URL('../skills/', import.meta.url)), 'the duplicate bundled skills directory is absent');
 ok(existsSync(new URL('../SKILL.md', import.meta.url)), 'the root canonical standalone skill remains');
-equal(manifest.interface.displayName, 'Sol Luna DeepSeek Router', 'the display name is present');
+equal(manifest.interface.displayName, 'Sol 主控 · 原生 Luna/DeepSeek 峰谷分工', 'the display name is present');
 ok(manifest.interface.shortDescription.length > 10, 'the short description is present');
 ok(manifest.interface.longDescription.length > 50, 'the long description is present');
 equal(manifest.interface.developerName, 'Puipipi', 'the developer name is present');

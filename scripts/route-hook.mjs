@@ -89,7 +89,7 @@ export function buildNotification(route, at) {
   const schedule = route.phase === 'unknown'
     ? `unknown${reason ? ` (${reason})` : ''}`
     : `${route.phase}${reason ? ` (${reason})` : ''}`;
-  const executor = route.executor === 'deepseek' ? 'DSH/DeepSeek' : 'native Luna';
+  const executor = route.executor === 'deepseek' ? 'native DeepSeek gateway' : 'native Luna';
   const source = route.source === 'session_override'
     ? 'sticky chat override; it outranks the automatic schedule'
     : route.source === 'one_time_override'
@@ -103,16 +103,16 @@ export function buildNotification(route, at) {
 
 /**
  * Hook payloads do not expose a trustworthy main/subagent role. Suppress turns
- * whose model names Luna, which is the native subagent executor used by this
- * skill. Unknown models are treated as main-chat turns so a new Sol model name
- * still receives notices.
+ * whose model names either native child executor, Luna or DeepSeek. Unknown
+ * models are treated as main-chat turns so a new Sol model still receives
+ * notices.
  */
 export function isChildExecutor(input) {
   const model = typeof input?.model === 'string' ? input.model : '';
-  if (/luna/i.test(model)) return true;
+  if (/luna|deepseek/i.test(model)) return true;
   for (const key of ['agent_type', 'agent_role', 'subagent_type']) {
     const value = input?.[key];
-    if (typeof value === 'string' && /luna|subagent/i.test(value)) return true;
+    if (typeof value === 'string' && /luna|deepseek|subagent/i.test(value)) return true;
   }
   return false;
 }

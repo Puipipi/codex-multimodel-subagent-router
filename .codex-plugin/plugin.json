@@ -1,7 +1,7 @@
 {
   "name": "sol-luna-deepseek-router",
-  "version": "0.8.1",
-  "description": "Sol-led Codex routing to native Luna or a published DSH 0.7 DeepSeek executor, with per-chat agent ownership, workspace writer leases, and a read-only local DSH trace.",
+  "version": "0.9.0",
+  "description": "Sol-led native Luna/DeepSeek routing through a hidden loopback gateway, with explicit DSH compatibility, per-chat ownership, and writer leases.",
   "author": {
     "name": "Puipipi",
     "url": "https://github.com/Puipipi"
@@ -13,17 +13,17 @@
     "codex",
     "plugin",
     "deepseek",
-    "dsh",
-    "mcp",
+    "native-gateway",
     "subagent",
     "routing",
-    "trace"
+    "luna",
+    "dsh"
   ],
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Sol Luna DeepSeek Router",
-    "shortDescription": "Route coding work and keep DSH agents owned by one chat.",
-    "longDescription": "Keeps Sol in charge of the Codex conversation and routes repository work to native Luna during DeepSeek peak windows or to a published DSH 0.7 DeepSeek executor during valley hours. The bundled MCP wrapper binds every agent to the trusted Codex thread identity, filters lists to that chat, serializes writers in the same workspace, and serves a read-only local browser trace built from real DSH events.",
+    "displayName": "Sol 主控 · 原生 Luna/DeepSeek 峰谷分工",
+    "shortDescription": "Keep Sol in charge; route new work to native Luna or native DeepSeek by peak/valley schedule.",
+    "longDescription": "Keeps Sol and the current conversation intact while routing new coding tasks to native Luna at DeepSeek peak windows or to a native DeepSeek child at valley windows. The optional hidden loopback gateway preserves the shared openai provider, transparently relays GPT traffic, and adds the exact deepseek/deepseek-flash model without replacing the main model. DSH MCP tools and the read-only trace remain available as explicit legacy compatibility.",
     "developerName": "Puipipi",
     "category": "Developer Tools",
     "capabilities": [
@@ -34,8 +34,8 @@
     "websiteURL": "https://github.com/Puipipi/sol-luna-deepseek-router",
     "defaultPrompt": [
       "Route this task by DeepSeek peak pricing",
-      "Show a read-only DSH trace",
-      "Continue the DSH agent owned by this chat"
+      "Start the native DeepSeek gateway",
+      "Show the native acceptance evidence"
     ],
     "brandColor": "#4D6BFE"
   }

@@ -265,6 +265,7 @@ equal(notificationKey(peakRoute), 'peak|luna|schedule', 'notification key is sta
 ok(notificationKey({ ...peakRoute, phase: 'valley' }) !== notificationKey(peakRoute), 'phase changes the key');
 ok(notificationKey({ ...peakRoute, source: 'session_override' }) !== notificationKey(peakRoute), 'source changes the key');
 equal(isChildExecutor({ model: 'gpt-6-luna' }), true, 'Luna model turns are treated as child work');
+equal(isChildExecutor({ model: 'deepseek/deepseek-flash' }), true, 'native DeepSeek child turns are suppressed');
 equal(isChildExecutor({ model: 'openai/gpt-6.1-sol' }), false, 'Sol model turns are not treated as children');
 equal(isChildExecutor({ model: 'gpt-6.1-sol', agent_type: 'subagent' }), true, 'explicit subagent evidence is respected');
 equal(isChildExecutor({ model: undefined }), false, 'unknown model evidence is tolerated');
@@ -363,7 +364,7 @@ try {
   const overrideAfter = await readFile(overridePath, 'utf8');
   equal(overrideAfter, overrideBefore, 'hook does not modify the manual override');
   ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: peak'), 'manual override still reports the peak schedule');
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('DSH/DeepSeek'), 'manual DeepSeek override is effective');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('native DeepSeek gateway'), 'manual DeepSeek override is effective');
   ok(result.output?.hookSpecificOutput.additionalContext.includes('sticky chat override'), 'manual override source is explained');
 
   await decideRoute({ at: peak, setSessionExecutor: 'luna', sessionId, stateDir: manualDir });
