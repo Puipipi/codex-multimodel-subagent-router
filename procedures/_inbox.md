@@ -11,3 +11,13 @@
 - 多工作目录：临时 probe 目录不是 Git 仓库；Git 审计、提交与推送必须显式指定实际源码仓库的 workdir，避免把 not-a-repository 当成仓库故障。
 
 - 旧共享网关迁移卸载：原始文件快照含受管 localhost 区块，主动 rollback 若直接恢复会复活已退役地址；安装失败仍恢复原快照，成功迁移后的卸载应恢复验证过的 prior_root 干净配置，并保留后续编辑冲突检查。
+
+## 2026-10-18：native child dispatch 诊断证据边界
+
+- mock Responses 发出 `function_call` 的计数只证明 fixture 返回了工具调用项，不证明 app-server 已成功 dispatch 或创建子线程；必须保存匹配 call_id 的 `function_call_output`、检查 `thread/started` 以及子线程父链，再判断失败阶段。
+- `FunctionCallOutputBody` 在线格式可为纯字符串或 content-item 数组；提取器不能仅假设字符串 JSON/object，诊断 fixture 应保留有界的实际 output 形态与安全错误信息。
+- 本次 app-server 临时目录只有空子目录，Windows 返回 EPERM 且ACL继承显式拒绝删除；保留目录与证据，不通过其他命令、ACL修改或替代工具绕过拒绝。
+
+## 2026-10-18：native child agent_name 格式校验
+
+- 正式 CLI 的本地 mock probe 实测拒绝了 `native-isolation-deepseek-child`，错误为 `agent_name must use only lowercase letters, digits, and underscores`；native/Luna/测试 task name 及由 nonce 生成的后缀必须规范化为小写字母、数字和下划线。修复 harness 名称后再验证 child dispatch，不能把 tool call 已发出当成 child 已创建。

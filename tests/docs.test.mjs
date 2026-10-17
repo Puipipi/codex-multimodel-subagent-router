@@ -8,6 +8,8 @@ const pluginDoc = read('PLUGIN.md');
 const pluginManifest = JSON.parse(read('.codex-plugin/plugin.json'));
 const nativeBuild = read('docs/native-isolated-cli-build.md');
 const nativeInstaller = read('docs/native-isolated-install.md');
+const nativeLifecycleText = read('docs/native-gateway-lifecycle-2026-10-18.json');
+JSON.parse(nativeLifecycleText);
 const nativeAcceptance = read('docs/native-deepseek-acceptance-2026-10-17.md');
 const client = read('scripts/dsh-mcp-client.mjs');
 const hooks = JSON.parse(read('hooks/hooks.json'));
@@ -101,6 +103,8 @@ assert.doesNotMatch(pluginManifest.interface.defaultPrompt.join(' '), /Start the
 assert.match(nativeBuild, /native-isolated-install\.mjs/, 'build note must name the installer entrypoint');
 assert.match(nativeBuild, /native-isolated-install\.md/, 'build note must link the installer orchestration');
 assert.match(nativeBuild, /no real installation or desktop acceptance has been performed/i, 'build note must distinguish source implementation from actual acceptance');
+assert.doesNotMatch(nativeLifecycleText, /"(?:pid|port|root_session)"\s*:/i, 'published lifecycle JSON must omit process IDs, ports, and session identifiers');
+assert.doesNotMatch(nativeLifecycleText, /[A-Za-z]:\\Users\\|runUUID|run_uuid/i, 'published lifecycle JSON must omit user paths and run UUIDs');
 assert.match(nativeInstaller, /--expected-main-model/);
 assert.match(nativeInstaller, /--expected-main-provider null/);
 assert.match(nativeInstaller, /--expected-root-base-url null/);
