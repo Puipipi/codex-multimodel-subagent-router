@@ -50,6 +50,8 @@ jobs:
             'native-routing',
             'native-relay',
             'native-gateway',
+            'native-credentials',
+            'native-gateway-account-auth',
             'native-state',
             'native-agent',
             'native-install',
