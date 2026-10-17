@@ -163,6 +163,41 @@ export async function planRuntime(options) {
   };
 }
 
+export async function verifyRuntimeVersion(versionDir) {
+  if (!versionDir) throw new Error("versionDir is required");
+  const root = path.resolve(versionDir);
+  const info = await lstat(root).catch((error) => {
+    if (error.code === "ENOENT") throw new Error(`runtime version directory is missing: ${root}`);
+    throw error;
+  });
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`runtime version path must be a regular directory: ${root}`);
+  const manifestPath = await requireRegularFile(path.join(root, MANIFEST_NAME), MANIFEST_NAME);
+  let manifest;
+  try { manifest = JSON.parse(await readFile(manifestPath, "utf8")); } catch { throw new Error(`invalid ${MANIFEST_NAME}: ${manifestPath}`); }
+  if (manifest?.version !== NATIVE_RUNTIME_VERSION) throw new Error("runtime manifest version does not match the approved version");
+  if (manifest?.source_commit !== NATIVE_RUNTIME_SOURCE_COMMIT) throw new Error("runtime manifest source_commit does not match the approved source");
+  if (manifest?.patch_sha256 !== NATIVE_RUNTIME_PATCH_SHA256) throw new Error("runtime manifest patch_sha256 does not match the approved patch");
+  if (manifest?.target !== NATIVE_RUNTIME_TARGET) throw new Error("runtime manifest target does not match x86_64-pc-windows-msvc");
+  if (manifest?.stock_cli_version !== NATIVE_RUNTIME_VERSION) throw new Error("runtime manifest stock_cli_version does not match the approved version");
+  if (!manifest.files || typeof manifest.files !== "object" || Array.isArray(manifest.files)) throw new Error("runtime manifest files must be a filename-to-hash map");
+  const required = ["codex.exe", "provenance.json", ...REQUIRED_COMPANIONS];
+  for (const name of required) if (!Object.hasOwn(manifest.files, name)) throw new Error(`runtime manifest is missing required file: ${name}`);
+  const entries = (await readdir(root)).sort();
+  const expectedEntries = [...Object.keys(manifest.files), MANIFEST_NAME].sort();
+  if (entries.join("\n") !== expectedEntries.join("\n")) throw new Error("runtime directory contents do not match its manifest");
+  for (const [name, expectedHash] of Object.entries(manifest.files)) {
+    if (path.basename(name) !== name || name === "." || name === "..") throw new Error(`runtime manifest contains unsafe filename: ${name}`);
+    if (!/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error(`runtime manifest contains invalid SHA-256 for ${name}`);
+    const file = await requireRegularFile(path.join(root, name), `runtime file ${name}`);
+    if (await hashFile(file) !== expectedHash) throw new Error(`runtime file hash mismatch: ${name}`);
+  }
+  const binaryHash = manifest.files["codex.exe"];
+  if (manifest.binary_sha256 !== binaryHash) throw new Error("runtime manifest binary_sha256 does not match codex.exe");
+  const provenance = parseProvenance(await readFile(path.join(root, "provenance.json"), "utf8"), path.join(root, "provenance.json"));
+  if (provenance.binary_sha256 !== undefined && String(provenance.binary_sha256).toLowerCase() !== binaryHash) throw new Error("runtime provenance binary_sha256 does not match codex.exe");
+  return { exePath: path.join(root, "codex.exe"), manifest };
+}
+
 export async function stageRuntime(options) {
   const plan = await readPlanInputs(options);
   if (await verifyExistingVersion(plan)) {

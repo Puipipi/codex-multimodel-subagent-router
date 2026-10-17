@@ -57,6 +57,7 @@ jobs:
             'native-isolated-config',
             'native-catalog',
             'native-runtime',
+            'native-runtime-env',
             'native-install',
             'native-manager',
             'native-autostart',

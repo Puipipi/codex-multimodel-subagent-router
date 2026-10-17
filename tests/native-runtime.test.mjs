@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { checkStockCliVersion, planRuntime, stageRuntime } from "../scripts/native-runtime.mjs";
+import { checkStockCliVersion, planRuntime, stageRuntime, verifyRuntimeVersion } from "../scripts/native-runtime.mjs";
 
 let checks = 0;
 const equal = (actual, expected, message) => { assert.equal(actual, expected, message); checks += 1; };
@@ -71,11 +71,15 @@ try {
   equal(manifest.files["codex.exe"], sha(binary), "manifest records staged CLI hash");
   equal(manifest.files["codex-command-runner.exe"], sha(companions["codex-command-runner.exe"]), "manifest records helper hash");
   equal(manifest.files["provenance.json"], sha(await readFile(path.join(artifactDir, "provenance.json"))), "manifest records provenance hash");
+  const verified = await verifyRuntimeVersion(staged.versionDir);
+  equal(verified.exePath, path.join(staged.versionDir, "codex.exe"), "runtime verifier returns the staged CLI path");
+  equal(verified.manifest.binary_sha256, sha(binary), "runtime verifier returns the verified manifest");
   const repeated = await stageRuntime({ artifactDir, companionDir, runtimeDir, versionChecker });
   equal(repeated.versionDir, staged.versionDir, "same inputs stage idempotently");
   equal(repeated.alreadyStaged, true, "repeat stage validates and reports existing version");
 
   await writeFile(path.join(staged.versionDir, "codex.exe"), "tampered");
+  await rejects(() => verifyRuntimeVersion(staged.versionDir), /hash mismatch.*codex\.exe/i, "runtime verifier rejects a changed staged executable");
   await rejects(() => stageRuntime({ artifactDir, companionDir, runtimeDir, versionChecker }), /existing staged version.*changed/i, "modified existing version is refused without overwrite");
   equal(await readFile(path.join(staged.versionDir, "codex.exe"), "utf8"), "tampered", "refusal leaves existing staged files untouched");
 
