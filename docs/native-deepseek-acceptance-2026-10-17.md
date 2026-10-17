@@ -1,11 +1,13 @@
 # Native DeepSeek acceptance — 2026-10-17
 
+> Historical acceptance record for the earlier shared-provider route. It is not evidence for the current isolated `native_deepseek` role contract.
+
 ## Result
 
 - P3 run: `20261017123332-1c5dbca4`, root exec exit 0, `pass=true`.
 - Parent: `01a149da-6a36-7e13-ba14-33769fedf1e0` (`gpt-6.1-sol`, provider `openai`).
 - Native child: `01a149da-afc5-7451-ac60-a1d23514ea8f`.
-- The parent used native collaboration `spawn_agent` with `task_name`, `model: "deepseek/deepseek-flash"`, and `fork_turns: "none"`. No `agent_type` parameter was available in the real v2 call.
+- The parent used the earlier native collaboration contract with `task_name`, explicit `model: "deepseek/deepseek-flash"`, and `fork_turns: "none"`; this predates the isolated `agent_type: "native_deepseek"` role contract.
 - Same child follow-up produced two child turns. The child used `commandExecution`, wrote the exact two-line proof, and reported in Chinese. The parent did not substitute its own file edit.
 - `proof.txt` matched the expected bytes exactly.
 
@@ -26,5 +28,4 @@ The final cumulative numbers below come from the P3 original `thread/tokenUsage/
 
 ## Not verified
 
-- The current desktop panel UI was not verified. A local Node REPL ACL file lock (`node_repl.exe` in use, os error 32) blocked the intended UI check; this is an environment/setup issue, not a routing result.
-- The desktop model picker, visual child entry, status rendering, and full-history panel remain for the follow-up desktop test.
+- Desktop panel UI, model picker, visual child entry, status rendering, and full-history behavior remain pending acceptance for the isolated backend.

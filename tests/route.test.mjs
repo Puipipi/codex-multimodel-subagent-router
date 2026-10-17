@@ -81,6 +81,16 @@ for (const [name, time, executor, phase] of boundaries) {
   const result = await decideRoute({ at: `2026-10-19T${time}${shanghai}` });
   equal(result.executor, executor, name);
   equal(result.phase, phase, `${name} phase`);
+  equal(result.native_spawn.fork_turns, 'none', `${name} native child has no inherited turns`);
+  if (executor === 'deepseek') {
+    equal(result.native_spawn.agent_type, 'native_deepseek', `${name} selects the isolated DeepSeek role`);
+    equal(result.native_spawn.model, undefined, `${name} omits explicit DeepSeek model override`);
+    equal(Object.hasOwn(result.native_spawn, 'model'), false, `${name} has no model property to forward`);
+    equal(result.native_spawn.resolved_model, 'deepseek/deepseek-flash', `${name} identifies the fixed role model informationally`);
+  } else {
+    equal(result.native_spawn.agent_type, undefined, `${name} leaves Luna on native catalog resolution`);
+    equal(result.native_spawn.model, undefined, `${name} does not freeze a Luna model in the route result`);
+  }
   equal(result.timezone, 'Asia/Shanghai', `${name} timezone`);
   equal(result.calendarVersion, 'china-public-holidays-2026', `${name} calendar version`);
 }

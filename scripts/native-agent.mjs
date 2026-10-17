@@ -24,8 +24,9 @@ export function resolveNativeAgent({ executor, mainModel, models = [] }) {
   if (executor === "deepseek") {
     return {
       executor: "deepseek",
-      model: PICKER_SLUG,
+      agent_type: "native_deepseek",
       fork_turns: "none",
+      resolved_model: PICKER_SLUG,
     };
   }
   if (executor !== "luna") throw new Error("executor must be luna or deepseek");

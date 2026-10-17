@@ -2,6 +2,8 @@
 
 This workflow builds a custom Codex CLI from the pinned upstream source commit `4ebc485ca321243727539187169425fcf972f2c4`, with this repository's reviewed `patches/native-isolated-cli.patch`. The resulting executable contains custom backend changes and is **not the unmodified official Codex CLI**. It is not compiled or accepted until the manual workflow completes successfully; a source diff or a green unrelated test suite is not build acceptance.
 
+The patched backend supports the isolated `native_deepseek` child role while leaving the parent and Luna provider selection unchanged. The repository's runtime and file/environment transaction modules are preparation components; formal installer orchestration and activation are still pending. Building this artifact does not install or activate it.
+
 ## Pins and build checks
 
 - Source: `openai/codex` at `4ebc485ca321243727539187169425fcf972f2c4`.

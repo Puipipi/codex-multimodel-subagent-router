@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 const read = name => readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
 const readme = read('README.md');
 const skill = read('SKILL.md');
+const nativeBuild = read('docs/native-isolated-cli-build.md');
+const nativeAcceptance = read('docs/native-deepseek-acceptance-2026-10-17.md');
 const client = read('scripts/dsh-mcp-client.mjs');
 const hooks = JSON.parse(read('hooks/hooks.json'));
 const marketplace = JSON.parse(read('.agents/plugins/marketplace.json'));
@@ -58,7 +60,17 @@ for (const [name, text] of [['README.md', readme], ['SKILL.md', skill]]) {
 
 assert.match(skill, /用户可见的进度与最终报告必须使用简体中文；代码、命令和内部 GPT-DeepSeek 通信可保持原文。/,
   'SKILL.md must put the Chinese child-output instruction in every spawn/followup message');
-assert.match(skill, /role=null/, 'SKILL.md must not rely on the null-role file for language instructions');
+assert.match(skill, /agent_type: "native_deepseek"/i, 'SKILL.md must select the isolated DeepSeek role');
+assert.match(skill, /omit `model`/i, 'SKILL.md must not send an explicit DeepSeek model override');
+assert.match(skill, /current `CODEX_HOME\/models_cache\.json`/, 'SKILL.md must resolve Luna from the live catalog');
+assert.doesNotMatch(skill, /shared-root gateway path is the formal|root `openai_base_url`[^\n]*formal route/i, 'SKILL.md must not use shared root routing as the formal path');
+assert.match(skill, /installer orchestration.*has not been completed/i, 'SKILL.md must state that activation orchestration is pending');
+assert.match(skill, /still needs end-to-end activation and desktop acceptance/i, 'SKILL.md must point to the actual pending acceptance state');
+assert.doesNotMatch(skill, /ACL file lock|blocks the intended UI check/i, 'SKILL.md must not preserve the obsolete UI blocker claim');
+assert.doesNotMatch(skill, /node \.\\scripts\\native-install\.mjs install/i, 'SKILL.md must not present the old shared-root installer as the setup path');
+assert.match(nativeBuild, /formal installer orchestration and activation are still pending/i, 'build note must distinguish build preparation from activation');
+assert.match(nativeAcceptance, /Historical acceptance record for the earlier shared-provider route/i, 'old acceptance evidence must be labeled historical');
+assert.doesNotMatch(nativeAcceptance, /ACL file lock|blocked the intended UI check/i, 'acceptance record must not claim the obsolete ACL blocker');
 assert.doesNotMatch(skill, /at most one shell(?:\/exec)? attempt/i,
   'SKILL.md must not generalize the one-attempt P3 test cap to product work');
 

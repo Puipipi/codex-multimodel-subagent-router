@@ -161,7 +161,9 @@ export async function decideRoute({
     ...result,
     native_spawn: {
       fork_turns: 'none',
-      model: result.executor === 'deepseek' ? DEEPSEEK_NATIVE_SLUG : null,
+      ...(result.executor === 'deepseek'
+        ? { agent_type: 'native_deepseek', resolved_model: DEEPSEEK_NATIVE_SLUG }
+        : {}),
     },
   };
 }

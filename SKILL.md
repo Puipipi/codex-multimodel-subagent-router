@@ -1,6 +1,6 @@
 ---
 name: sol-luna-deepseek-router
-description: Use when Sol must keep the main conversation while delegating repository coding or file work to a native Luna subagent or a native DeepSeek child through the peak/valley schedule, the shared openai provider, and the managed loopback gateway.
+description: Use when Sol keeps the main conversation while delegating repository coding or file work to native Luna or an isolated native DeepSeek child through the peak/valley schedule.
 metadata:
   short-description: Sol 主控 · 原生 Luna/DeepSeek 峰谷分工
 ---
@@ -17,23 +17,11 @@ The optional Codex plugin adds guarded DSH compatibility tools, real DSH event a
 
 The root standalone skill is the only routing policy. The plugin's DSH/MCP path is explicit legacy compatibility, never an automatic fallback from native DeepSeek.
 
-## Native gateway prerequisites
+## Isolated native backend prerequisites
 
-The native route needs one hidden, loopback-only gateway before Codex sends its first model request:
+The formal native DeepSeek route uses the patched, versioned Codex CLI backend described in [the isolated CLI build note](docs/native-isolated-cli-build.md). It gives the `native_deepseek` child role its own `deepseek-native` provider and its own `sol-luna-native-models.json` catalog. The parent session and native Luna continue using their normal provider and live model catalog; do not set root `openai_base_url` or a global `model_catalog_json` for this route.
 
-```powershell
-node .\scripts\native-gateway-manager.mjs start
-node .\scripts\native-gateway-manager.mjs status --json
-node .\scripts\native-install.mjs install --dry-run
-node .\scripts\native-config-validate.mjs --source-home $env:USERPROFILE\.codex
-node .\scripts\native-gateway-manager.mjs stop
-node .\scripts\native-autostart.mjs install
-node .\scripts\native-autostart.mjs status
-```
-
-`native-install.mjs install --dry-run` shows the planned config/catalog/agent changes. A real install inserts the marker-owned `openai_base_url` and `model_catalog_json` keys at the TOML root, before the first table; it preserves the user's `model`, `model_provider`, last table, and every unrelated key. It also merges the existing Sol/Luna catalog and adds the exact `deepseek/deepseek-flash` entry; never hard-code a Sol version. `native-install.mjs rollback` removes only the managed block and restores only the prior values of its own two keys, preserving keys added after installation; it stops the owned gateway. Do not run a real install, change the global config, or restart the user's app as part of ordinary routing.
-
-The gateway reads the DSH `deepseek-account-platform/default` grant in-process on each DeepSeek request and sends its token only as `x-dsh-auth-token` to the exact `https://api.deepseek.com` origin. A missing account grant falls back to the legacy `refs.DEEPSEEK_API_KEY`; a malformed grant or unexpected issuer fails closed. Credentials never enter the repo, catalog, logs, or tool output, and account tokens are never sent as Bearer authorization. See [the account authentication note](docs/native-account-auth.md). GPT traffic keeps its incoming ChatGPT authorization and is relayed unchanged; unrecognized model names are always transparent GPT traffic. Health reports credential mode and availability only; it does not prove that DeepSeek accepted the credential. The gateway never takes a writer lease and never blocks ordinary GPT requests; native writer coordination applies only to a write-capable child task.
+The build, runtime staging, isolated-file transaction, and environment transaction exist as separate preparation layers. Installer orchestration that safely applies all layers and activates the runtime has not been completed. Therefore this skill does not provide an activation command and does not claim the isolated backend is installed. The older `native-install.mjs` shared-root gateway path is retained for historical compatibility only; it is not the formal native DeepSeek setup path.
 
 ## Route a task
 
@@ -66,17 +54,17 @@ Every `spawn_agent` and every `followup_task` message must end with exactly this
 用户可见的进度与最终报告必须使用简体中文；代码、命令和内部 GPT-DeepSeek 通信可保持原文。
 ```
 
-Do not rely on the role file for this language instruction: the verified v2 spawn had `role=null`, so its Chinese developer instructions did not take effect. Pass the instruction in the child message itself.
+The selected role supplies backend, model, and reasoning configuration. Keep the language instruction in every child message as well, so progress and final output remain predictable across role loading and follow-up turns.
 
 ## If the route is deepseek
 
-Use native Codex collaboration, not DSH, for the formal task. Resolve the exact child configuration first:
+Use native Codex collaboration, not DSH, for the formal task. Resolve the dedicated child role first:
 
 ```powershell
 node .\scripts\native-agent.mjs --executor deepseek --json
 ```
 
-It returns `model: "deepseek/deepseek-flash"` and `fork_turns: "none"`. Call `spawn_agent` with `task_name` naming the bounded task, that custom model slug, and `fork_turns: "none"`. Do not pass `agent_type`: the current v2 `spawn_agent` schema does not expose that parameter, and the real P3 role was null. The installer may still write a compatibility role file, but the verified native call uses `task_name`, `model`, and `fork_turns` only. Keep the same child for corrections: use native `wait` for completion and `followup_task` for the same child; never spawn a replacement just because an observation window ended.
+It returns `agent_type: "native_deepseek"`, `fork_turns: "none"`, and an informational `resolved_model: "deepseek/deepseek-flash"`. Call `spawn_agent` with the bounded `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the child role selects its fixed DeepSeek model and high reasoning effort. A missing or unavailable native role is an explicit setup failure: do not fall back to a shared root provider, explicit model override, or another executor. Keep the same child for corrections: use native `wait` for completion and `followup_task` for the same child; never spawn a replacement just because an observation window ended.
 
 Apply the shared writer and child-message contract above before this spawn; it applies to both native executors.
 
@@ -87,10 +75,10 @@ The default is one writer per workspace. Different workspaces may run in paralle
 Use the native Luna subagent supported by the current Codex host. Resolve the model from the actual catalog:
 
 ```powershell
-node .\scripts\native-agent.mjs --executor luna --main-model gpt-6.1-sol --json
+node .\scripts\native-agent.mjs --executor luna --main-model $mainModel --json
 ```
 
-It prefers `gpt-6-luna` for `gpt-6.1-sol`/`gpt-6-sol`, `gpt-5.6-luna` for `gpt-5.6-sol`, and otherwise picks a catalog-supported Luna model. It never invents an ID and never changes Sol's main model. Use `fork_turns: "none"` for the scoped child, wait natively, and continue the same child for fixes. The same reserve → spawn → bind → finish writer lifecycle applies to a write-capable Luna child.
+Pass the actual current Sol model in `$mainModel`. The resolver reads the current `CODEX_HOME/models_cache.json`, chooses a listed Luna model, and fails explicitly if none is available. It never invents a model ID or changes Sol's main model. Pass the resolved Luna `model` with `fork_turns: "none"`, wait natively, and continue the same child for fixes. The same reserve → spawn → bind → finish writer lifecycle applies to a write-capable Luna child.
 
 ## Active-chat peak/valley notices
 
@@ -112,7 +100,7 @@ The DSH helper requires Node.js 24+ and PowerShell 7.3+. Keep credentials out of
 
 Use native `wait` and `thread/read` for the same child. A timeout means the task may still be running; retain the child handle and never start a duplicate. For DSH legacy work, `dsh_wait` is the reliable completion path. Sol reviews the returned diff, actual test commands and exit codes, and the evidence; do not claim desktop-panel acceptance from an isolated app-server test.
 
-The accepted native evidence for this repository is recorded in `docs/native-deepseek-acceptance-2026-10-17.md`: real child `01a149da-afc5-7451-ac60-a1d23514ea8f`, two turns, exact two-line proof, DeepSeek HTTP 200, and relay usage. The current desktop UI remains unverified because the local Node REPL ACL file lock blocks the intended interface check.
+The historical native evidence is recorded in `docs/native-deepseek-acceptance-2026-10-17.md`; it used the earlier shared-provider call contract and does not verify the isolated-role route. The current isolated route still needs end-to-end activation and desktop acceptance after installer orchestration is completed.
 
 ## Price and calendar sources
 
