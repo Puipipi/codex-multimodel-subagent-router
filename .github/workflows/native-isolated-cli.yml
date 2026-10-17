@@ -89,15 +89,37 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "Verified packages codex-protocol/codex-core and target codex in package codex-cli."
 
-      - name: Run focused native routing tests
+      - name: Restore Cargo dependency and debug build cache
+        id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            codex-rs/target/debug
+          key: windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-${{ hashFiles('router/patches/native-isolated-cli.patch', 'codex-rs/Cargo.lock') }}
+          restore-keys: |
+            windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-
+
+      - name: Run Cargo.lock normalizer test
         shell: pwsh
         working-directory: codex-rs
         run: |
           $testPath = Join-Path $env:GITHUB_WORKSPACE 'router/tests/normalize-cargo-workspace-lock.test.mjs'
           node $testPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run protocol wire-alias tests
+        shell: pwsh
+        working-directory: codex-rs
+        run: |
           cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run core native DeepSeek tests
+        shell: pwsh
+        working-directory: codex-rs
+        run: |
           cargo test --locked -p codex-core native_deepseek --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -111,12 +133,24 @@ jobs:
             throw 'Cargo reported success but codex-rs/target/release/codex.exe is missing.'
           }
 
+      - name: Save Cargo dependency and debug build cache
+        if: ${{ always() && !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            codex-rs/target/debug
+          key: windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-${{ hashFiles('router/patches/native-isolated-cli.patch', 'codex-rs/Cargo.lock') }}
+
       - name: Stage executable and provenance
         shell: pwsh
         run: |
           $artifact = Join-Path $env:RUNNER_TEMP 'native-isolated-cli-artifact'
           New-Item -ItemType Directory -Path $artifact -Force | Out-Null
           Copy-Item -LiteralPath 'codex-rs/target/release/codex.exe' -Destination (Join-Path $artifact 'codex.exe')
+          $binaryHash = (Get-FileHash -LiteralPath (Join-Path $artifact 'codex.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
           $lockReportPath = Join-Path $env:RUNNER_TEMP 'cargo-lock-normalization.json'
           if (-not (Test-Path -LiteralPath $lockReportPath -PathType Leaf)) { throw 'Cargo.lock normalization report is missing.' }
           Copy-Item -LiteralPath $lockReportPath -Destination (Join-Path $artifact 'cargo-lock-normalization.json')
@@ -137,6 +171,7 @@ jobs:
             source_commit = $env:STABLE_GIT_COMMIT
             rust_toolchain = '1.95.0'
             target = 'x86_64-pc-windows-msvc'
+            binary_sha256 = $binaryHash
             patch = 'router/patches/native-isolated-cli.patch'
             patch_sha256 = $patchHash
             cargo_lock_original_sha256 = $lockAudit.original_lock_sha256

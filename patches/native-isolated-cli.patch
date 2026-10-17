@@ -1,8 +1,6 @@
-diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
-index 34d5511..c4ade90 100644
 --- a/codex-rs/codex-api/src/sse/responses.rs
 +++ b/codex-rs/codex-api/src/sse/responses.rs
-@@ -16,6 +16,7 @@ use codex_protocol::models::ResponseItem;
+@@ -16,6 +16,7 @@
  use codex_protocol::protocol::ModelVerification;
  use codex_protocol::protocol::TokenUsage;
  use codex_protocol::protocol::TurnModerationMetadataEvent;
@@ -10,7 +8,7 @@ index 34d5511..c4ade90 100644
  use eventsource_stream::Eventsource;
  use futures::StreamExt;
  use serde::Deserialize;
-@@ -334,6 +335,16 @@ pub enum ResponsesEventError {
+@@ -334,6 +335,16 @@
      Api(ApiError),
  }
  
@@ -27,7 +25,7 @@ index 34d5511..c4ade90 100644
  impl ResponsesEventError {
      pub fn into_api_error(self) -> ApiError {
          match self {
-@@ -354,6 +365,7 @@ pub fn process_responses_event(
+@@ -354,6 +365,7 @@
          "response.output_item.done" => {
              if let Some(item_val) = event.item {
                  if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
@@ -35,7 +33,7 @@ index 34d5511..c4ade90 100644
                      return Ok(Some(ResponseEvent::OutputItemDone(item)));
                  }
                  debug!("failed to parse ResponseItem from output_item.done");
-@@ -482,6 +494,7 @@ pub fn process_responses_event(
+@@ -482,6 +494,7 @@
          "response.output_item.added" => {
              if let Some(item_val) = event.item {
                  if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
@@ -43,67 +41,6 @@ index 34d5511..c4ade90 100644
                      return Ok(Some(ResponseEvent::OutputItemAdded(item)));
                  }
                  debug!("failed to parse ResponseItem from output_item.added");
-diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
-index 9ef4c05..d8b48c6 100644
---- a/codex-rs/core/src/client.rs
-+++ b/codex-rs/core/src/client.rs
-@@ -88,6 +88,7 @@ use codex_protocol::ThreadId;
- use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
- use codex_protocol::config_types::Verbosity as VerbosityConfig;
- use codex_protocol::models::ResponseItem;
-+use codex_protocol::sol_luna_wire_aliases;
- use codex_protocol::openai_models::ModelInfo;
- use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
- use codex_protocol::protocol::AuthRecoveryEvent;
-@@ -979,7 +980,14 @@ impl ModelClient {
-         let mut prefix = Vec::new();
-         let tools = if model_info.use_responses_lite {
-             if !prompt.tools.is_empty() {
--                let tools = create_tools_json_for_responses_lite(&prompt.tools)?;
-+                let mut tools = create_tools_json_for_responses_lite(&prompt.tools)?;
-+                if sol_luna_wire_aliases::enabled() {
-+                    let encoded = sol_luna_wire_aliases::encode_tools_json(
-+                        serde_json::Value::Array(tools),
-+                    )
-+                    .map_err(CodexErr::Fatal)?;
-+                    tools = encoded.as_array().cloned().unwrap_or_default();
-+                }
-                 prefix.push(ResponseItem::AdditionalTools {
-                     id: Some(ResponseItemId::with_suffix(
-                         "at",
-@@ -991,7 +999,17 @@ impl ModelClient {
-             }
-             None
-         } else {
--            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
-+            let raw_tools = create_tools_raw_json_for_responses_api(&prompt.tools)?;
-+            if sol_luna_wire_aliases::enabled() {
-+                let tools = serde_json::from_str(raw_tools.get())?;
-+                let encoded = sol_luna_wire_aliases::encode_tools_json(tools)
-+                    .map_err(CodexErr::Fatal)?;
-+                let raw_tools: Arc<serde_json::value::RawValue> =
-+                    Arc::from(serde_json::value::to_raw_value(&encoded)?);
-+                Some(raw_tools.into())
-+            } else {
-+                Some(raw_tools.into())
-+            }
-         };
-         if !prompt.base_instructions.text.is_empty() {
-             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
-@@ -1068,6 +1086,11 @@ impl ModelClient {
-                 item.clear_tool_result_metadata();
-             }
-         }
-+        if sol_luna_wire_aliases::enabled() {
-+            for item in &mut input {
-+                sol_luna_wire_aliases::encode_response_item(item).map_err(CodexErr::Fatal)?;
-+            }
-+        }
-         let client_metadata = responses_metadata.client_metadata(include_internal);
-         let request = ResponsesApiRequest {
-             model: model_info.slug.clone(),
-diff --git a/codex-rs/core/src/agent/child_config.rs b/codex-rs/core/src/agent/child_config.rs
-index 3d56d7e..2f9fc42 100644
 --- a/codex-rs/core/src/agent/child_config.rs
 +++ b/codex-rs/core/src/agent/child_config.rs
 @@ -5,6 +5,9 @@
@@ -116,7 +53,7 @@ index 3d56d7e..2f9fc42 100644
  use crate::config::Config;
  use crate::session::session::Session;
  use crate::session::step_context::StepContext;
-@@ -60,14 +63,17 @@ pub(crate) async fn prepare_agent_spawn_config(
+@@ -60,14 +63,17 @@
      if options.version == SpawnConfigVersion::V1 && options.full_history_fork {
          reject_full_fork_agent_type_override(options.role_name)?;
      }
@@ -135,17 +72,18 @@ index 3d56d7e..2f9fc42 100644
 +            step_context,
 +            &mut config,
 +            options.model,
-+            options.reasoning_effort,
++            options.reasoning_effort.clone(),
 +        )
 +        .await?;
 +    }
      if !options.full_history_fork
          || (options.version == SpawnConfigVersion::V2 && options.role_name.is_some())
      {
-@@ -81,6 +87,18 @@ pub(crate) async fn prepare_agent_spawn_config(
+@@ -80,6 +86,18 @@
+                 .developer_instructions
                  .clone_from(&turn.developer_instructions);
          }
-     }
++    }
 +    apply_native_deepseek_child_config(
 +        &mut config,
 +        options.role_name,
@@ -157,14 +95,15 @@ index 3d56d7e..2f9fc42 100644
 +            options.model,
 +            options.reasoning_effort,
 +        )?;
-+    }
+     }
      apply_spawn_agent_service_tier(session, &mut config).await?;
      apply_spawn_agent_runtime_overrides(&mut config, turn)?;
- 
-@@ -100,6 +118,45 @@ pub(crate) async fn prepare_agent_spawn_config(
+@@ -98,6 +116,45 @@
+         })
+         .map(str::to_owned);
      Ok(PreparedSpawnConfig { config, role_name })
- }
- 
++}
++
 +/// Native DeepSeek roles use their child-only catalog instead of the parent's model manager.
 +/// The configured role owns model selection; callers must omit the generic model override.
 +fn apply_native_deepseek_model_overrides(
@@ -202,28 +141,12 @@ index 3d56d7e..2f9fc42 100644
 +    }
 +
 +    Ok(())
-+}
-+
+ }
+ 
  /// Builds the base config snapshot for a newly spawned sub-agent.
- ///
- /// The returned config starts from the parent's effective config and then refreshes the
-diff --git a/codex-rs/core/src/agent/mod.rs b/codex-rs/core/src/agent/mod.rs
-index c9a1547..a602cdb 100644
---- a/codex-rs/core/src/agent/mod.rs
-+++ b/codex-rs/core/src/agent/mod.rs
-@@ -2,6 +2,7 @@ pub(crate) mod agent_resolver;
- pub(crate) mod api;
- pub(crate) mod child_config;
- pub(crate) mod control;
-+pub(crate) mod native_deepseek;
- mod registry;
- pub(crate) mod role;
- pub(crate) mod status;
-diff --git a/codex-rs/core/src/agent/control/spawn.rs b/codex-rs/core/src/agent/control/spawn.rs
-index 70cf8b7..e3e3619 100644
 --- a/codex-rs/core/src/agent/control/spawn.rs
 +++ b/codex-rs/core/src/agent/control/spawn.rs
-@@ -4,6 +4,8 @@ use super::spawn_telemetry::SpawnMeasurements;
+@@ -4,6 +4,8 @@
  use super::spawn_telemetry::record_spawn_success;
  use super::*;
  use crate::agent::child_config::build_agent_resume_config;
@@ -232,7 +155,7 @@ index 70cf8b7..e3e3619 100644
  use crate::agent::role::apply_role_to_config;
  use crate::agent::types::AgentMetadata;
  use crate::agent::types::LiveAgent;
-@@ -465,7 +467,15 @@ impl LocalAgentControl {
+@@ -465,7 +467,15 @@
                          "Model provider `{stored_model_provider}` not found"
                      ))
                  })?;
@@ -249,20 +172,82 @@ index 70cf8b7..e3e3619 100644
          }
          let parent_thread_id = owner_thread_id
              .or_else(|| initial_history.get_resumed_parent_thread_id())
-diff --git a/codex-rs/protocol/src/lib.rs b/codex-rs/protocol/src/lib.rs
-index 17e22cc..efb6cd8 100644
+--- a/codex-rs/core/src/agent/mod.rs
++++ b/codex-rs/core/src/agent/mod.rs
+@@ -2,6 +2,7 @@
+ pub(crate) mod api;
+ pub(crate) mod child_config;
+ pub(crate) mod control;
++pub(crate) mod native_deepseek;
+ mod registry;
+ pub(crate) mod role;
+ pub(crate) mod status;
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -88,6 +88,7 @@
+ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+ use codex_protocol::config_types::Verbosity as VerbosityConfig;
+ use codex_protocol::models::ResponseItem;
++use codex_protocol::sol_luna_wire_aliases;
+ use codex_protocol::openai_models::ModelInfo;
+ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+ use codex_protocol::protocol::AuthRecoveryEvent;
+@@ -979,7 +980,14 @@
+         let mut prefix = Vec::new();
+         let tools = if model_info.use_responses_lite {
+             if !prompt.tools.is_empty() {
+-                let tools = create_tools_json_for_responses_lite(&prompt.tools)?;
++                let mut tools = create_tools_json_for_responses_lite(&prompt.tools)?;
++                if sol_luna_wire_aliases::enabled() {
++                    let encoded = sol_luna_wire_aliases::encode_tools_json(
++                        serde_json::Value::Array(tools),
++                    )
++                    .map_err(CodexErr::Fatal)?;
++                    tools = encoded.as_array().cloned().unwrap_or_default();
++                }
+                 prefix.push(ResponseItem::AdditionalTools {
+                     id: Some(ResponseItemId::with_suffix(
+                         "at",
+@@ -991,7 +999,17 @@
+             }
+             None
+         } else {
+-            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
++            let raw_tools = create_tools_raw_json_for_responses_api(&prompt.tools)?;
++            if sol_luna_wire_aliases::enabled() {
++                let tools = serde_json::from_str(raw_tools.get())?;
++                let encoded = sol_luna_wire_aliases::encode_tools_json(tools)
++                    .map_err(CodexErr::Fatal)?;
++                let raw_tools: Arc<serde_json::value::RawValue> =
++                    Arc::from(serde_json::value::to_raw_value(&encoded)?);
++                Some(raw_tools.into())
++            } else {
++                Some(raw_tools.into())
++            }
+         };
+         if !prompt.base_instructions.text.is_empty() {
+             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
+@@ -1066,6 +1084,11 @@
+         if !include_internal {
+             for item in &mut input {
+                 item.clear_tool_result_metadata();
++            }
++        }
++        if sol_luna_wire_aliases::enabled() {
++            for item in &mut input {
++                sol_luna_wire_aliases::encode_response_item(item).map_err(CodexErr::Fatal)?;
+             }
+         }
+         let client_metadata = responses_metadata.client_metadata(include_internal);
 --- a/codex-rs/protocol/src/lib.rs
 +++ b/codex-rs/protocol/src/lib.rs
-@@ -54,5 +54,6 @@ pub mod review_format;
+@@ -54,5 +54,6 @@
  pub mod sandbox;
  pub mod security_risk;
  pub mod shell_environment;
 +pub mod sol_luna_wire_aliases;
  pub mod turn_input;
  pub mod user_input;
-diff --git a/codex-rs/core/src/agent/native_deepseek.rs b/codex-rs/core/src/agent/native_deepseek.rs
-new file mode 100644
-index 0000000..6ad5521
 --- /dev/null
 +++ b/codex-rs/core/src/agent/native_deepseek.rs
 @@ -0,0 +1,244 @@
@@ -510,9 +495,6 @@ index 0000000..6ad5521
 +        assert_ne!(config.model_provider_id, PROVIDER);
 +    }
 +}
-diff --git a/codex-rs/protocol/src/sol_luna_wire_aliases.rs b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
-new file mode 100644
-index 0000000..c965a3b
 --- /dev/null
 +++ b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
 @@ -0,0 +1,375 @@

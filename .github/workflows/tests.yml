@@ -55,6 +55,7 @@ jobs:
             'native-state',
             'native-agent',
             'native-isolated-config',
+            'native-runtime',
             'native-install',
             'native-manager',
             'native-autostart',
