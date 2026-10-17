@@ -1,0 +1,893 @@
+diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
+index 34d5511..c4ade90 100644
+--- a/codex-rs/codex-api/src/sse/responses.rs
++++ b/codex-rs/codex-api/src/sse/responses.rs
+@@ -16,6 +16,7 @@ use codex_protocol::models::ResponseItem;
+ use codex_protocol::protocol::ModelVerification;
+ use codex_protocol::protocol::TokenUsage;
+ use codex_protocol::protocol::TurnModerationMetadataEvent;
++use codex_protocol::sol_luna_wire_aliases;
+ use eventsource_stream::Eventsource;
+ use futures::StreamExt;
+ use serde::Deserialize;
+@@ -334,6 +335,16 @@ pub enum ResponsesEventError {
+     Api(ApiError),
+ }
+ 
++fn decode_native_wire_aliases(
++    mut item: ResponseItem,
++) -> std::result::Result<ResponseItem, ResponsesEventError> {
++    if sol_luna_wire_aliases::enabled() {
++        sol_luna_wire_aliases::decode_response_item(&mut item)
++            .map_err(|error| ResponsesEventError::Api(ApiError::Stream(error)))?;
++    }
++    Ok(item)
++}
++
+ impl ResponsesEventError {
+     pub fn into_api_error(self) -> ApiError {
+         match self {
+@@ -354,6 +365,7 @@ pub fn process_responses_event(
+         "response.output_item.done" => {
+             if let Some(item_val) = event.item {
+                 if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
++                    let item = decode_native_wire_aliases(item)?;
+                     return Ok(Some(ResponseEvent::OutputItemDone(item)));
+                 }
+                 debug!("failed to parse ResponseItem from output_item.done");
+@@ -482,6 +494,7 @@ pub fn process_responses_event(
+         "response.output_item.added" => {
+             if let Some(item_val) = event.item {
+                 if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
++                    let item = decode_native_wire_aliases(item)?;
+                     return Ok(Some(ResponseEvent::OutputItemAdded(item)));
+                 }
+                 debug!("failed to parse ResponseItem from output_item.added");
+diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
+index 9ef4c05..d8b48c6 100644
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -88,6 +88,7 @@ use codex_protocol::ThreadId;
+ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+ use codex_protocol::config_types::Verbosity as VerbosityConfig;
+ use codex_protocol::models::ResponseItem;
++use codex_protocol::sol_luna_wire_aliases;
+ use codex_protocol::openai_models::ModelInfo;
+ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+ use codex_protocol::protocol::AuthRecoveryEvent;
+@@ -979,7 +980,14 @@ impl ModelClient {
+         let mut prefix = Vec::new();
+         let tools = if model_info.use_responses_lite {
+             if !prompt.tools.is_empty() {
+-                let tools = create_tools_json_for_responses_lite(&prompt.tools)?;
++                let mut tools = create_tools_json_for_responses_lite(&prompt.tools)?;
++                if sol_luna_wire_aliases::enabled() {
++                    let encoded = sol_luna_wire_aliases::encode_tools_json(
++                        serde_json::Value::Array(tools),
++                    )
++                    .map_err(CodexErr::Fatal)?;
++                    tools = encoded.as_array().cloned().unwrap_or_default();
++                }
+                 prefix.push(ResponseItem::AdditionalTools {
+                     id: Some(ResponseItemId::with_suffix(
+                         "at",
+@@ -991,7 +999,17 @@ impl ModelClient {
+             }
+             None
+         } else {
+-            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
++            let raw_tools = create_tools_raw_json_for_responses_api(&prompt.tools)?;
++            if sol_luna_wire_aliases::enabled() {
++                let tools = serde_json::from_str(raw_tools.get())?;
++                let encoded = sol_luna_wire_aliases::encode_tools_json(tools)
++                    .map_err(CodexErr::Fatal)?;
++                let raw_tools: Arc<serde_json::value::RawValue> =
++                    Arc::from(serde_json::value::to_raw_value(&encoded)?);
++                Some(raw_tools.into())
++            } else {
++                Some(raw_tools.into())
++            }
+         };
+         if !prompt.base_instructions.text.is_empty() {
+             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
+@@ -1068,6 +1086,11 @@ impl ModelClient {
+                 item.clear_tool_result_metadata();
+             }
+         }
++        if sol_luna_wire_aliases::enabled() {
++            for item in &mut input {
++                sol_luna_wire_aliases::encode_response_item(item).map_err(CodexErr::Fatal)?;
++            }
++        }
+         let client_metadata = responses_metadata.client_metadata(include_internal);
+         let request = ResponsesApiRequest {
+             model: model_info.slug.clone(),
+diff --git a/codex-rs/core/src/agent/child_config.rs b/codex-rs/core/src/agent/child_config.rs
+index 3d56d7e..2f9fc42 100644
+--- a/codex-rs/core/src/agent/child_config.rs
++++ b/codex-rs/core/src/agent/child_config.rs
+@@ -5,6 +5,9 @@
+ 
+ use crate::agent::role::DEFAULT_ROLE_NAME;
+ use crate::agent::role::apply_role_to_config;
++use crate::agent::native_deepseek::apply_native_deepseek_child_config;
++use crate::agent::native_deepseek::NATIVE_DEEPSEEK_MODEL;
++use crate::agent::native_deepseek::NATIVE_DEEPSEEK_ROLE_NAME;
+ use crate::config::Config;
+ use crate::session::session::Session;
+ use crate::session::step_context::StepContext;
+@@ -60,14 +63,17 @@ pub(crate) async fn prepare_agent_spawn_config(
+     if options.version == SpawnConfigVersion::V1 && options.full_history_fork {
+         reject_full_fork_agent_type_override(options.role_name)?;
+     }
+-    apply_requested_spawn_agent_model_overrides(
+-        session,
+-        step_context,
+-        &mut config,
+-        options.model,
+-        options.reasoning_effort,
+-    )
+-    .await?;
++    let native_deepseek_role = options.role_name == Some(NATIVE_DEEPSEEK_ROLE_NAME);
++    if !native_deepseek_role {
++        apply_requested_spawn_agent_model_overrides(
++            session,
++            step_context,
++            &mut config,
++            options.model,
++            options.reasoning_effort,
++        )
++        .await?;
++    }
+     if !options.full_history_fork
+         || (options.version == SpawnConfigVersion::V2 && options.role_name.is_some())
+     {
+@@ -81,6 +87,18 @@ pub(crate) async fn prepare_agent_spawn_config(
+                 .clone_from(&turn.developer_instructions);
+         }
+     }
++    apply_native_deepseek_child_config(
++        &mut config,
++        options.role_name,
++        options.full_history_fork,
++    )?;
++    if native_deepseek_role {
++        apply_native_deepseek_model_overrides(
++            &mut config,
++            options.model,
++            options.reasoning_effort,
++        )?;
++    }
+     apply_spawn_agent_service_tier(session, &mut config).await?;
+     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
+ 
+@@ -100,6 +118,45 @@ pub(crate) async fn prepare_agent_spawn_config(
+     Ok(PreparedSpawnConfig { config, role_name })
+ }
+ 
++/// Native DeepSeek roles use their child-only catalog instead of the parent's model manager.
++/// The configured role owns model selection; callers must omit the generic model override.
++fn apply_native_deepseek_model_overrides(
++    config: &mut Config,
++    requested_model: Option<&str>,
++    requested_reasoning_effort: Option<ReasoningEffort>,
++) -> Result<(), String> {
++    if requested_model.is_some() {
++        return Err(format!(
++            "native_deepseek role selects model `{NATIVE_DEEPSEEK_MODEL}` from its role configuration; omit the model override"
++        ));
++    }
++
++    if let Some(reasoning_effort) = requested_reasoning_effort {
++        let model_info = config
++            .model_catalog
++            .as_ref()
++            .and_then(|catalog| {
++                catalog
++                    .models
++                    .iter()
++                    .find(|model| model.slug == NATIVE_DEEPSEEK_MODEL)
++            })
++            .ok_or_else(|| {
++                format!(
++                    "native_deepseek child model catalog must include `{NATIVE_DEEPSEEK_MODEL}`"
++                )
++            })?;
++        validate_spawn_agent_reasoning_effort(
++            NATIVE_DEEPSEEK_MODEL,
++            &model_info.supported_reasoning_levels,
++            &reasoning_effort,
++        )?;
++        config.model_reasoning_effort = Some(reasoning_effort);
++    }
++
++    Ok(())
++}
++
+ /// Builds the base config snapshot for a newly spawned sub-agent.
+ ///
+ /// The returned config starts from the parent's effective config and then refreshes the
+diff --git a/codex-rs/core/src/agent/mod.rs b/codex-rs/core/src/agent/mod.rs
+index c9a1547..a602cdb 100644
+--- a/codex-rs/core/src/agent/mod.rs
++++ b/codex-rs/core/src/agent/mod.rs
+@@ -2,6 +2,7 @@ pub(crate) mod agent_resolver;
+ pub(crate) mod api;
+ pub(crate) mod child_config;
+ pub(crate) mod control;
++pub(crate) mod native_deepseek;
+ mod registry;
+ pub(crate) mod role;
+ pub(crate) mod status;
+diff --git a/codex-rs/core/src/agent/control/spawn.rs b/codex-rs/core/src/agent/control/spawn.rs
+index 70cf8b7..e3e3619 100644
+--- a/codex-rs/core/src/agent/control/spawn.rs
++++ b/codex-rs/core/src/agent/control/spawn.rs
+@@ -4,6 +4,8 @@ use super::spawn_telemetry::SpawnMeasurements;
+ use super::spawn_telemetry::record_spawn_success;
+ use super::*;
+ use crate::agent::child_config::build_agent_resume_config;
++use crate::agent::native_deepseek::apply_native_deepseek_child_config;
++use crate::agent::native_deepseek::NATIVE_DEEPSEEK_PROVIDER_ID;
+ use crate::agent::role::apply_role_to_config;
+ use crate::agent::types::AgentMetadata;
+ use crate::agent::types::LiveAgent;
+@@ -465,7 +467,15 @@ impl LocalAgentControl {
+                         "Model provider `{stored_model_provider}` not found"
+                     ))
+                 })?;
+-            config.model_provider_id = stored_model_provider;
++            config.model_provider_id = stored_model_provider.clone();
++        }
++        if stored_model_provider == NATIVE_DEEPSEEK_PROVIDER_ID {
++            apply_native_deepseek_child_config(
++                &mut config,
++                session_source.get_agent_role().as_deref(),
++                /*full_history_fork*/ false,
++            )
++            .map_err(CodexErr::InvalidRequest)?;
+         }
+         let parent_thread_id = owner_thread_id
+             .or_else(|| initial_history.get_resumed_parent_thread_id())
+diff --git a/codex-rs/protocol/src/lib.rs b/codex-rs/protocol/src/lib.rs
+index 17e22cc..efb6cd8 100644
+--- a/codex-rs/protocol/src/lib.rs
++++ b/codex-rs/protocol/src/lib.rs
+@@ -54,5 +54,6 @@ pub mod review_format;
+ pub mod sandbox;
+ pub mod security_risk;
+ pub mod shell_environment;
++pub mod sol_luna_wire_aliases;
+ pub mod turn_input;
+ pub mod user_input;
+diff --git a/codex-rs/core/src/agent/native_deepseek.rs b/codex-rs/core/src/agent/native_deepseek.rs
+new file mode 100644
+index 0000000..6ad5521
+--- /dev/null
++++ b/codex-rs/core/src/agent/native_deepseek.rs
+@@ -0,0 +1,244 @@
++use crate::config::Config;
++use codex_protocol::openai_models::ModelsResponse;
++use std::fs;
++
++pub(crate) const NATIVE_DEEPSEEK_ROLE_NAME: &str = "native_deepseek";
++pub(crate) const NATIVE_DEEPSEEK_PROVIDER_ID: &str = "deepseek-native";
++pub(crate) const NATIVE_DEEPSEEK_MODEL: &str = "deepseek/deepseek-flash";
++pub(crate) const NATIVE_DEEPSEEK_CATALOG_FILE: &str = "sol-luna-native-models.json";
++
++pub(crate) fn apply_native_deepseek_child_config(
++    config: &mut Config,
++    role_name: Option<&str>,
++    full_history_fork: bool,
++) -> Result<(), String> {
++    if role_name != Some(NATIVE_DEEPSEEK_ROLE_NAME) {
++        return Ok(());
++    }
++    if full_history_fork {
++        return Err("native_deepseek child does not support full-history forks".to_string());
++    }
++
++    let model = config.model.as_deref();
++    if model != Some(NATIVE_DEEPSEEK_MODEL) {
++        return Err(format!(
++            "native_deepseek role requires model `{NATIVE_DEEPSEEK_MODEL}`, got `{}`",
++            model.unwrap_or("<unset>")
++        ));
++    }
++
++    if let Some(required_provider) = config.config_layer_stack.required_model_provider()
++        && required_provider != NATIVE_DEEPSEEK_PROVIDER_ID
++    {
++        return Err(format!(
++            "native_deepseek child requires provider `{NATIVE_DEEPSEEK_PROVIDER_ID}`, but managed configuration requires `{required_provider}`"
++        ));
++    }
++
++    let provider = config
++        .model_providers
++        .get(NATIVE_DEEPSEEK_PROVIDER_ID)
++        .cloned()
++        .ok_or_else(|| {
++            format!(
++                "native_deepseek provider `{NATIVE_DEEPSEEK_PROVIDER_ID}` is not configured"
++            )
++        })?;
++    let catalog_path = config
++        .codex_home
++        .as_path()
++        .join(NATIVE_DEEPSEEK_CATALOG_FILE);
++    let bytes = fs::read(&catalog_path).map_err(|err| {
++        format!(
++            "failed to read native_deepseek child model catalog `{}`: {err}",
++            catalog_path.display()
++        )
++    })?;
++    let catalog: ModelsResponse = serde_json::from_slice(&bytes).map_err(|err| {
++        format!(
++            "failed to parse native_deepseek child model catalog `{}`: {err}",
++            catalog_path.display()
++        )
++    })?;
++    if !catalog.models.iter().any(|entry| entry.slug == NATIVE_DEEPSEEK_MODEL) {
++        return Err(format!(
++            "native_deepseek child model catalog must include `{NATIVE_DEEPSEEK_MODEL}`"
++        ));
++    }
++    if let Some(reasoning_effort) = config.model_reasoning_effort.as_ref() {
++        let model = catalog
++            .models
++            .iter()
++            .find(|entry| entry.slug == NATIVE_DEEPSEEK_MODEL)
++            .expect("catalog model was checked above");
++        if !model
++            .supported_reasoning_levels
++            .iter()
++            .any(|preset| &preset.effort == reasoning_effort)
++        {
++            let supported = model
++                .supported_reasoning_levels
++                .iter()
++                .map(|preset| preset.effort.to_string())
++                .collect::<Vec<_>>()
++                .join(", ");
++            return Err(format!(
++                "Reasoning effort `{reasoning_effort}` is not supported for model `{NATIVE_DEEPSEEK_MODEL}` in the native child catalog. Supported reasoning efforts: {supported}"
++            ));
++        }
++    }
++
++    config.model_provider_id = NATIVE_DEEPSEEK_PROVIDER_ID.to_string();
++    config.model_provider = provider;
++    config.model_catalog = Some(catalog);
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::apply_native_deepseek_child_config;
++    use crate::config::{Config, ConfigBuilder};
++    use codex_models_manager::model_info::model_info_from_slug;
++    use codex_protocol::openai_models::ModelsResponse;
++    use pretty_assertions::assert_eq;
++    use std::fs;
++    use tempfile::TempDir;
++
++    const ROLE: &str = "native_deepseek";
++    const PROVIDER: &str = "deepseek-native";
++    const MODEL: &str = "deepseek/deepseek-flash";
++    const CATALOG_FILE: &str = "sol-luna-native-models.json";
++
++    async fn test_config() -> (TempDir, Config) {
++        let home = TempDir::new().expect("create codex home");
++        let config = ConfigBuilder::default()
++            .codex_home(home.path().to_path_buf())
++            .fallback_cwd(Some(home.path().to_path_buf()))
++            .build()
++            .await
++            .expect("build test config");
++        (home, config)
++    }
++
++    fn add_native_provider(config: &mut Config) {
++        let mut provider = config.model_provider.clone();
++        provider.name = "DeepSeek native test provider".to_string();
++        provider.base_url = Some("https://example.invalid/v1".to_string());
++        provider.requires_openai_auth = false;
++        config
++            .model_providers
++            .insert(PROVIDER.to_string(), provider);
++    }
++
++    fn write_catalog(home: &TempDir, slug: &str) {
++        let catalog = ModelsResponse {
++            models: vec![model_info_from_slug(slug)],
++        };
++        let bytes = serde_json::to_vec(&catalog).expect("serialize model catalog");
++        fs::write(home.path().join(CATALOG_FILE), bytes).expect("write child catalog");
++    }
++
++    #[tokio::test]
++    async fn non_deepseek_role_is_unchanged_without_catalog_or_provider() {
++        let (_home, mut config) = test_config().await;
++        config.model = Some(MODEL.to_string());
++        let before = config.clone();
++
++        apply_native_deepseek_child_config(&mut config, Some("default"), false)
++            .expect("other roles do not activate native provider selection");
++
++        assert_eq!(config, before);
++    }
++
++    #[tokio::test]
++    async fn native_deepseek_child_uses_configured_provider_and_owned_catalog_only() {
++        let (home, mut parent) = test_config().await;
++        parent.model = Some(MODEL.to_string());
++        add_native_provider(&mut parent);
++        write_catalog(&home, MODEL);
++        let mut child = parent.clone();
++        let parent_before = parent.clone();
++        let permissions_before = child.permissions.clone();
++        let cwd_before = child.cwd.clone();
++
++        apply_native_deepseek_child_config(&mut child, Some(ROLE), false)
++            .expect("native child provider and catalog should load");
++
++        assert_eq!(child.model_provider_id, PROVIDER);
++        assert_eq!(child.model_provider, child.model_providers[PROVIDER]);
++        assert_eq!(child.model_catalog.as_ref().unwrap().models[0].slug, MODEL);
++        assert_eq!(child.permissions, permissions_before);
++        assert_eq!(child.cwd, cwd_before);
++        assert_eq!(parent, parent_before);
++    }
++
++    #[tokio::test]
++    async fn native_deepseek_cold_reload_keeps_the_restored_provider_and_rebuilds_catalog() {
++        let (home, mut config) = test_config().await;
++        config.model = Some(MODEL.to_string());
++        add_native_provider(&mut config);
++        config.model_provider_id = PROVIDER.to_string();
++        config.model_provider = config.model_providers[PROVIDER].clone();
++        write_catalog(&home, MODEL);
++
++        apply_native_deepseek_child_config(&mut config, Some(ROLE), false)
++            .expect("restored native provider should rebuild the child catalog");
++
++        assert_eq!(config.model_provider_id, PROVIDER);
++        assert_eq!(config.model_provider, config.model_providers[PROVIDER]);
++        assert_eq!(config.model_catalog.as_ref().unwrap().models[0].slug, MODEL);
++    }
++
++    #[tokio::test]
++    async fn native_deepseek_child_rejects_invalid_model_fork_and_missing_inputs() {
++        let (home, mut config) = test_config().await;
++        config.model = Some(MODEL.to_string());
++        assert!(apply_native_deepseek_child_config(&mut config, Some(ROLE), false)
++            .expect_err("missing provider must fail")
++            .contains(PROVIDER));
++
++        add_native_provider(&mut config);
++        assert!(apply_native_deepseek_child_config(&mut config, Some(ROLE), false)
++            .expect_err("missing catalog must fail")
++            .contains(CATALOG_FILE));
++
++        config.model = Some("wrong-model".to_string());
++        write_catalog(&home, MODEL);
++        assert!(apply_native_deepseek_child_config(&mut config, Some(ROLE), false)
++            .expect_err("role with wrong model must fail")
++            .contains(MODEL));
++
++        config.model = Some(MODEL.to_string());
++        assert!(apply_native_deepseek_child_config(&mut config, Some(ROLE), true)
++            .expect_err("full-history fork must fail")
++            .contains("fork"));
++
++        write_catalog(&home, "other-model");
++        assert!(apply_native_deepseek_child_config(&mut config, Some(ROLE), false)
++            .expect_err("catalog without DS model must fail")
++            .contains(MODEL));
++    }
++
++    #[tokio::test]
++    async fn native_deepseek_child_does_not_override_a_conflicting_managed_provider() {
++        let (home, mut config) = test_config().await;
++        config.model = Some(MODEL.to_string());
++        add_native_provider(&mut config);
++        write_catalog(&home, MODEL);
++        config.config_layer_stack = codex_config::ConfigLayerStack::new(
++            Vec::new(),
++            codex_config::ConfigRequirements::default(),
++            codex_config::ConfigRequirementsToml {
++                model_provider: Some("openai".to_string()),
++                ..Default::default()
++            },
++        )
++        .expect("build managed config layer stack");
++
++        let error = apply_native_deepseek_child_config(&mut config, Some(ROLE), false)
++            .expect_err("native child must respect a conflicting managed provider");
++
++        assert!(error.contains("managed configuration requires `openai`"));
++        assert_ne!(config.model_provider_id, PROVIDER);
++    }
++}
+diff --git a/codex-rs/protocol/src/sol_luna_wire_aliases.rs b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
+new file mode 100644
+index 0000000..c965a3b
+--- /dev/null
++++ b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
+@@ -0,0 +1,375 @@
++use crate::models::ResponseItem;
++use serde_json::{Map, Value};
++
++const ENABLE_ENV: &str = "SOL_LUNA_NATIVE_PLAINTEXT_V2";
++const SOURCE_NAMESPACE: &str = "collaboration";
++const WIRE_NAMESPACE: &str = "collaboration-optimize";
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++enum Direction {
++    Encode,
++    Decode,
++}
++
++fn mapped_namespace(namespace: &str, direction: Direction) -> Option<&'static str> {
++    match (namespace, direction) {
++        (SOURCE_NAMESPACE, Direction::Encode) => Some(WIRE_NAMESPACE),
++        (WIRE_NAMESPACE, Direction::Decode) => Some(SOURCE_NAMESPACE),
++        _ => None,
++    }
++}
++
++fn mapped_name(name: &str, direction: Direction) -> Option<&'static str> {
++    match (name, direction) {
++        ("spawn_agent", Direction::Encode) => Some("start_delegated_task"),
++        ("send_message", Direction::Encode) => Some("deliver_delegated_message"),
++        ("followup_task", Direction::Encode) => Some("continue_delegated_task"),
++        ("start_delegated_task", Direction::Decode) => Some("spawn_agent"),
++        ("deliver_delegated_message", Direction::Decode) => Some("send_message"),
++        ("continue_delegated_task", Direction::Decode) => Some("followup_task"),
++        _ => None,
++    }
++}
++
++fn mapped_flat_name(name: &str, direction: Direction) -> Option<String> {
++    let (namespace, function) = name.split_once('.')?;
++    let mapped_namespace = mapped_namespace(namespace, direction)?;
++    let mapped_function = mapped_name(function, direction).map_or(function, |mapped| mapped);
++    Some(format!("{mapped_namespace}.{mapped_function}"))
++}
++
++fn object_string<'a>(object: &'a Map<String, Value>, field: &str) -> Option<&'a str> {
++    object.get(field).and_then(Value::as_str)
++}
++
++fn remove_message_encrypted_marker(tool: &mut Value) {
++    let Some(message) = tool
++        .get_mut("parameters")
++        .and_then(Value::as_object_mut)
++        .and_then(|parameters| parameters.get_mut("properties"))
++        .and_then(Value::as_object_mut)
++        .and_then(|properties| properties.get_mut("message"))
++        .and_then(Value::as_object_mut)
++    else {
++        return;
++    };
++    message.remove("encrypted");
++}
++
++fn transform_function(tool: &mut Value, inherited_namespace: Option<&str>, direction: Direction) {
++    let mut remove_encrypted_marker = false;
++    {
++        let Some(object) = tool.as_object_mut() else { return };
++        if object_string(object, "type") != Some("function") { return }
++
++        let explicit_namespace = object_string(object, "namespace").map(str::to_string);
++        let effective_namespace = explicit_namespace.as_deref().or(inherited_namespace);
++        if let Some(namespace) = explicit_namespace.as_deref()
++            && let Some(mapped) = mapped_namespace(namespace, direction)
++        {
++            object.insert("namespace".to_string(), Value::String(mapped.to_string()));
++        }
++
++        let Some(name) = object_string(object, "name").map(str::to_string) else { return };
++        if let Some(namespace) = effective_namespace
++            && (namespace == SOURCE_NAMESPACE || namespace == WIRE_NAMESPACE)
++        {
++            if let Some(mapped) = mapped_name(&name, direction) {
++                object.insert("name".to_string(), Value::String(mapped.to_string()));
++                remove_encrypted_marker = direction == Direction::Encode;
++            }
++        } else if effective_namespace.is_none()
++            && let Some(mapped) = mapped_flat_name(&name, direction)
++        {
++            object.insert("name".to_string(), Value::String(mapped));
++            remove_encrypted_marker = direction == Direction::Encode
++                && name.split_once('.').is_some_and(|(_, function)| {
++                    mapped_name(function, direction).is_some()
++                });
++        }
++    }
++    if remove_encrypted_marker { remove_message_encrypted_marker(tool); }
++}
++
++fn projected_function_identity(
++    object: &Map<String, Value>,
++    inherited_namespace: Option<&str>,
++    direction: Direction,
++) -> Option<(String, String)> {
++    let name = object_string(object, "name")?;
++    let namespace = object_string(object, "namespace").or(inherited_namespace);
++    if let Some(namespace) = namespace {
++        let projected_namespace = mapped_namespace(namespace, direction).map_or(namespace, |mapped| mapped);
++        let projected_name = if namespace == SOURCE_NAMESPACE || namespace == WIRE_NAMESPACE {
++            mapped_name(name, direction).map_or(name, |mapped| mapped)
++        } else {
++            name
++        };
++        let original = format!("{namespace}.{name}");
++        return Some((format!("{projected_namespace}.{projected_name}"), original));
++    }
++    if let Some(projected) = mapped_flat_name(name, direction) {
++        return Some((projected, name.to_string()));
++    }
++    Some((name.to_string(), name.to_string()))
++}
++
++fn has_function_collision(tools: &[Value], direction: Direction) -> bool {
++    let mut identities = std::collections::HashMap::<String, String>::new();
++    for tool in tools {
++        let Some(object) = tool.as_object() else { continue };
++        match object_string(object, "type") {
++            Some("function") => {
++                if let Some((projected, original)) = projected_function_identity(object, None, direction) {
++                    if identities.insert(projected, original.clone())
++                        .is_some_and(|previous| previous != original)
++                    { return true; }
++                }
++            }
++            Some("namespace")
++                if object_string(object, "name").is_some_and(|name| {
++                    name == SOURCE_NAMESPACE || name == WIRE_NAMESPACE
++                }) =>
++            {
++                let namespace = object_string(object, "name");
++                if let Some(children) = object.get("tools").and_then(Value::as_array) {
++                    for child in children {
++                        let Some(child_object) = child.as_object() else { continue };
++                        if object_string(child_object, "type") != Some("function") { continue }
++                        if let Some((projected, original)) =
++                            projected_function_identity(child_object, namespace, direction)
++                        {
++                            if identities.insert(projected, original.clone())
++                                .is_some_and(|previous| previous != original)
++                            { return true; }
++                        }
++                    }
++                }
++            }
++            _ => {}
++        }
++    }
++    false
++}
++
++fn transform_tools(value: Value, direction: Direction) -> Result<Value, String> {
++    let mut tools = match value {
++        Value::Array(tools) => tools,
++        value => return Ok(value),
++    };
++    let (source_namespace, target_namespace) = match direction {
++        Direction::Encode => (SOURCE_NAMESPACE, WIRE_NAMESPACE),
++        Direction::Decode => (WIRE_NAMESPACE, SOURCE_NAMESPACE),
++    };
++    let has_source_namespace = tools.iter().any(|tool| {
++        tool.as_object().is_some_and(|object| {
++            object_string(object, "type") == Some("namespace")
++                && object_string(object, "name") == Some(source_namespace)
++        })
++    });
++    let has_target_namespace = tools.iter().any(|tool| {
++        tool.as_object().is_some_and(|object| {
++            object_string(object, "type") == Some("namespace")
++                && object_string(object, "name") == Some(target_namespace)
++        })
++    });
++    if has_source_namespace && has_target_namespace {
++        return Err(format!("both {source_namespace} and {target_namespace} tool namespaces are present"));
++    }
++    if has_function_collision(&tools, direction) {
++        return Err("both canonical and aliased collaboration tool names are present".to_string());
++    }
++
++    for tool in &mut tools {
++        let kind = tool.get("type").and_then(Value::as_str).map(str::to_string);
++        match kind.as_deref() {
++            Some("namespace") => {
++                let Some(object) = tool.as_object_mut() else { continue };
++                let Some(namespace) = object_string(object, "name").map(str::to_string) else { continue };
++                if namespace != source_namespace && namespace != target_namespace { continue }
++                if let Some(mapped) = mapped_namespace(&namespace, direction) {
++                    object.insert("name".to_string(), Value::String(mapped.to_string()));
++                }
++                if let Some(functions) = object.get_mut("tools").and_then(Value::as_array_mut) {
++                    let inherited_namespace = namespace.as_str();
++                    for function in functions {
++                        transform_function(function, Some(inherited_namespace), direction);
++                    }
++                }
++            }
++            Some("function") => transform_function(tool, None, direction),
++            _ => {}
++        }
++    }
++    Ok(Value::Array(tools))
++}
++
++/// Whether the native plaintext collaboration wire alias is explicitly enabled.
++pub fn enabled() -> bool {
++    std::env::var(ENABLE_ENV).is_ok_and(|value| value == "1")
++}
++
++/// Translate canonical collaboration tool identities to the DeepSeek wire namespace.
++pub fn encode_tools_json(tools: Value) -> Result<Value, String> {
++    transform_tools(tools, Direction::Encode)
++}
++
++fn transform_response_item(item: &mut ResponseItem, direction: Direction) -> Result<(), String> {
++    match item {
++        ResponseItem::AdditionalTools { tools, .. } => {
++            let transformed = transform_tools(Value::Array(tools.clone()), direction)?;
++            *tools = transformed.as_array().cloned().unwrap_or_default();
++        }
++        ResponseItem::FunctionCall { name, namespace, .. } => {
++            let effective_namespace = namespace.as_deref().map(str::to_string);
++            if let Some(value) = effective_namespace.as_deref()
++                && let Some(mapped) = mapped_namespace(value, direction)
++            {
++                *namespace = Some(mapped.to_string());
++            }
++            if let Some(value) = effective_namespace.as_deref()
++                && (value == SOURCE_NAMESPACE || value == WIRE_NAMESPACE)
++            {
++                if let Some(mapped) = mapped_name(name, direction) {
++                    *name = mapped.to_string();
++                }
++            } else if effective_namespace.is_none()
++                && let Some(mapped) = mapped_flat_name(name, direction)
++            {
++                *name = mapped;
++            }
++        }
++        _ => {}
++    }
++    Ok(())
++}
++
++/// Translate canonical response items to wire aliases without changing persisted history.
++pub fn encode_response_item(item: &mut ResponseItem) -> Result<(), String> {
++    transform_response_item(item, Direction::Encode)
++}
++
++/// Restore wire aliases before response items enter native event and history handling.
++pub fn decode_response_item(item: &mut ResponseItem) -> Result<(), String> {
++    transform_response_item(item, Direction::Decode)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++
++    fn collaboration_tools() -> Value {
++        json!([
++            {
++                "type": "namespace", "name": "collaboration", "description": "canonical",
++                "tools": [
++                    {"type": "function", "name": "spawn_agent", "description": "spawn", "parameters": {"type": "object", "properties": {"message": {"type": "string", "encrypted": true}, "other": {"type": "string", "encrypted": true}}}},
++                    {"type": "function", "name": "send_message", "parameters": {"type": "object", "properties": {"message": {"type": "string", "encrypted": true}}}},
++                    {"type": "function", "name": "followup_task", "parameters": {"type": "object", "properties": {"message": {"type": "string", "encrypted": true}}}}
++                ]
++            },
++            {"type": "function", "name": "unrelated", "description": "unchanged", "parameters": {"type": "object", "properties": {"message": {"type": "string", "encrypted": true}}}}
++        ])
++    }
++
++    #[test]
++    fn encodes_namespace_tools_and_only_removes_collaboration_message_encryption_markers() {
++        let encoded = encode_tools_json(collaboration_tools()).expect("encode collaboration namespace");
++        assert_eq!(encoded[0]["name"], WIRE_NAMESPACE);
++        assert_eq!(encoded[0]["tools"][0]["name"], "start_delegated_task");
++        assert_eq!(encoded[0]["tools"][1]["name"], "deliver_delegated_message");
++        assert_eq!(encoded[0]["tools"][2]["name"], "continue_delegated_task");
++        assert!(encoded[0]["tools"][0]["parameters"]["properties"]["message"]["encrypted"].is_null());
++        assert_eq!(encoded[0]["tools"][0]["parameters"]["properties"]["other"]["encrypted"], true);
++        assert_eq!(encoded[1]["name"], "unrelated");
++        assert_eq!(encoded[1]["parameters"]["properties"]["message"]["encrypted"], true);
++    }
++
++    #[test]
++    fn flattened_tool_names_encode_and_decode_idempotently() {
++        let flattened = json!([{"type":"function","name":"collaboration.spawn_agent","parameters":{"type":"object","properties":{"message":{"type":"string","encrypted":true}}}}]);
++        let encoded = encode_tools_json(flattened).expect("encode flattened function");
++        assert_eq!(encoded[0]["name"], "collaboration-optimize.start_delegated_task");
++        assert!(encoded[0]["parameters"]["properties"]["message"]["encrypted"].is_null());
++        let again = encode_tools_json(encoded.clone()).expect("idempotent encode");
++        assert_eq!(again, encoded);
++        assert_eq!(transform_tools(encoded, Direction::Decode).expect("decode flattened"), json!([{"type":"function","name":"collaboration.spawn_agent","parameters":{"type":"object","properties":{"message":{"type":"string"}}}}]));
++    }
++
++    #[test]
++    fn flattened_non_alias_collaboration_tools_keep_the_function_name() {
++        let flattened = json!([{"type":"function","name":"collaboration.list_agents","parameters":{"type":"object","properties":{"message":{"type":"string","encrypted":true}}}}]);
++        let encoded = encode_tools_json(flattened).expect("encode flattened collaboration tool");
++        assert_eq!(encoded[0]["name"], "collaboration-optimize.list_agents");
++        assert_eq!(encoded[0]["parameters"]["properties"]["message"]["encrypted"], true);
++        let decoded = transform_tools(encoded, Direction::Decode).expect("decode flattened collaboration tool");
++        assert_eq!(decoded[0]["name"], "collaboration.list_agents");
++    }
++
++    #[test]
++    fn explicit_unrelated_namespace_prevents_flat_name_reinterpretation() {
++        let tools = json!([{"type":"function","namespace":"external","name":"collaboration.spawn_agent"}]);
++        let encoded = encode_tools_json(tools.clone()).expect("encode unrelated namespaced tool");
++        assert_eq!(encoded, tools);
++    }
++
++    #[test]
++    fn flattened_canonical_and_wire_alias_names_collide() {
++        let tools = json!([
++            {"type":"function","name":"collaboration.spawn_agent"},
++            {"type":"function","name":"collaboration-optimize.start_delegated_task"}
++        ]);
++        assert!(encode_tools_json(tools).is_err());
++    }
++
++    #[test]
++    fn namespace_alias_collision_is_an_error() {
++        let tools = json!([
++            {"type":"namespace","name":"collaboration","tools":[]},
++            {"type":"namespace","name":"collaboration-optimize","tools":[]}
++        ]);
++        assert!(encode_tools_json(tools).is_err());
++    }
++
++    #[test]
++    fn typed_function_call_round_trips_without_changing_call_data() {
++        let mut item: ResponseItem = serde_json::from_value(json!({
++            "type": "function_call", "id": "fc-item", "call_id": "call-123",
++            "name": "spawn_agent", "namespace": "collaboration",
++            "arguments": "{\"message\":\"fixture\"}", "status": "completed",
++            "encrypted_function_args": ["opaque"]
++        })).expect("deserialize typed function call");
++        encode_response_item(&mut item).expect("encode typed item");
++        let wire = serde_json::to_value(&item).expect("serialize wire item");
++        assert_eq!(wire["namespace"], WIRE_NAMESPACE);
++        assert_eq!(wire["name"], "start_delegated_task");
++        assert_eq!(wire["arguments"], "{\"message\":\"fixture\"}");
++        assert_eq!(wire["call_id"], "call-123");
++        assert_eq!(wire["id"], "fc-item");
++        decode_response_item(&mut item).expect("decode typed item");
++        assert_eq!(serde_json::to_value(item).expect("serialize canonical item"), json!({
++            "type": "function_call", "id": "fc-item", "call_id": "call-123",
++            "name": "spawn_agent", "namespace": "collaboration",
++            "arguments": "{\"message\":\"fixture\"}", "status": "completed",
++            "encrypted_function_args": ["opaque"]
++        }));
++    }
++
++    #[test]
++    fn additional_tools_items_use_the_same_encoder_and_decoder() {
++        let mut item: ResponseItem = serde_json::from_value(json!({
++            "type":"additional_tools", "role":"developer", "tools": collaboration_tools()
++        })).expect("deserialize additional tools");
++        encode_response_item(&mut item).expect("encode additional tools");
++        let wire = serde_json::to_value(&item).expect("serialize wire tools");
++        assert_eq!(wire["tools"][0]["name"], WIRE_NAMESPACE);
++        decode_response_item(&mut item).expect("decode additional tools");
++        let canonical = serde_json::to_value(item).expect("serialize canonical tools");
++        assert_eq!(canonical["tools"][0]["name"], SOURCE_NAMESPACE);
++        assert_eq!(canonical["tools"][0]["tools"][0]["name"], "spawn_agent");
++        assert!(canonical["tools"][0]["tools"][0]["parameters"]["properties"]["message"]["encrypted"].is_null());
++        assert_eq!(canonical["tools"][0]["tools"][0]["parameters"]["properties"]["other"]["encrypted"], true);
++        assert_eq!(canonical["tools"][1]["parameters"]["properties"]["message"]["encrypted"], true);
++    }
++}

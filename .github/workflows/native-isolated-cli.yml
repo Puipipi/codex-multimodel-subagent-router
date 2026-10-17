@@ -1,0 +1,140 @@
+name: Native isolated CLI build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-msvc:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      STABLE_GIT_COMMIT: 4ebc485ca321243727539187169425fcf972f2c4
+      CARGO_BUILD_JOBS: 2
+      LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_RELEASE_DEBUG: 0
+    steps:
+      - name: Check out pinned upstream Codex
+        uses: actions/checkout@v4
+        with:
+          repository: openai/codex
+          ref: 4ebc485ca321243727539187169425fcf972f2c4
+          persist-credentials: false
+
+      - name: Check out this repository for the reviewed patch
+        uses: actions/checkout@v4
+        with:
+          path: router
+
+      - name: Verify source and apply required custom patch
+        shell: pwsh
+        run: |
+          $expected = '4ebc485ca321243727539187169425fcf972f2c4'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) {
+            throw "Unexpected upstream revision: $actual (expected $expected)"
+          }
+
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'router/patches/native-isolated-cli.patch'
+          if (-not (Test-Path -LiteralPath $patch -PathType Leaf)) {
+            Write-Error 'Required patch is missing: router/patches/native-isolated-cli.patch. Add the reviewed patch before running this workflow.'
+            exit 1
+          }
+          git apply --check -- $patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git apply -- $patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-pc-windows-msvc
+
+      - name: Configure MSVC environment
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: x86_64-pc-windows-msvc
+
+      - name: Verify Cargo package and binary targets
+        shell: pwsh
+        working-directory: codex-rs
+        run: |
+          $metadataText = cargo metadata --locked --no-deps --format-version 1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $metadata = $metadataText | ConvertFrom-Json
+          foreach ($packageName in @('codex-protocol', 'codex-core', 'codex-cli')) {
+            if (-not ($metadata.packages | Where-Object { $_.name -eq $packageName })) {
+              throw "Pinned source does not contain required package '$packageName'."
+            }
+          }
+          $cliPackage = $metadata.packages | Where-Object { $_.name -eq 'codex-cli' } | Select-Object -First 1
+          $codexBinary = $cliPackage.targets | Where-Object { $_.name -eq 'codex' -and $_.kind -contains 'bin' } | Select-Object -First 1
+          if (-not $codexBinary) {
+            throw "Pinned source package 'codex-cli' has no binary target named 'codex'; cargo build --locked --release --bin codex would not match."
+          }
+          Write-Host "Verified packages codex-protocol/codex-core and target codex in package codex-cli."
+
+      - name: Run focused native routing tests
+        shell: pwsh
+        working-directory: codex-rs
+        run: |
+          cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p codex-core native_deepseek --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build release CLI
+        shell: pwsh
+        working-directory: codex-rs
+        run: |
+          cargo build -p codex-cli --locked --release --bin codex
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath 'target/release/codex.exe' -PathType Leaf)) {
+            throw 'Cargo reported success but codex-rs/target/release/codex.exe is missing.'
+          }
+
+      - name: Stage executable and provenance
+        shell: pwsh
+        run: |
+          $artifact = Join-Path $env:RUNNER_TEMP 'native-isolated-cli-artifact'
+          New-Item -ItemType Directory -Path $artifact -Force | Out-Null
+          Copy-Item -LiteralPath 'codex-rs/target/release/codex.exe' -Destination (Join-Path $artifact 'codex.exe')
+
+          foreach ($name in @('LICENSE', 'NOTICE')) {
+            $source = Join-Path 'codex-rs' $name
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { $source = $name }
+            if (Test-Path -LiteralPath $source -PathType Leaf) {
+              Copy-Item -LiteralPath $source -Destination (Join-Path $artifact $name)
+            }
+          }
+
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'router/patches/native-isolated-cli.patch'
+          $patchHash = (Get-FileHash -LiteralPath $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          $provenance = [ordered]@{
+            source_repository = 'https://github.com/openai/codex'
+            source_commit = $env:STABLE_GIT_COMMIT
+            rust_toolchain = '1.95.0'
+            target = 'x86_64-pc-windows-msvc'
+            patch = 'router/patches/native-isolated-cli.patch'
+            patch_sha256 = $patchHash
+            tests = @('cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib', 'cargo test --locked -p codex-core native_deepseek --lib')
+            build = 'cargo build -p codex-cli --locked --release --bin codex'
+          }
+          $provenance | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $artifact 'provenance.json') -Encoding utf8
+
+      - name: Upload custom CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-isolated-codex-windows-msvc-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-isolated-cli-artifact/*
+          if-no-files-found: error
+          retention-days: 14
