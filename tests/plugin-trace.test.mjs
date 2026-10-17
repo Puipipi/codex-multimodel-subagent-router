@@ -24,6 +24,12 @@ function cookiePair(setCookie) {
   return setCookie.split(';')[0];
 }
 
+function doesNotContainFixtures(value, fixtures, message) {
+  for (const {label, value: fixture} of fixtures) {
+    ok(!value.includes(fixture), `${message}: ${label}`);
+  }
+}
+
 function firstDetailHref(body) {
   return body.match(/href="([^"]*\/trace\/view\/[^"]+\/event\/[^"]+)"/)?.[1] ?? null;
 }
@@ -48,7 +54,16 @@ match(staticPage, /下一个游标：<code>&lt;cursor&gt;<\/code>/, 'static rend
 match(staticPage, /已选择事件详情：<code>&lt;event&gt;<\/code>/, 'static rendering escapes the selected event id');
 match(staticPage, /只读 DSH Trace/, 'static rendering uses Chinese user-visible labels');
 
+const FAKE_API_KEY = 'sk-test-NOTAREALKEY000000';
+const FAKE_BEARER_CREDENTIAL = `Bearer ${FAKE_API_KEY}`;
 const FAKE_AWS_KEY = ['AKIA', 'TESTNOTAREALKEY0'].join('');
+const FAKE_TOKEN_VALUE = 'supersecretvalue';
+const CREDENTIAL_FIXTURES = [
+  {label: 'fake API key', value: FAKE_API_KEY},
+  {label: 'fake bearer credential', value: FAKE_BEARER_CREDENTIAL},
+  {label: 'fake AWS access key', value: FAKE_AWS_KEY},
+  {label: 'fake token value', value: FAKE_TOKEN_VALUE},
+];
 
 const clock = {value: Date.now()};
 const trace = createTraceService({ttlMs: 60_000, maxUses: 2, now: () => clock.value});
@@ -60,15 +75,15 @@ try {
     status: 'running',
     events: [
       {event_id: 1, seq: 1, type: 'assistant/final', text: '<script>alert("x")</script> & "quoted"'},
-      {event_id: 2, seq: 2, type: 'tool/call', summary: {command: 'curl -H "Authorization: Bearer sk-test-NOTAREALKEY000000"', path: '<repo>/a&b'}},
-      {event_id: 3, seq: 3, type: 'descendant/progress', scope: 'descendant', text: `${FAKE_AWS_KEY} and token=supersecretvalue`},
+      {event_id: 2, seq: 2, type: 'tool/call', summary: {command: `curl -H "Authorization: ${FAKE_BEARER_CREDENTIAL}"`, path: '<repo>/a&b'}},
+      {event_id: 3, seq: 3, type: 'descendant/progress', scope: 'descendant', text: `${FAKE_AWS_KEY} and token=${FAKE_TOKEN_VALUE}`},
     ],
     hasMore: true,
     nextCursor: 1328,
     selectedEventId: 2,
   });
   match(opened.url, /^http:\/\/127\.0\.0\.1:\d+\/trace\/[A-Za-z0-9_-]{43}$/, 'the exchange URL is loopback-only and carries an unguessable ticket');
-  doesNotMatch(opened.url, /(?:sk-|ghp_|Bearer|token=|authorization|api[_-]?key)/i, 'the exchange URL contains no credential material');
+  doesNotContainFixtures(opened.url, CREDENTIAL_FIXTURES, 'the exchange URL excludes known credential fixtures');
   equal(opened.read_only, true, 'the trace is explicitly read-only');
   ok(opened.expires_at, 'the trace reports its expiry');
   match(opened.view_path, /^\/trace\/view\/[A-Za-z0-9_-]{22}\/$/, 'the view path is scoped per trace view');
@@ -81,7 +96,8 @@ try {
   match(first.setCookie, /Max-Age=\d+/, 'the session cookie is short-lived');
   equal(first.cookie.startsWith('dsh_trace_'), true, 'the cookie uses a per-view trace cookie name');
   ok(!first.cookie.endsWith(first.ticket), 'the cookie value is not the URL ticket');
-  doesNotMatch(first.setCookie, /sk-|Bearer|authorization/i, 'the cookie contains no credential material');
+  match(first.cookie, /^dsh_trace_[A-Za-z0-9_-]{22}=[A-Za-z0-9_-]{43}$/, 'the cookie contains only its scoped name and base64url session value');
+  doesNotContainFixtures(first.setCookie, CREDENTIAL_FIXTURES, 'the cookie excludes known credential fixtures');
   equal(first.location, opened.view_path, 'the redirect target is ticket-free and view-scoped');
   ok(!first.location.includes(first.ticket), 'the resulting URL removes the ticket');
 

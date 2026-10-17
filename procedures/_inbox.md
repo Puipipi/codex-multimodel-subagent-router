@@ -11,6 +11,7 @@
 - 多工作目录：临时 probe 目录不是 Git 仓库；Git 审计、提交与推送必须显式指定实际源码仓库的 workdir，避免把 not-a-repository 当成仓库故障。
 - Release 构建缓存：workflow 若只缓存 `target/debug`，即使 Cargo 依赖缓存命中，后续 `--release` 仍需完整重编译；恢复和保存路径都应包含 `target/release`，并记录旧缓存缺少 release 产物这一限制。
 - Actions 缓存路径迁移：`path` 元数据参与 cache version；给四路径布局增加 `target/release` 后，相同 key/restore-prefix 也不能命中旧三路径版本。先尝试新布局，未匹配时才用同一 restore action 做旧三路径只读回退；它只能复用依赖和 debug 产物，首轮 release 仍需完整编译。
+- 随机 cookie 安全断言：base64url 随机票据/会话值可合法包含 `sk-` 等凭据扫描子串，不能对随机值跑宽泛关键字正则；用固定合法编码形状复现误报，并断言真实测试伪凭据完整值不在 URL/cookie，同时保留 cookie 格式与属性验证。
 
 - 旧共享网关迁移卸载：原始文件快照含受管 localhost 区块，主动 rollback 若直接恢复会复活已退役地址；安装失败仍恢复原快照，成功迁移后的卸载应恢复验证过的 prior_root 干净配置，并保留后续编辑冲突检查。
 
