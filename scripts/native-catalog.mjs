@@ -40,16 +40,16 @@ export function deepSeekEntry(template) {
     multi_agent_reasoning_effort: "high",
     use_responses_lite: false,
     include_skills_usage_instructions: false,
-    context_window: 131072,
-    max_context_window: 131072,
-    effective_context_window_percent: 90,
-    auto_compact_token_limit: 100000,
+    context_window: 1_048_576,
+    max_context_window: 1_048_576,
+    effective_context_window_percent: 95,
+    auto_compact_token_limit: null,
     default_reasoning_summary: "none",
     supports_reasoning_summaries: false,
     availability_nux: null,
     upgrade: null,
     experimental_supported_tools: [],
-    comp_hash: "sol-luna-native-deepseek-flash-v1",
+    comp_hash: "sol-luna-native-deepseek-flash-v2",
   });
   delete entry.additional_speed_tiers;
   delete entry.service_tiers;
@@ -64,6 +64,17 @@ export function mergeCatalog(cache) {
   const native = cache.models.filter((model) => model?.slug !== PICKER_SLUG);
   const template = native.find((model) => model?.visibility === "list") || native[0];
   return { models: [...native, deepSeekEntry(template)] };
+}
+
+export function buildChildCatalog(cache) {
+  if (!cache || !Array.isArray(cache.models) || cache.models.length === 0) {
+    throw new Error("models_cache.json has no models; open Codex once before building the child catalog");
+  }
+  const native = cache.models.filter((model) => model && typeof model === "object"
+    && typeof model.slug === "string" && model.slug !== PICKER_SLUG);
+  const template = native.find((model) => model?.visibility === "list") || native[0];
+  if (!template) throw new Error("models_cache.json has no valid non-DeepSeek model template for the child catalog");
+  return { models: [deepSeekEntry(template)] };
 }
 
 export function readCatalogCache(codexHome) {
