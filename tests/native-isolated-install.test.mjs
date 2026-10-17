@@ -174,6 +174,52 @@ try {
   equal(failedSmoke.ensureCalls.length, 0, "failed prepare smoke never starts a gateway process");
   equal(await readFile(failedSmoke.journalPath).catch(() => null), null, "failed smoke leaves no install journal");
 
+  const residualLegacy = await fixture("residual-legacy-without-marker");
+  const residualConfigPath = path.join(residualLegacy.codexHome, "config.toml");
+  const residualConfigBytes = Buffer.from('model = "gpt-current"\nmodel_provider = "openai"\n');
+  await writeFile(residualConfigPath, residualConfigBytes);
+  const residualAgent = path.join(residualLegacy.codexHome, "agents/native_deepseek.toml");
+  const residualCatalog = path.join(residualLegacy.codexHome, "sol-luna-native-models.json");
+  const residualAgentBytes = Buffer.from("legacy role bytes\n");
+  const residualCatalogBytes = Buffer.from('{"legacy":true}\n');
+  await writeFile(residualAgent, residualAgentBytes);
+  await writeFile(residualCatalog, residualCatalogBytes);
+  const residualManifestPath = path.join(residualLegacy.dir, "legacy-manifest.json");
+  await writeFile(residualManifestPath, JSON.stringify({
+    agent: residualAgent,
+    catalog: residualCatalog,
+    prior_root: { openai_base_url: null, model_catalog_json: null },
+  }));
+  await prepare({ ...residualLegacy.common, legacyManifestPath: residualManifestPath });
+  const residualJournal = decodeJournal(await readFile(residualLegacy.journalPath, "utf8"));
+  equal(residualJournal.files.legacyMigration, false, "residual old role/catalog without a config marker is not a config migration");
+  await residualLegacy.activateFixture();
+  const residualActiveConfig = await readFile(residualConfigPath, "utf8");
+  equal(residualActiveConfig.includes('model = "gpt-current"'), true, "activation preserves the root main model");
+  equal(/^openai_base_url\s*=/m.test(residualActiveConfig), false, "activation leaves no root base URL");
+  equal(/^model_catalog_json\s*=/m.test(residualActiveConfig), false, "activation leaves no root catalog setting");
+  await residualLegacy.rollbackFixture();
+  equal((await readFile(residualConfigPath)).equals(residualConfigBytes), true, "rollback restores exact root config bytes");
+  equal(residualLegacy.startup.size, 0, "successful rollback does not resurrect old managed Startup without a config marker");
+  equal((await readFile(residualAgent)).equals(residualAgentBytes), true, "rollback restores manifest-owned legacy role bytes");
+  equal((await readFile(residualCatalog)).equals(residualCatalogBytes), true, "rollback restores manifest-owned legacy catalog bytes");
+
+  const noStartup = await fixture("no-prior-startup");
+  noStartup.startup.clear();
+  await prepare(noStartup.common);
+  const noStartupJournal = decodeJournal(await readFile(noStartup.journalPath, "utf8"));
+  equal(noStartupJournal.autostart.retiredLegacy, false, "absent Startup is not classified as a retired legacy file");
+  await noStartup.activateFixture();
+  await noStartup.rollbackFixture();
+  equal(noStartup.startup.size, 0, "rollback does not create a Startup file when none existed");
+
+  const unknownStartup = await fixture("unknown-prior-startup");
+  const unknownStartupBytes = Buffer.from("user startup bytes\n");
+  unknownStartup.startup.set(autostartFile(unknownStartup.startupDir), unknownStartupBytes);
+  await rejects(() => prepare(unknownStartup.common), /unowned Startup VBS exists/i, "prepare refuses an unknown Startup file");
+  equal(await readFile(unknownStartup.journalPath).catch(() => null), null, "unknown Startup refusal writes no journal");
+  equal(unknownStartup.startup.get(autostartFile(unknownStartup.startupDir)).equals(unknownStartupBytes), true, "unknown Startup refusal preserves user bytes");
+
   const legacy = await fixture("legacy-migration");
   const legacyText = [
     '# sol-luna-native-gateway begin',
@@ -360,7 +406,7 @@ try {
   await success.rollbackFixture();
   equal(await readFile(path.join(success.codexHome, "config.toml"), "utf8"), 'model = "gpt-current"\n', "rollback restores original config bytes");
   equal(success.environment.get("CODEX_CLI_PATH").present, false, "rollback restores original environment state");
-  equal(success.startup.size, 1, "rollback restores the previously managed Startup VBS snapshot");
+  equal(success.startup.size, 0, "successful rollback does not restore the retired managed Startup VBS");
   equal(success.stopCalls.length, 1, "rollback stops only the gateway started by this transaction after identity health verification");
 
   const changedAfterActivation = await fixture("later-edit");

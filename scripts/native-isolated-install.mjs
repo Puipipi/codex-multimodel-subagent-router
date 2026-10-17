@@ -297,7 +297,12 @@ export async function prepare(options = {}, dependencies = {}) {
     paths: { versionDir: path.resolve(versionDir), codexHome: path.resolve(codexHome), gatewayDir: paths.dir, gatewayScript, startupDir: path.resolve(startupDir), journalPath: journal },
     files: realFiles,
     environment: envPlan,
-    autostart: { file: startupFile, prior: startupPrior, next: null },
+    autostart: {
+      file: startupFile,
+      prior: startupPrior,
+      next: null,
+      retiredLegacy: startupPrior !== null && isManagedOldStartup(startupPrior),
+    },
     gateway: { taskPlan, taskSnapshot, launcher: { path: taskPlan.launcher.path, prior: launcherPrior, next: launcherNext }, identityFile: paths.identity, identitySha256: sha256(identityBytes), preexistingPid: previousGatewayState?.pid ?? null, startedByTransaction: false, pid: null },
     smoke: smokeEvidence,
     completed: { launcher: false, task: false, gateway: false, files: false, environment: false, autostart: false },
@@ -471,6 +476,7 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
   const configFilePlan = journal.files?.files?.["config.toml"];
   const legacyMigration = journal.files?.legacyMigration === true
     || (configFilePlan?.prior?.exists && hasLegacyGatewayConfigMarker(configFilePlan.prior.bytes.toString("utf8")));
+  const retiredLegacyStartup = journal.autostart?.retiredLegacy === true || legacyMigration;
   if (legacyMigration && !configFilePlan?.uninstallPrior?.exists) {
     throw new Error("legacy migration uninstall target is missing; refusing to restore deprecated gateway config");
   }
@@ -520,7 +526,7 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
   if (journal.completed.environment) try { await rollbackEnvironment(journal.environmentSnapshot, envAdapter); journal.completed.environment = false; } catch (error) { journal.completed.environment = null; indeterminate.push("environment"); errors.push(error); }
   if (journal.completed.files) try { await rollbackFiles(journal.files, { target: legacyMigration ? "uninstall" : "prior" }); journal.completed.files = false; } catch (error) { journal.completed.files = null; indeterminate.push("files"); errors.push(error); }
   if (journal.completed.autostart) try {
-    if (!legacyMigration) await restoreStartupChecked(journal.autostart, startup);
+    if (!retiredLegacyStartup) await restoreStartupChecked(journal.autostart, startup);
     journal.completed.autostart = false;
   } catch (error) { journal.completed.autostart = null; indeterminate.push("autostart"); errors.push(error); }
   if (journal.completed.task) try { await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks); journal.completed.task = false; } catch (error) { journal.completed.task = null; indeterminate.push("task"); errors.push(error); }
