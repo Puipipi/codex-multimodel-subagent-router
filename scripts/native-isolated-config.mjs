@@ -281,3 +281,8 @@ export function removeIsolatedConfig(content) {
   const isolated = matches(content, ISOLATED_BEGIN, ISOLATED_END);
   return isolated.length ? removeBlock(content, isolated[0]) : content;
 }
+
+export function hasIsolatedConfigMarker(content) {
+  if (typeof content !== "string") throw new TypeError("content must be a string");
+  return matches(content, ISOLATED_BEGIN, ISOLATED_END).length === 1;
+}
