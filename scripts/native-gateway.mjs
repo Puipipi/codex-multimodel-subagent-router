@@ -12,7 +12,7 @@ import {
 } from "./native-routing.mjs";
 import { RelayCache, buildRelayRequest, parseRelayBody, relayCacheKey } from "./native-relay.mjs";
 import { parseUsageFromSse } from "./native-usage.mjs";
-import { readDeepSeekKey } from "./native-credentials.mjs";
+import { resolveDeepSeekAuth } from "./native-credentials.mjs";
 
 const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "host"]);
 const NATIVE_RELAY_HEADERS = new Set([
@@ -109,6 +109,7 @@ function relayHeaders(req) {
 
 export function createNativeGateway({
   deepSeekKey = null,
+  deepSeekAuthResolver = null,
   logPath,
   nativeBase = NATIVE_BASE,
   deepSeekBase = DEEPSEEK_BASE,
@@ -134,14 +135,24 @@ export function createNativeGateway({
       appendFileSync(logPath, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`);
     } catch { /* logging must not break inference */ }
   };
+  const loadDeepSeekAuth = async () => deepSeekAuthResolver
+    ? await deepSeekAuthResolver()
+    : deepSeekKey
+      ? { mode: "api-key", headers: { authorization: `Bearer ${deepSeekKey}` } }
+      : resolveDeepSeekAuth();
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
     const routePath = localPath(url.pathname, token);
     if (routePath === null) { json(res, 401, { error: { message: "unauthorized" } }); return; }
     if (req.method === "GET" && routePath === "/_health") {
+      let credential = { present: false, mode: null };
+      try {
+        const auth = await loadDeepSeekAuth();
+        credential = { present: true, mode: auth.mode };
+      } catch { /* report credential availability without exposing parser errors */ }
       json(res, 200, {
-        ok: true, model: PICKER_SLUG, deepseek_key: Boolean(deepSeekKey),
+        ok: true, model: PICKER_SLUG, deepseek_credential: credential,
         requests: stats.requests, relay_calls: stats.relay_calls,
         relay_cache_hits: stats.relay_cache_hits,
       });
@@ -170,7 +181,23 @@ export function createNativeGateway({
       log({ kind: "request", route: direction, model: parsed.model, thread_id: threadId, parent_thread_id: parentThreadId, bytes: raw.length });
 
       if (direction === "deepseek") {
-        if (!deepSeekKey) { json(res, 503, { error: { message: "DeepSeek credential is not configured" } }); return; }
+        let auth;
+        try {
+          auth = await loadDeepSeekAuth();
+        } catch {
+          json(res, 503, { error: { message: "DSH DeepSeek credential is invalid or unavailable" } });
+          return;
+        }
+        if (auth.mode === "account") {
+          let destination;
+          try { destination = new URL(deepSeekBase); } catch { destination = null; }
+          if (!destination || destination.origin !== "https://api.deepseek.com"
+              || (destination.pathname !== "" && destination.pathname !== "/")
+              || destination.search || destination.hash || destination.username || destination.password) {
+            json(res, 502, { error: { message: "DSH account authentication requires the official DeepSeek API origin" } });
+            return;
+          }
+        }
         stats.deepseek_requests += 1;
         const relay = async ({ item, encrypted }) => {
           const authorization = String(req.headers.authorization || "");
@@ -208,13 +235,13 @@ export function createNativeGateway({
         const input = Array.isArray(parsed.input) ? await normalizeRoutedAgentInput(parsed.input, { relay }) : parsed.input;
         const body = buildDeepSeekBody({ ...parsed, input });
         const headers = new Headers({
-          authorization: `Bearer ${deepSeekKey}`,
           "content-type": "application/json",
           accept: req.headers.accept || "text/event-stream",
           "user-agent": req.headers["user-agent"] || "sol-luna-native-gateway",
         });
+        for (const [name, value] of Object.entries(auth.headers || {})) headers.set(name, value);
         const upstream = await fetchImpl(`${deepSeekBase.replace(/\/$/, "")}/responses`, {
-          method: "POST", headers, body: JSON.stringify(body),
+          method: "POST", headers, body: JSON.stringify(body), redirect: "error",
         });
         stats.statuses.push(upstream.status);
         stats.deepseek_latencies_ms.push(Date.now() - started);
@@ -313,11 +340,9 @@ async function serve(argv) {
   const logPath = logAt >= 0 && argv[logAt + 1]
     ? path.resolve(argv[logAt + 1])
     : path.join(path.dirname(stateFile), "gateway.log");
-  let deepSeekKey = null;
-  try { deepSeekKey = readDeepSeekKey(); } catch { /* GPT-only startup remains possible */ }
   let closing = false;
   const gateway = createNativeGateway({
-    deepSeekKey, logPath, token,
+    logPath, token,
     onShutdown: () => {
       if (closing) return;
       closing = true;

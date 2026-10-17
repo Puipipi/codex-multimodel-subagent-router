@@ -1,6 +1,6 @@
 {
   "name": "sol-luna-deepseek-router",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Sol-led native Luna/DeepSeek routing through a hidden loopback gateway, with explicit DSH compatibility, per-chat ownership, and writer leases.",
   "author": {
     "name": "Puipipi",

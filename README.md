@@ -122,7 +122,7 @@ This repository also includes an optional idempotent Windows console-window patc
 
 ## Native gateway (current path)
 
-The native route keeps the main `openai` provider and the current Sol model. A hidden loopback gateway is the only `openai_base_url`; unrecognized model names are forwarded transparently to ChatGPT, while the exact `deepseek/deepseek-flash` slug goes to the official DeepSeek Responses API. GPT authorization stays on GPT; DeepSeek requests receive only the DSH credential read in-process. A native collaboration payload in real GPT ciphertext is relayed once through the signed-in native backend and cached by account+ciphertext; a plaintext DeepSeek payload stored in `encrypted_content` is restored directly without a relay.
+The native route keeps the main `openai` provider and the current Sol model. A hidden loopback gateway is the only `openai_base_url`; unrecognized model names are forwarded transparently to ChatGPT, while the exact `deepseek/deepseek-flash` slug goes to the official DeepSeek Responses API. GPT authorization stays on GPT. DeepSeek requests prefer the signed-in DSH account grant, refreshed on every request and sent only in `x-dsh-auth-token` to the exact official API origin; when no account grant exists, the legacy DSH API key remains supported. Invalid grants fail closed. Health shows credential mode and availability, not successful authentication. See [the account authentication note](docs/native-account-auth.md). A native collaboration payload in real GPT ciphertext is relayed once through the signed-in native backend and cached by account+ciphertext; a plaintext DeepSeek payload stored in `encrypted_content` is restored directly without a relay.
 
 ```powershell
 node .\scripts\native-gateway-manager.mjs start
