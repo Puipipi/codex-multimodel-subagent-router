@@ -18,19 +18,24 @@ export function autostartFile(explicitDir) {
   return path.join(startupDirectory(explicitDir), FILE_NAME);
 }
 
-export function autostartScript() {
+function vbsQuote(value) {
+  return String(value).replace(/"/g, '""');
+}
+
+export function autostartScript({ gatewayDir } = {}) {
+  const managerArgs = gatewayDir ? ` --dir ""${vbsQuote(path.resolve(gatewayDir))}""` : "";
   return [
     "' Sol Luna native gateway: start hidden before the first Codex request.",
     'Set shell = CreateObject("WScript.Shell")',
-    `shell.Run """${process.execPath}"" ""${MANAGER}"" ensure --json", 0, False`,
+    `shell.Run """${process.execPath}"" ""${MANAGER}"" ensure --json${managerArgs}", 0, False`,
     "",
   ].join("\r\n");
 }
 
-export function installAutostart({ startupDir } = {}) {
+export function installAutostart({ startupDir, gatewayDir } = {}) {
   const file = autostartFile(startupDir);
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, autostartScript(), { encoding: "utf8", mode: 0o600 });
+  writeFileSync(file, autostartScript({ gatewayDir }), { encoding: "utf8", mode: 0o600 });
   return { installed: true, file, hidden: true };
 }
 
@@ -51,10 +56,12 @@ function main(argv) {
   const command = argv[0] || "status";
   const at = argv.indexOf("--startup-dir");
   const startupDir = at >= 0 ? argv[at + 1] : undefined;
-  if (command === "install") process.stdout.write(`${JSON.stringify(installAutostart({ startupDir }))}\n`);
+  const gatewayAt = argv.indexOf("--gateway-dir");
+  const gatewayDir = gatewayAt >= 0 ? argv[gatewayAt + 1] : undefined;
+  if (command === "install") process.stdout.write(`${JSON.stringify(installAutostart({ startupDir, gatewayDir }))}\n`);
   else if (command === "remove") process.stdout.write(`${JSON.stringify(removeAutostart({ startupDir }))}\n`);
   else if (command === "status") process.stdout.write(`${JSON.stringify(autostartStatus({ startupDir }))}\n`);
-  else throw new Error("usage: native-autostart.mjs <install|remove|status> [--startup-dir PATH]");
+  else throw new Error("usage: native-autostart.mjs <install|remove|status> [--startup-dir PATH] [--gateway-dir PATH]");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

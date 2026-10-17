@@ -22,6 +22,13 @@ try {
   match(text, /0, False/, "autostart launches hidden and non-blocking");
   equal(startupDirectory(dir), path.resolve(dir), "startup directory is explicit and testable");
   match(autostartScript(), /ensure --json/, "login startup runs ensure before Codex");
+  const isolatedDir = path.join(dir, 'native runtime "one');
+  const isolatedScript = autostartScript({ gatewayDir: isolatedDir });
+  match(isolatedScript, /--dir/, "isolated gateway directory is passed to the manager");
+  match(isolatedScript, /--dir ""/, "gateway directory argument is quoted in VBScript command");
+  match(isolatedScript, /native runtime ""one""/, "gateway path quotes are escaped for VBScript");
+  const isolatedInstall = installAutostart({ startupDir: dir, gatewayDir: isolatedDir });
+  match(readFileSync(isolatedInstall.file, "utf8"), /--dir/, "installer writes isolated gateway directory option");
   const removed = removeAutostart({ startupDir: dir });
   equal(removed.removed, true, "autostart can be removed");
   equal(existsSync(installed.file), false, "autostart file is gone");

@@ -3,6 +3,7 @@ import {
   composeIsolatedConfig,
   isolatedAgentToml,
   removeIsolatedConfig,
+  withTemporaryRootModelCatalog,
 } from "../scripts/native-isolated-config.mjs";
 
 let checks = 0;
@@ -58,6 +59,21 @@ ok(multilineWithBlock.includes(multiline.slice(0, multiline.indexOf('model = "gp
 equal(composeIsolatedConfig(multilineWithBlock, opts), multilineWithBlock, "reapply ignores markers and table-like text inside multiline strings");
 const multilineRemoved = removeIsolatedConfig(multilineWithBlock);
 ok(multilineRemoved.startsWith(multiline), "remove preserves multiline TOML and fake marker text exactly");
+const tempCatalogSource = [
+  'developer_instructions = """',
+  'fake model_catalog_json = "do-not-touch"',
+  '[fake.table]',
+  '"""',
+  'model = "gpt-6.1-sol"',
+  '',
+  '[features]',
+  'multi_agent = true',
+  '',
+].join("\n");
+const tempCatalog = withTemporaryRootModelCatalog(tempCatalogSource, "C:\\Temp\\smoke-main-cache.json");
+ok(tempCatalog.includes('model_catalog_json = "C:\\\\Temp\\\\smoke-main-cache.json"'), "temporary catalog helper adds a TOML-escaped root catalog path");
+ok(tempCatalog.includes(tempCatalogSource.slice(0, tempCatalogSource.indexOf('model = "gpt-6.1-sol"'))), "temporary catalog helper preserves multiline instruction contents exactly");
+equal(withTemporaryRootModelCatalog('model = "main"\nmodel_catalog_json = "old.json"\n', "C:\\Temp\\cache.json").match(/^model_catalog_json =/gm).length, 1, "temporary catalog helper replaces rather than duplicates the root key");
 
 const legacyBase = [
   'model = "gpt-6.1-sol"',

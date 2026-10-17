@@ -286,3 +286,24 @@ export function hasIsolatedConfigMarker(content) {
   if (typeof content !== "string") throw new TypeError("content must be a string");
   return matches(content, ISOLATED_BEGIN, ISOLATED_END).length === 1;
 }
+
+// Smoke-only rewrite: point a disposable home at its copied main-model cache.
+// This intentionally does not participate in the real install plan.
+export function withTemporaryRootModelCatalog(content, catalogPath) {
+  if (typeof content !== "string") throw new TypeError("content must be a string");
+  if (typeof catalogPath !== "string" || !catalogPath) throw new TypeError("catalogPath is required");
+  const lines = scanTomlLines(content);
+  const firstTable = lines.find((line) => !line.insideAtStart && /^\s*\[/.test(line.visible));
+  const rootEnd = firstTable?.start ?? content.length;
+  const root = lines.filter((line) => line.start < rootEnd && !line.insideAtStart);
+  const keyLines = root.filter((line) => /^\s*model_catalog_json\s*=/.test(line.visible));
+  if (keyLines.length > 1) throw new Error("temporary smoke config has duplicate root model_catalog_json keys");
+  const assignment = `model_catalog_json = ${escapeTomlString(catalogPath)}`;
+  if (keyLines.length === 1) {
+    const line = keyLines[0];
+    return splice(content, line.start, line.contentEnd, assignment);
+  }
+  const newline = content.slice(0, rootEnd).endsWith("\n") || rootEnd === 0 ? "" : "\n";
+  const beforeTable = firstTable ? `${assignment}\n\n` : `${assignment}\n`;
+  return splice(content, rootEnd, rootEnd, `${newline}${beforeTable}`);
+}

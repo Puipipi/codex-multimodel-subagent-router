@@ -5,6 +5,7 @@ const read = name => readFileSync(new URL(`../${name}`, import.meta.url), 'utf8'
 const readme = read('README.md');
 const skill = read('SKILL.md');
 const nativeBuild = read('docs/native-isolated-cli-build.md');
+const nativeInstaller = read('docs/native-isolated-install.md');
 const nativeAcceptance = read('docs/native-deepseek-acceptance-2026-10-17.md');
 const client = read('scripts/dsh-mcp-client.mjs');
 const hooks = JSON.parse(read('hooks/hooks.json'));
@@ -64,11 +65,24 @@ assert.match(skill, /agent_type: "native_deepseek"/i, 'SKILL.md must select the 
 assert.match(skill, /omit `model`/i, 'SKILL.md must not send an explicit DeepSeek model override');
 assert.match(skill, /current `CODEX_HOME\/models_cache\.json`/, 'SKILL.md must resolve Luna from the live catalog');
 assert.doesNotMatch(skill, /shared-root gateway path is the formal|root `openai_base_url`[^\n]*formal route/i, 'SKILL.md must not use shared root routing as the formal path');
-assert.match(skill, /installer orchestration.*has not been completed/i, 'SKILL.md must state that activation orchestration is pending');
-assert.match(skill, /still needs end-to-end activation and desktop acceptance/i, 'SKILL.md must point to the actual pending acceptance state');
+assert.match(skill, /native-isolated-install\.mjs/);
+for (const command of ['prepare', 'activate', 'rollback', 'status']) assert.match(skill, new RegExp(`\\b${command}\\b`), `SKILL.md must list installer command ${command}`);
+assert.match(skill, /ordinary task routing.*never run them/i, 'SKILL.md must keep ordinary routing separate from setup');
+assert.match(skill, /explicitly asks to set up or activate.*authorizes.*without another approval prompt/i, 'SKILL.md must avoid redundant approval for an explicitly requested setup');
+assert.match(skill, /actual isolated CLI installation has not been run/i, 'SKILL.md must not claim the source installer has run');
+assert.match(skill, /desktop acceptance remains pending|desktop acceptance.*still pending/i, 'SKILL.md must distinguish configured source from desktop acceptance');
 assert.doesNotMatch(skill, /ACL file lock|blocks the intended UI check/i, 'SKILL.md must not preserve the obsolete UI blocker claim');
 assert.doesNotMatch(skill, /node \.\\scripts\\native-install\.mjs install/i, 'SKILL.md must not present the old shared-root installer as the setup path');
-assert.match(nativeBuild, /formal installer orchestration and activation are still pending/i, 'build note must distinguish build preparation from activation');
+assert.match(nativeBuild, /native-isolated-install\.mjs/, 'build note must name the installer entrypoint');
+assert.match(nativeBuild, /native-isolated-install\.md/, 'build note must link the installer orchestration');
+assert.match(nativeBuild, /no real installation or desktop acceptance has been performed/i, 'build note must distinguish source implementation from actual acceptance');
+assert.match(nativeInstaller, /--expected-main-model/);
+assert.match(nativeInstaller, /--expected-main-provider null/);
+assert.match(nativeInstaller, /--expected-root-base-url null/);
+assert.match(nativeInstaller, /prepare[\s\S]*activate[\s\S]*desktop/i);
+assert.match(nativeInstaller, /configured=true.*restartNeeded=true/);
+assert.match(nativeInstaller, /runtimeObserved=false.*desktopAccepted=false/);
+assert.match(nativeInstaller, /尚未在真实用户配置或环境上执行/, 'installer documentation must state that real installation has not run');
 assert.match(nativeAcceptance, /Historical acceptance record for the earlier shared-provider route/i, 'old acceptance evidence must be labeled historical');
 assert.doesNotMatch(nativeAcceptance, /ACL file lock|blocked the intended UI check/i, 'acceptance record must not claim the obsolete ACL blocker');
 assert.doesNotMatch(skill, /at most one shell(?:\/exec)? attempt/i,

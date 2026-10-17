@@ -21,7 +21,7 @@ The root standalone skill is the only routing policy. The plugin's DSH/MCP path 
 
 The formal native DeepSeek route uses the patched, versioned Codex CLI backend described in [the isolated CLI build note](docs/native-isolated-cli-build.md). It gives the `native_deepseek` child role its own `deepseek-native` provider and its own `sol-luna-native-models.json` catalog. The parent session and native Luna continue using their normal provider and live model catalog; do not set root `openai_base_url` or a global `model_catalog_json` for this route.
 
-The build, runtime staging, isolated-file transaction, and environment transaction exist as separate preparation layers. Installer orchestration that safely applies all layers and activates the runtime has not been completed. Therefore this skill does not provide an activation command and does not claim the isolated backend is installed. The older `native-install.mjs` shared-root gateway path is retained for historical compatibility only; it is not the formal native DeepSeek setup path.
+The source includes the installer orchestration entrypoints `native-isolated-install.mjs prepare`, `activate`, `rollback`, and `status`, documented in [the isolated installer guide](docs/native-isolated-install.md). They are a setup path only when the user explicitly asks to set up or activate the isolated backend; that request authorizes the documented steps without another approval prompt. Ordinary task routing must never run them, change global configuration or environment, install a runtime, or restart Codex. The orchestration and its smoke checks have passed mocked/local tests, but the actual isolated CLI installation has not been run and desktop acceptance remains pending. The older `native-install.mjs` shared-root gateway path is retained for historical compatibility only; it is not the formal native DeepSeek setup path.
 
 ## Route a task
 
@@ -100,7 +100,7 @@ The DSH helper requires Node.js 24+ and PowerShell 7.3+. Keep credentials out of
 
 Use native `wait` and `thread/read` for the same child. A timeout means the task may still be running; retain the child handle and never start a duplicate. For DSH legacy work, `dsh_wait` is the reliable completion path. Sol reviews the returned diff, actual test commands and exit codes, and the evidence; do not claim desktop-panel acceptance from an isolated app-server test.
 
-The historical native evidence is recorded in `docs/native-deepseek-acceptance-2026-10-17.md`; it used the earlier shared-provider call contract and does not verify the isolated-role route. The current isolated route still needs end-to-end activation and desktop acceptance after installer orchestration is completed.
+The historical native evidence is recorded in `docs/native-deepseek-acceptance-2026-10-17.md`; it used the earlier shared-provider call contract and does not verify the isolated-role route. The current source now includes prepare/activate/rollback/status orchestration, but real installation and desktop acceptance remain pending. Do not treat a prepared or configured journal as proof that the desktop launched or accepted the patched CLI.
 
 ## Price and calendar sources
 
