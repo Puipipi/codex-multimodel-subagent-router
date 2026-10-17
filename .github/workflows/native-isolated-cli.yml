@@ -81,12 +81,21 @@ jobs:
           if (-not $codexBinary) {
             throw "Pinned source package 'codex-cli' has no binary target named 'codex'; cargo build --locked --release --bin codex would not match."
           }
+          $metadataPath = Join-Path $env:RUNNER_TEMP 'codex-cargo-metadata.json'
+          [System.IO.File]::WriteAllText($metadataPath, ($metadataText -join "`n"), [System.Text.UTF8Encoding]::new($false))
+          $lockReport = Join-Path $env:RUNNER_TEMP 'cargo-lock-normalization.json'
+          $normalizer = Join-Path $env:GITHUB_WORKSPACE 'router/scripts/normalize-cargo-workspace-lock.mjs'
+          node $normalizer --metadata $metadataPath --lockfile 'Cargo.lock' --report $lockReport
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "Verified packages codex-protocol/codex-core and target codex in package codex-cli."
 
       - name: Run focused native routing tests
         shell: pwsh
         working-directory: codex-rs
         run: |
+          $testPath = Join-Path $env:GITHUB_WORKSPACE 'router/tests/normalize-cargo-workspace-lock.test.mjs'
+          node $testPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p codex-core native_deepseek --lib
@@ -108,6 +117,10 @@ jobs:
           $artifact = Join-Path $env:RUNNER_TEMP 'native-isolated-cli-artifact'
           New-Item -ItemType Directory -Path $artifact -Force | Out-Null
           Copy-Item -LiteralPath 'codex-rs/target/release/codex.exe' -Destination (Join-Path $artifact 'codex.exe')
+          $lockReportPath = Join-Path $env:RUNNER_TEMP 'cargo-lock-normalization.json'
+          if (-not (Test-Path -LiteralPath $lockReportPath -PathType Leaf)) { throw 'Cargo.lock normalization report is missing.' }
+          Copy-Item -LiteralPath $lockReportPath -Destination (Join-Path $artifact 'cargo-lock-normalization.json')
+          $lockAudit = Get-Content -LiteralPath $lockReportPath -Raw | ConvertFrom-Json
 
           foreach ($name in @('LICENSE', 'NOTICE')) {
             $source = Join-Path 'codex-rs' $name
@@ -126,6 +139,9 @@ jobs:
             target = 'x86_64-pc-windows-msvc'
             patch = 'router/patches/native-isolated-cli.patch'
             patch_sha256 = $patchHash
+            cargo_lock_original_sha256 = $lockAudit.original_lock_sha256
+            cargo_lock_sha256 = $lockAudit.normalized_lock_sha256
+            cargo_lock_diff = $lockAudit.lock_diff
             tests = @('cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib', 'cargo test --locked -p codex-core native_deepseek --lib')
             build = 'cargo build -p codex-cli --locked --release --bin codex'
           }

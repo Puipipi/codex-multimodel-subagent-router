@@ -56,7 +56,8 @@ jobs:
             'native-agent',
             'native-install',
             'native-manager',
-            'native-autostart'
+            'native-autostart',
+            'normalize-cargo-workspace-lock'
           )
           foreach ($name in $tests) {
             node "tests/$name.test.mjs"
