@@ -61,10 +61,12 @@ The selected role supplies backend, model, and reasoning configuration. Keep the
 Use native Codex collaboration, not DSH, for the formal task. Resolve the dedicated child role first:
 
 ```powershell
-node .\scripts\native-agent.mjs --executor deepseek --json
+# Set this to the explicit journal path returned by the active isolated install.
+$installJournal = "<active-install-journal-path>"
+node .\scripts\native-agent.mjs --executor deepseek --install-journal $installJournal --json
 ```
 
-It returns `agent_type: "native_deepseek"`, `fork_turns: "none"`, and an informational `resolved_model: "deepseek/deepseek-flash"`. Call `spawn_agent` with the bounded `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the child role selects its fixed DeepSeek model and high reasoning effort. A missing or unavailable native role is an explicit setup failure: do not fall back to a shared root provider, explicit model override, or another executor. Keep the same child for corrections: use native `wait` for completion and `followup_task` for the same child; never spawn a replacement just because an observation window ended.
+Before emitting the native spawn parameters, this command requires the explicit journal path returned by `native-isolated-install.mjs prepare`; it verifies activated config, environment, launcher and owned Task Scheduler task, then starts/checks the isolated gateway. Rerun the same gate immediately before each DeepSeek `followup_task`; if it fails, do not send the follow-up. A missing or unhealthy installation fails closed: do not register a task, start a DSH session, directly spawn the gateway, replay old work, or switch executors. It returns `agent_type: "native_deepseek"`, `fork_turns: "none"`, and an informational `resolved_model: "deepseek/deepseek-flash"`. Call `spawn_agent` with the bounded `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the child role selects its fixed DeepSeek model and high reasoning effort. Keep the same child for corrections: use native `wait` for completion and `followup_task` for the same child; never spawn a replacement just because an observation window ended. The installer uses a current-user Task Scheduler task to keep the gateway independent of the DSH/Codex child process tree; DSH remains only an explicit legacy workflow and does not create native Codex child sessions.
 
 Apply the shared writer and child-message contract above before this spawn; it applies to both native executors.
 

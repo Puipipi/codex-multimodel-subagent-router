@@ -110,7 +110,48 @@ async function waitForHealth(paths, timeoutMs) {
   }
 }
 
-export async function ensureGateway({ paths = gatewayPaths(), spawnImpl = spawn } = {}) {
+async function prepareGatewayIdentityUnlocked(paths) {
+  const current = await readGatewayState(paths);
+  if (current) {
+    const health = await gatewayHealth(current);
+    if (pidStatus(current, health) === "match") {
+      let identity = await readGatewayIdentity(paths);
+      if (!identity?.token && current.token && Number.isInteger(current.port)) {
+        identity = { version: 1, token: current.token, port: current.port, created_at: current.started_at || new Date().toISOString() };
+        await writeJsonPrivate(paths.identity, identity);
+      }
+      if (!identity?.token || identity.token !== current.token || identity.port !== current.port) {
+        throw new Error("healthy native gateway does not match its private identity file");
+      }
+      return { identity, existing: current };
+    }
+    if (health.reachable) assertGatewayIdentity(current, health);
+    if (isAlive(current.pid)) {
+      throw new Error(`Native gateway state exists for a live PID ${current.pid} but health failed; refusing to replace its identity. Inspect ${paths.log}.`);
+    }
+    rmSync(paths.state, { force: true });
+  }
+
+  let identity = await readGatewayIdentity(paths);
+  if (!identity?.token || !Number.isInteger(identity?.port) || identity.port < 1 || identity.port > 65535) {
+    identity = {
+      version: 1,
+      token: randomBytes(32).toString("base64url"),
+      port: await freePort(),
+      created_at: new Date().toISOString(),
+    };
+    await writeJsonPrivate(paths.identity, identity);
+  }
+  return { identity, existing: null };
+}
+
+export async function prepareGatewayIdentity({ paths = gatewayPaths() } = {}) {
+  await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+  const result = await withFileLock(paths.lock, () => prepareGatewayIdentityUnlocked(paths), { timeoutMs: 30_000 });
+  return result.identity;
+}
+
+export async function ensureGateway({ paths = gatewayPaths(), spawnImpl = spawn, launchImpl, startTimeoutMs = START_TIMEOUT_MS } = {}) {
   await mkdir(paths.dir, { recursive: true, mode: 0o700 });
   const existing = await readGatewayState(paths);
   if (existing) {
@@ -120,33 +161,19 @@ export async function ensureGateway({ paths = gatewayPaths(), spawnImpl = spawn 
   }
 
   return withFileLock(paths.lock, async () => {
-    const again = await readGatewayState(paths);
-    if (again) {
-      const health = await gatewayHealth(again);
-      if (pidStatus(again, health) === "match") return { state: again, started: false };
-      if (health.reachable) assertGatewayIdentity(again, health);
+    const { identity, existing } = await prepareGatewayIdentityUnlocked(paths);
+    if (existing) return { state: existing, started: false };
+    let child = null;
+    if (launchImpl) {
+      await launchImpl({ paths, identity });
+    } else {
+      child = spawnImpl(process.execPath, [
+        GATEWAY_SCRIPT, "--serve", "--state", paths.state, "--identity", paths.identity, "--log", paths.log,
+      ], gatewaySpawnOptions());
+      child.unref();
     }
-    if (again && isAlive(again.pid)) {
-      throw new Error(`Native gateway state exists for a live PID ${again.pid} but health failed; refusing to start a second instance. Inspect ${paths.log}.`);
-    }
-    if (again) rmSync(paths.state, { force: true });
-
-    let identity = await readGatewayIdentity(paths);
-    if (!identity?.token || !identity?.port) {
-      identity = {
-        version: 1,
-        token: randomBytes(32).toString("base64url"),
-        port: await freePort(),
-        created_at: new Date().toISOString(),
-      };
-      await writeJsonPrivate(paths.identity, identity);
-    }
-    const child = spawnImpl(process.execPath, [
-      GATEWAY_SCRIPT, "--serve", "--state", paths.state, "--identity", paths.identity, "--log", paths.log,
-    ], gatewaySpawnOptions());
-    child.unref();
-    const state = await waitForHealth(paths, START_TIMEOUT_MS);
-    return { state, started: true, pid: child.pid };
+    const state = await waitForHealth(paths, startTimeoutMs);
+    return { state, started: true, pid: state.pid, childPid: child?.pid ?? null };
   }, { timeoutMs: 30_000 });
 }
 

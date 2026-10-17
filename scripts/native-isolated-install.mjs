@@ -1,13 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { apply as applyFiles, plan as planFiles, rollback as rollbackFiles } from "./native-isolated-files.mjs";
-import { autostartFile, autostartScript } from "./native-autostart.mjs";
-import { withTemporaryRootModelCatalog } from "./native-isolated-config.mjs";
+import { autostartFile } from "./native-autostart.mjs";
+import { composeIsolatedConfig, withTemporaryRootModelCatalog } from "./native-isolated-config.mjs";
 import { runIsolatedConfigSmoke } from "./native-isolated-smoke.mjs";
-import { ensureGateway, gatewayPaths, readGatewayState, stopGateway } from "./native-gateway-manager.mjs";
+import { ensureGateway, gatewayHealth, gatewayPaths, prepareGatewayIdentity, readGatewayIdentity, readGatewayState, stopGateway } from "./native-gateway-manager.mjs";
+import { createWindowsTaskSchedulerAdapter, gatewayTaskPlan, registerOwnedGatewayTask, restoreGatewayTask, snapshotGatewayTask, statusOwnedGatewayTask, createOwnedGatewayTaskLauncher } from "./native-gateway-task.mjs";
 import { createWindowsUserEnvironmentAdapter, apply as applyEnvironment, plan as planEnvironment, rollback as rollbackEnvironment } from "./native-runtime-env.mjs";
 import { verifyRuntimeVersion } from "./native-runtime.mjs";
 
@@ -97,6 +98,42 @@ async function requireExplicitPaths({ versionDir, codexHome, gatewayDir, startup
   if (normalize(isolatedGateway) === normalize(legacyGateway)) throw new Error("gatewayDir must be separate from the legacy/default gateway directory");
 }
 
+async function canonicalGatewayScript({ gatewayScriptPath, pluginRoot }) {
+  if (Boolean(gatewayScriptPath) === Boolean(pluginRoot)) throw new Error("provide exactly one of gatewayScriptPath or pluginRoot explicitly");
+  const input = gatewayScriptPath || path.join(pluginRoot, "scripts", "native-gateway.mjs");
+  if (typeof input !== "string" || !path.isAbsolute(input)) throw new Error("gateway script path or plugin root must be absolute");
+  const candidate = path.resolve(input);
+  const info = await lstat(candidate);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error(`gateway script must be an installed regular file: ${candidate}`);
+  return await realpath(candidate);
+}
+
+function taskLauncherBytes(taskPlan) {
+  return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(taskPlan.launcher.content, "utf16le")]);
+}
+
+function isManagedOldStartup(bytes) {
+  if (bytes === null) return true;
+  const content = Buffer.from(bytes).toString("utf8");
+  return content.startsWith("' Sol Luna native gateway: start hidden before the first Codex request.")
+    && content.includes("native-gateway-manager.mjs") && content.includes("ensure --json");
+}
+
+function matchesTaskSnapshot(left, right) {
+  return left?.version === right?.version && left?.taskName === right?.taskName && left?.marker === right?.marker
+    && left?.planFingerprint === right?.planFingerprint && left?.priorExists === right?.priorExists && left?.priorOwned === right?.priorOwned;
+}
+
+async function requireLauncherSnapshot(file, prior, next, marker) {
+  const current = await regularOrAbsent(file, "gateway task launcher");
+  if (!sameBytes(current, prior)) throw new Error("gateway task launcher changed since prepare");
+  if (current !== null && !current.equals(next)) {
+    if (current.length < 2 || current[0] !== 0xff || current[1] !== 0xfe || !current.toString("utf16le", 2).startsWith(`' ${marker}\r\n`)) {
+      throw new Error("unowned gateway task launcher already exists; refusing to overwrite it");
+    }
+  }
+}
+
 function stateSummary(journal) {
   const configured = journal.phase === "active";
   return {
@@ -105,6 +142,7 @@ function stateSummary(journal) {
     runtimeObserved: false,
     desktopAccepted: false,
     restartNeeded: configured,
+    gatewayCleanup: journal.gateway?.cleanup || null,
     indeterminateStages: journal.indeterminateStages || [],
     codexHome: journal.paths.codexHome,
     versionDir: journal.paths.versionDir,
@@ -127,14 +165,53 @@ function sameBytes(actual, expected) {
   return Buffer.from(actual).equals(Buffer.from(expected));
 }
 
-async function restoreStartupIfNext(autostart, adapter) {
-  const current = await adapter.get(autostart.file);
-  if (sameBytes(current, Buffer.from(autostart.next, "utf8"))) await adapter.set(autostart.file, autostart.prior);
+function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
+
+async function requireEnvironmentPrior(transaction, adapter) {
+  for (const key of ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2"]) {
+    const current = await adapter.get(key);
+    const expected = transaction.prior[key];
+    if (current?.present !== expected?.present || (current?.present && current.value !== expected.value)) {
+      throw new Error(`environment changed since plan: ${key}`);
+    }
+  }
+}
+
+async function requireFilesPrior(transaction) {
+  for (const item of Object.values(transaction.files)) {
+    const current = await regularOrAbsent(item.path, "managed file");
+    if (item.prior.exists ? current === null || !current.equals(item.prior.bytes) : current !== null) {
+      throw new Error(`file changed since plan: ${item.path}`);
+    }
+  }
+}
+
+async function restoreLauncherIfNext(launcher) {
+  const current = await regularOrAbsent(launcher.path, "gateway task launcher");
+  if (sameBytes(current, launcher.next)) {
+    if (launcher.prior === null) await unlink(launcher.path).catch((error) => { if (error.code !== "ENOENT") throw error; });
+    else await atomicWrite(launcher.path, launcher.prior);
+  } else if (!sameBytes(current, launcher.prior)) {
+    throw new Error("gateway task launcher changed after activation; preserving the later change");
+  }
+}
+
+async function restoreLauncherChecked(launcher) {
+  const current = await regularOrAbsent(launcher.path, "gateway task launcher");
+  if (!sameBytes(current, launcher.next)) throw new Error("gateway task launcher changed since activation; preserving the later change");
+  if (launcher.prior === null) await unlink(launcher.path).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  else await atomicWrite(launcher.path, launcher.prior);
+}
+
+async function taskSnapshotStillMatches(journal, adapter) {
+  const current = await snapshotGatewayTask(journal.gateway.taskPlan, adapter);
+  if (!matchesTaskSnapshot(current, journal.gateway.taskSnapshot)) throw new Error("gateway task changed since prepare");
 }
 
 async function restoreStartupChecked(autostart, adapter) {
   const current = await adapter.get(autostart.file);
-  if (!sameBytes(current, Buffer.from(autostart.next, "utf8"))) throw new Error("autostart file changed since activation; preserving the later change");
+  const expected = autostart.next === null ? null : Buffer.from(autostart.next, "utf8");
+  if (!sameBytes(current, expected)) throw new Error("autostart file changed since activation; preserving the later change");
   await adapter.set(autostart.file, autostart.prior);
 }
 
@@ -146,7 +223,7 @@ export async function prepare(options = {}, dependencies = {}) {
   const { versionDir, codexHome, gatewayDir, startupDir, journalPath, legacyManifestPath, expectedMainModel, expectedMainProvider, expectedRootBaseUrl } = options;
   const smokeCheck = dependencies.smokeCheck ?? (Object.hasOwn(options, "smokeCheck") ? options.smokeCheck : runIsolatedConfigSmoke);
   await requireExplicitPaths({ versionDir, codexHome, gatewayDir, startupDir, journalPath });
-  if (typeof smokeCheck !== "function") throw new Error("a real read-only smoke check is required before gateway startup");
+  if (typeof smokeCheck !== "function") throw new Error("a real read-only config smoke check is required before prepare completes");
   if (typeof expectedMainModel !== "string" || !expectedMainModel) throw new Error("expectedMainModel must be provided explicitly");
   if (!(typeof expectedMainProvider === "string" && expectedMainProvider) && expectedMainProvider !== null) throw new Error("expectedMainProvider must be a provider id or null");
   if (!Object.hasOwn(options, "expectedRootBaseUrl") || (expectedRootBaseUrl !== null && (typeof expectedRootBaseUrl !== "string" || !expectedRootBaseUrl))) {
@@ -155,123 +232,226 @@ export async function prepare(options = {}, dependencies = {}) {
   await verifyRuntimeVersion(versionDir);
   const envAdapter = dependencies.envAdapter || options.envAdapter || createWindowsUserEnvironmentAdapter();
   const autostartAdapter = dependencies.autostartAdapter || options.autostartAdapter || await defaultAutostartAdapter();
+  const taskAdapter = dependencies.taskAdapter || options.taskAdapter || createWindowsTaskSchedulerAdapter();
+  const prepareIdentity = dependencies.prepareGatewayIdentity || options.prepareGatewayIdentity || prepareGatewayIdentity;
+  const gatewayScript = await canonicalGatewayScript({ gatewayScriptPath: options.gatewayScriptPath, pluginRoot: options.pluginRoot });
   const paths = gatewayPaths(gatewayDir);
   const journal = path.resolve(journalPath);
   const startupFile = autostartFile(startupDir);
   if (await regularOrAbsent(journal, "install journal") !== null) throw new Error(`install journal already exists: ${journal}`);
 
-  // Read-only preflight before starting the isolated service.
+  // Prepare only the private identity. The service is started later by the owned Task Scheduler task.
+  const identity = await prepareIdentity({ paths });
+  if (!identity?.token || !Number.isInteger(identity?.port)) throw new Error("identity preparation did not return a valid private gateway identity");
+  const identityBytes = await regularOrAbsent(paths.identity, "gateway identity");
+  const persistedIdentity = identityBytes === null ? null : JSON.parse(identityBytes.toString("utf8"));
+  if (!persistedIdentity?.token || persistedIdentity.token !== identity.token || persistedIdentity.port !== identity.port) throw new Error("gateway identity could not be verified");
+  const baseUrl = `http://127.0.0.1:${identity.port}/${identity.token}/v1`;
   const envPlan = await planEnvironment({ versionDir, currentEnvironment: await snapshotEnvironment(envAdapter) });
   const startupPrior = await snapshotStartup(autostartAdapter, startupFile);
+  if (!isManagedOldStartup(startupPrior)) throw new Error("unowned Startup VBS exists; refusing to remove or replace it");
   let legacyManifest = null;
   if (legacyManifestPath) {
     const manifestBytes = await regularOrAbsent(path.resolve(legacyManifestPath), "legacy install manifest");
     if (manifestBytes === null) throw new Error(`legacy install manifest is missing: ${path.resolve(legacyManifestPath)}`);
     legacyManifest = JSON.parse(manifestBytes.toString("utf8"));
   }
-  const preflightFiles = await planFiles({ codexHome, baseUrl: "http://127.0.0.1:1/v1", versionDir, legacyManifest });
+  const realFiles = await planFiles({ codexHome, baseUrl, versionDir, legacyManifest });
+  const taskPlan = gatewayTaskPlan({ paths, gatewayScriptPath: gatewayScript });
+  const launcherPrior = await regularOrAbsent(taskPlan.launcher.path, "gateway task launcher");
+  const launcherNext = taskLauncherBytes(taskPlan);
+  await requireLauncherSnapshot(taskPlan.launcher.path, launcherPrior, launcherNext, taskPlan.marker);
+  const taskSnapshot = await snapshotGatewayTask(taskPlan, taskAdapter);
+  const previousGatewayState = await readGatewayState(paths);
 
-  let gateway;
+  const fixtureHome = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp(path.join(os.tmpdir(), "native-isolated-smoke-")));
   let smokeEvidence;
   try {
-    gateway = await (dependencies.ensureGateway || options.ensureGateway || ensureGateway)({ paths });
-    const state = gateway?.state;
-    if (!state?.port || !state?.token || !Number.isInteger(state?.pid)) throw new Error("isolated gateway did not return a verified running identity");
-    const baseUrl = `http://127.0.0.1:${state.port}/${state.token}/v1`;
-    const realFiles = await planFiles({ codexHome, baseUrl, versionDir, legacyManifest });
-
-    const fixtureHome = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp(path.join(os.tmpdir(), "native-isolated-smoke-")));
-    try {
-      await mkdir(path.join(fixtureHome, "agents"), { recursive: true });
-      const cacheBytes = await readFile(path.join(codexHome, "models_cache.json"));
-      await writeFile(path.join(fixtureHome, "models_cache.json"), cacheBytes, { flag: "wx", mode: 0o600 });
-      const previousConfig = preflightFiles.files["config.toml"].prior;
-      if (previousConfig.exists) await writeFile(path.join(fixtureHome, "config.toml"), previousConfig.bytes, { flag: "wx", mode: 0o600 });
-      const smokeFiles = await planFiles({ codexHome: fixtureHome, baseUrl, versionDir, legacyManifest });
-      await applyFiles(smokeFiles);
-      const smokeConfigPath = path.join(fixtureHome, "config.toml");
-      const smokeConfig = withTemporaryRootModelCatalog(await readFile(smokeConfigPath, "utf8"), path.join(fixtureHome, "models_cache.json"));
-      await writeFile(smokeConfigPath, smokeConfig, { mode: 0o600 });
-      const smokeResult = await smokeCheck({
-        exePath: realFiles.runtimeExePath,
-        preparedHome: fixtureHome,
-        expectedMainModel,
-        expectedMainProvider,
-        expectedRootBaseUrl,
-      });
-      if (smokeResult?.status !== "passed") throw new Error("isolated config smoke check did not report status=passed");
-      smokeEvidence = { status: "passed", checks: smokeResult.checks ?? {} };
-    } finally {
-      const resolvedFixture = path.resolve(fixtureHome);
-      if (resolvedFixture.startsWith(path.resolve(os.tmpdir()) + path.sep)) await rm(resolvedFixture, { recursive: true, force: true });
-    }
-
-    const journalData = {
-      version: JOURNAL_VERSION,
-      phase: "prepared",
-      paths: { versionDir: path.resolve(versionDir), codexHome: path.resolve(codexHome), gatewayDir: paths.dir, startupDir: path.resolve(startupDir), journalPath: journal },
-      files: realFiles,
-      environment: envPlan,
-      autostart: { file: startupFile, prior: startupPrior, next: autostartScript({ gatewayDir: paths.dir }) },
-      smoke: smokeEvidence,
-      completed: { files: false, environment: false, autostart: false },
-    };
-    await writeJournal(journal, journalData);
-    return { prepared: true, phase: journalData.phase, journalPath: journal, codexHome: path.resolve(codexHome), versionDir: path.resolve(versionDir), gatewayDir: paths.dir };
-  } catch (error) {
-    const cleanupErrors = [];
-    if (gateway?.started === true && gateway.state?.pid && gateway.state?.token) {
-      try {
-        const current = await (dependencies.readGatewayState || options.readGatewayState || readGatewayState)(paths);
-        if (current?.pid === gateway.state.pid && current?.token === gateway.state.token) {
-          await (dependencies.stopGateway || options.stopGateway || stopGateway)({ paths });
-        }
-      } catch (cleanupError) { cleanupErrors.push(cleanupError); }
-    }
-    throw withRecovery(error, cleanupErrors, "prepare failed");
+    await mkdir(path.join(fixtureHome, "agents"), { recursive: true });
+    const cacheBytes = await readFile(path.join(codexHome, "models_cache.json"));
+    await writeFile(path.join(fixtureHome, "models_cache.json"), cacheBytes, { flag: "wx", mode: 0o600 });
+    const previousConfig = realFiles.files["config.toml"].prior;
+    if (previousConfig.exists) await writeFile(path.join(fixtureHome, "config.toml"), previousConfig.bytes, { flag: "wx", mode: 0o600 });
+    const smokeFiles = await planFiles({ codexHome: fixtureHome, baseUrl, versionDir, legacyManifest });
+    await applyFiles(smokeFiles);
+    const smokeConfigPath = path.join(fixtureHome, "config.toml");
+    const smokeConfig = withTemporaryRootModelCatalog(await readFile(smokeConfigPath, "utf8"), path.join(fixtureHome, "models_cache.json"));
+    await writeFile(smokeConfigPath, smokeConfig, { mode: 0o600 });
+    const smokeResult = await smokeCheck({
+      exePath: realFiles.runtimeExePath,
+      preparedHome: fixtureHome,
+      expectedMainModel,
+      expectedMainProvider,
+      expectedRootBaseUrl,
+    });
+    if (smokeResult?.status !== "passed") throw new Error("isolated config smoke check did not report status=passed");
+    smokeEvidence = { status: "passed", checks: smokeResult.checks ?? {} };
+  } finally {
+    const resolvedFixture = path.resolve(fixtureHome);
+    if (resolvedFixture.startsWith(path.resolve(os.tmpdir()) + path.sep)) await rm(resolvedFixture, { recursive: true, force: true });
   }
+
+  const journalData = {
+    version: JOURNAL_VERSION,
+    phase: "prepared",
+    paths: { versionDir: path.resolve(versionDir), codexHome: path.resolve(codexHome), gatewayDir: paths.dir, gatewayScript, startupDir: path.resolve(startupDir), journalPath: journal },
+    files: realFiles,
+    environment: envPlan,
+    autostart: { file: startupFile, prior: startupPrior, next: null },
+    gateway: { taskPlan, taskSnapshot, launcher: { path: taskPlan.launcher.path, prior: launcherPrior, next: launcherNext }, identityFile: paths.identity, identitySha256: sha256(identityBytes), preexistingPid: previousGatewayState?.pid ?? null, startedByTransaction: false, pid: null },
+    smoke: smokeEvidence,
+    completed: { launcher: false, task: false, gateway: false, files: false, environment: false, autostart: false },
+  };
+  await writeJournal(journal, journalData);
+  return { prepared: true, phase: journalData.phase, journalPath: journal, codexHome: path.resolve(codexHome), versionDir: path.resolve(versionDir), gatewayDir: paths.dir };
 }
 
-export async function activate({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), autostartAdapter } = {}, dependencies = {}) {
+async function assertPreparedState(journal, { envAdapter, startup, taskAdapter }) {
+  await verifyRuntimeVersion(journal.paths.versionDir);
+  await requireEnvironmentPrior(journal.environment, envAdapter);
+  if (!sameBytes(await startup.get(journal.autostart.file), journal.autostart.prior)) throw new Error("autostart file changed since prepare");
+  if (!isManagedOldStartup(journal.autostart.prior)) throw new Error("Startup VBS is no longer owned; refusing to remove it");
+  await requireFilesPrior(journal.files);
+  await requireLauncherSnapshot(journal.gateway.launcher.path, journal.gateway.launcher.prior, journal.gateway.launcher.next, journal.gateway.taskPlan.marker);
+  await taskSnapshotStillMatches(journal, taskAdapter);
+  const identityBytes = await regularOrAbsent(journal.gateway.identityFile, "gateway identity");
+  if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) throw new Error("gateway identity changed since prepare");
+}
+
+async function stopTransactionGateway(journal, { paths, readState, readIdentity, health, stop, allowUnrecordedStart = false }) {
+  if (!journal.gateway.startedByTransaction && !allowUnrecordedStart) return false;
+  const identityBytes = await regularOrAbsent(journal.gateway.identityFile, "gateway identity");
+  if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) return false;
+  const identity = await readIdentity(paths);
+  const state = await readState(paths);
+  if (!identity?.token || !state?.token || state.token !== identity.token || state.port !== identity.port) return false;
+  if (journal.gateway.pid && state.pid !== journal.gateway.pid) return false;
+  if (journal.gateway.preexistingPid && state.pid === journal.gateway.preexistingPid) return false;
+  const live = await health(state);
+  if (live?.reachable !== true || live.pid !== state.pid) return false;
+  await stop({ paths });
+  return true;
+}
+
+export async function activate({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), autostartAdapter, taskAdapter } = {}, dependencies = {}) {
   if (typeof journalPath !== "string" || !journalPath) throw new Error("journalPath must be provided explicitly");
   const journal = await readJournal(journalPath);
   if (journal.phase !== "prepared") throw new Error(`cannot activate install transaction in phase ${journal.phase}`);
   const startup = autostartAdapter || await defaultAutostartAdapter();
-  const applied = { files: false, environment: false, autostart: false };
-  let stage = "journal_start";
+  const tasks = taskAdapter || dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
+  const ensure = dependencies.ensureGateway || ensureGateway;
+  const writer = dependencies.writeLauncherAtomic || atomicWrite;
+  const paths = gatewayPaths(journal.paths.gatewayDir);
+  await assertPreparedState(journal, { envAdapter, startup, taskAdapter: tasks });
+
+  const attempted = { launcher: false, task: false, gateway: false, autostart: false, files: false, environment: false };
+  let taskStartInvoked = false;
+  let taskStartAccepted = false;
+  let gatewayVerified = false;
+  journal.attempted = { ...attempted };
   journal.phase = "activating";
   await writeJournal(journalPath, journal);
   try {
-    stage = "files";
-    await applyFiles(journal.files);
-    applied.files = true; journal.completed.files = true; stage = "journal_files"; await writeJournal(journalPath, journal);
-    stage = "environment";
-    const envSnapshot = await applyEnvironment(journal.environment, envAdapter);
-    journal.environmentSnapshot = envSnapshot;
-    applied.environment = true; journal.completed.environment = true; stage = "journal_environment"; await writeJournal(journalPath, journal);
-    stage = "autostart";
-    if (!sameBytes(await startup.get(journal.autostart.file), journal.autostart.prior)) throw new Error("autostart file changed since prepare");
-    try { await startup.set(journal.autostart.file, Buffer.from(journal.autostart.next, "utf8")); }
-    catch (error) {
-      try { await restoreStartupIfNext(journal.autostart, startup); }
-      catch (restoreError) { throw withRecovery(error, [restoreError], "autostart write failed"); }
-      throw error;
+    attempted.launcher = journal.attempted.launcher = true; await writeJournal(journalPath, journal);
+    await writer(journal.gateway.launcher.path, journal.gateway.launcher.next);
+    journal.completed.launcher = true; await writeJournal(journalPath, journal);
+
+    await taskSnapshotStillMatches(journal, tasks);
+    attempted.task = journal.attempted.task = true; await writeJournal(journalPath, journal);
+    await registerOwnedGatewayTask(journal.gateway.taskPlan, tasks);
+    journal.completed.task = true; await writeJournal(journalPath, journal);
+
+    attempted.gateway = journal.attempted.gateway = true; await writeJournal(journalPath, journal);
+    const ownedLauncher = createOwnedGatewayTaskLauncher(journal.gateway.taskPlan, tasks);
+    const launchImpl = async (request) => {
+      taskStartInvoked = true;
+      const result = await ownedLauncher(request);
+      taskStartAccepted = true;
+      return result;
+    };
+    const started = await ensure({ paths, launchImpl });
+    const identity = await readGatewayIdentity(paths);
+    const state = started?.state;
+    if (!state?.token || state.token !== identity?.token || state.port !== identity?.port || !Number.isInteger(state.pid)) {
+      throw new Error("Task Scheduler gateway did not return the prepared healthy identity");
     }
-    applied.autostart = true; journal.completed.autostart = true;
+    const live = await (dependencies.gatewayHealth || gatewayHealth)(state);
+    if (live?.reachable !== true || live.pid !== state.pid) throw new Error("Task Scheduler gateway health PID could not be verified");
+    journal.gateway.startedByTransaction = started.started === true;
+    journal.gateway.pid = started.started === true ? state.pid : null;
+    journal.completed.gateway = true; await writeJournal(journalPath, journal); gatewayVerified = true;
+
+    if (!sameBytes(await startup.get(journal.autostart.file), journal.autostart.prior)) throw new Error("autostart file changed since prepare");
+    attempted.autostart = journal.attempted.autostart = true; await writeJournal(journalPath, journal);
+    await startup.set(journal.autostart.file, null);
+    journal.completed.autostart = true; await writeJournal(journalPath, journal);
+
+    attempted.files = journal.attempted.files = true; await writeJournal(journalPath, journal);
+    await applyFiles(journal.files);
+    journal.completed.files = true; await writeJournal(journalPath, journal);
+
+    attempted.environment = journal.attempted.environment = true; await writeJournal(journalPath, journal);
+    journal.environmentSnapshot = await applyEnvironment(journal.environment, envAdapter);
+    journal.completed.environment = true; await writeJournal(journalPath, journal);
+
     journal.phase = "active";
-    stage = "journal_active";
     await writeJournal(journalPath, journal);
     return stateSummary(journal);
   } catch (error) {
     const recoveryErrors = [];
     const indeterminate = [];
-    if (["files", "environment", "autostart"].includes(stage) && error instanceof AggregateError) {
-      journal.completed[stage] = null;
-      indeterminate.push(stage);
+    if (attempted.gateway) {
+      try {
+        const stopped = await stopTransactionGateway(journal, {
+          paths, readState: dependencies.readGatewayState || readGatewayState,
+          readIdentity: dependencies.readGatewayIdentity || readGatewayIdentity,
+          health: dependencies.gatewayHealth || gatewayHealth,
+          stop: dependencies.stopGateway || stopGateway,
+          allowUnrecordedStart: taskStartInvoked,
+        });
+        if (stopped) journal.completed.gateway = false;
+        else if (taskStartAccepted && !gatewayVerified) {
+          let observed;
+          try { observed = await (dependencies.readGatewayState || readGatewayState)(paths); } catch { observed = null; }
+          if (!journal.gateway.preexistingPid || observed?.pid !== journal.gateway.preexistingPid) {
+            const recoveryError = new Error("Task Scheduler launch was invoked but the isolated gateway could not be proven stopped or unchanged");
+            recoveryErrors.push(recoveryError); indeterminate.push("gateway"); journal.completed.gateway = null;
+          }
+        }
+      } catch (item) { recoveryErrors.push(item); indeterminate.push("gateway"); journal.completed.gateway = null; }
     }
-    if (applied.autostart) try { await restoreStartupIfNext(journal.autostart, startup); journal.completed.autostart = false; } catch (item) { recoveryErrors.push(item); }
-    if (applied.environment) try { await rollbackEnvironment(journal.environmentSnapshot, envAdapter); journal.completed.environment = false; } catch (item) { journal.completed.environment = null; indeterminate.push("environment"); recoveryErrors.push(item); }
-    if (applied.files) try { await rollbackFiles(journal.files); journal.completed.files = false; } catch (item) { journal.completed.files = null; indeterminate.push("files"); recoveryErrors.push(item); }
+    if (attempted.environment && journal.environmentSnapshot) {
+      try { await rollbackEnvironment(journal.environmentSnapshot, envAdapter); journal.completed.environment = false; }
+      catch (item) { recoveryErrors.push(item); indeterminate.push("environment"); journal.completed.environment = null; }
+    } else if (attempted.environment && error instanceof AggregateError) {
+      recoveryErrors.push(error); indeterminate.push("environment"); journal.completed.environment = null;
+    }
+    if (attempted.files) {
+      try {
+        const allPrior = await Promise.all(Object.values(journal.files.files).map(async (item) => {
+          const current = await regularOrAbsent(item.path, "managed file");
+          return item.prior.exists ? current !== null && current.equals(item.prior.bytes) : current === null;
+        }));
+        if (allPrior.every(Boolean)) journal.completed.files = false;
+        else { await rollbackFiles(journal.files); journal.completed.files = false; }
+      } catch (item) { recoveryErrors.push(item); indeterminate.push("files"); journal.completed.files = null; }
+    }
+    if (attempted.autostart) {
+      try {
+        const current = await startup.get(journal.autostart.file);
+        if (current === null) await startup.set(journal.autostart.file, journal.autostart.prior);
+        else if (!sameBytes(current, journal.autostart.prior)) throw new Error("Startup VBS changed after activation; preserving the later change");
+        journal.completed.autostart = false;
+      } catch (item) { recoveryErrors.push(item); indeterminate.push("autostart"); journal.completed.autostart = null; }
+    }
+    if (attempted.task && !indeterminate.includes("gateway")) {
+      try { await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks); journal.completed.task = false; }
+      catch (item) { recoveryErrors.push(item); indeterminate.push("task"); journal.completed.task = null; }
+    }
+    if (attempted.launcher && !indeterminate.includes("gateway")) {
+      try { await restoreLauncherIfNext(journal.gateway.launcher); journal.completed.launcher = false; }
+      catch (item) { recoveryErrors.push(item); indeterminate.push("launcher"); journal.completed.launcher = null; }
+    }
     journal.indeterminateStages = [...new Set(indeterminate)];
     journal.phase = recoveryErrors.length || indeterminate.length ? "activation_recovery_failed" : "activation_failed";
     journal.recoveryErrors = recoveryErrors.map((item) => item.message);
@@ -280,14 +460,20 @@ export async function activate({ journalPath, envAdapter = createWindowsUserEnvi
   }
 }
 
-export async function rollback({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), autostartAdapter } = {}) {
+export async function rollback({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), autostartAdapter, taskAdapter } = {}, dependencies = {}) {
   if (typeof journalPath !== "string" || !journalPath) throw new Error("journalPath must be provided explicitly");
   const journal = await readJournal(journalPath);
   if (journal.indeterminateStages?.length) throw new Error(`transaction has indeterminate stages requiring manual recovery: ${journal.indeterminateStages.join(", ")}`);
-  if (!journal.completed?.files && !journal.completed?.environment && !journal.completed?.autostart) throw new Error(`nothing to roll back in phase ${journal.phase}`);
+  if (!Object.values(journal.completed || {}).some(Boolean)) throw new Error(`nothing to roll back in phase ${journal.phase}`);
   const startup = autostartAdapter || await defaultAutostartAdapter();
+  const tasks = taskAdapter || dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
   // Check all owned state before mutating any of it.
-  if (journal.completed.autostart && !sameBytes(await startup.get(journal.autostart.file), Buffer.from(journal.autostart.next, "utf8"))) throw new Error("autostart file changed since activation; preserving the later change");
+  if (journal.completed.autostart && !sameBytes(await startup.get(journal.autostart.file), journal.autostart.next === null ? null : Buffer.from(journal.autostart.next, "utf8"))) throw new Error("autostart file changed since activation; preserving the later change");
+  if (journal.completed.launcher && !sameBytes(await regularOrAbsent(journal.gateway.launcher.path, "gateway task launcher"), journal.gateway.launcher.next)) throw new Error("gateway task launcher changed since activation; preserving the later change");
+  if (journal.completed.task) {
+    const currentTask = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
+    if (!currentTask.exists || !currentTask.owned || currentTask.specMatches !== true || !currentTask.enabled) throw new Error("gateway task changed since activation; preserving the later change");
+  }
   if (journal.completed.environment) {
     for (const key of ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2"]) {
       const current = await envAdapter.get(key);
@@ -302,12 +488,29 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
     }
   }
 
+  const paths = gatewayPaths(journal.paths.gatewayDir);
+  if (journal.completed.gateway && journal.gateway.startedByTransaction) {
+    const identityBytes = await regularOrAbsent(journal.gateway.identityFile, "gateway identity");
+    if (identityBytes !== null && sha256(identityBytes) === journal.gateway.identitySha256) {
+      const [identity, state] = await Promise.all([(dependencies.readGatewayIdentity || readGatewayIdentity)(paths), (dependencies.readGatewayState || readGatewayState)(paths)]);
+      if (state?.pid === journal.gateway.pid && state.token === identity?.token && state.port === identity?.port) {
+        const live = await (dependencies.gatewayHealth || gatewayHealth)(state);
+        if (live.reachable && live.pid === state.pid) journal.gateway.cleanupEligible = true;
+      }
+    }
+  }
+
   const errors = [];
   journal.phase = "rolling_back"; await writeJournal(journalPath, journal);
   const indeterminate = [];
-  if (journal.completed.autostart) try { await restoreStartupChecked(journal.autostart, startup); journal.completed.autostart = false; } catch (error) { journal.completed.autostart = null; indeterminate.push("autostart"); errors.push(error); }
+  if (journal.gateway.cleanupEligible) try {
+    await (dependencies.stopGateway || stopGateway)({ paths }); journal.gateway.startedByTransaction = false; journal.completed.gateway = false; journal.gateway.cleanup = "stopped";
+  } catch (error) { journal.gateway.cleanup = "failed"; errors.push(error); }
   if (journal.completed.environment) try { await rollbackEnvironment(journal.environmentSnapshot, envAdapter); journal.completed.environment = false; } catch (error) { journal.completed.environment = null; indeterminate.push("environment"); errors.push(error); }
   if (journal.completed.files) try { await rollbackFiles(journal.files); journal.completed.files = false; } catch (error) { journal.completed.files = null; indeterminate.push("files"); errors.push(error); }
+  if (journal.completed.autostart) try { await restoreStartupChecked(journal.autostart, startup); journal.completed.autostart = false; } catch (error) { journal.completed.autostart = null; indeterminate.push("autostart"); errors.push(error); }
+  if (journal.completed.task) try { await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks); journal.completed.task = false; } catch (error) { journal.completed.task = null; indeterminate.push("task"); errors.push(error); }
+  if (journal.completed.launcher) try { await restoreLauncherChecked(journal.gateway.launcher); journal.completed.launcher = false; } catch (error) { journal.completed.launcher = null; indeterminate.push("launcher"); errors.push(error); }
   journal.indeterminateStages = [...new Set([...(journal.indeterminateStages || []), ...indeterminate])];
   journal.phase = errors.length ? "rollback_failed" : "rolled_back";
   journal.recoveryErrors = errors.map((item) => item.message);
@@ -321,6 +524,58 @@ export async function status({ journalPath } = {}) {
   return stateSummary(await readJournal(journalPath));
 }
 
+// Called only at native DeepSeek dispatch time. It never registers a task or
+// falls back to a child process; a missing/inactive install fails closed.
+export async function ensureNativeDeepseekDispatch({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), taskAdapter } = {}, dependencies = {}) {
+  if (typeof journalPath !== "string" || !journalPath) throw new Error("an installed isolation journal path is required for native DeepSeek dispatch");
+  const journal = await readJournal(journalPath);
+  if (journal.phase !== "active" || Object.values(journal.completed || {}).some((value) => value !== true)) {
+    throw new Error("isolated native DeepSeek gateway is not fully activated");
+  }
+  await verifyRuntimeVersion(journal.paths.versionDir);
+  for (const key of ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2"]) {
+    const current = await envAdapter.get(key);
+    const expected = journal.environment.next[key];
+    if (current?.present !== expected?.present || (current?.present && current.value !== expected.value)) {
+      throw new Error(`isolated native DeepSeek environment changed: ${key}`);
+    }
+  }
+  const identityBytes = await regularOrAbsent(journal.gateway.identityFile, "gateway identity");
+  if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) throw new Error("isolated gateway identity changed after activation");
+  const identityPlan = JSON.parse(identityBytes.toString("utf8"));
+  const expectedBaseUrl = `http://127.0.0.1:${identityPlan.port}/${identityPlan.token}/v1`;
+  const configItem = Object.values(journal.files.files).find((item) => path.basename(item.path).toLowerCase() === "config.toml");
+  if (!configItem) throw new Error("isolated configuration journal has no config.toml entry");
+  const currentConfigBytes = await regularOrAbsent(configItem.path, "Codex config");
+  if (currentConfigBytes === null) throw new Error("isolated Codex config is missing");
+  const currentConfig = currentConfigBytes.toString("utf8");
+  const expectedRolePath = path.join(journal.paths.codexHome, "agents", "native_deepseek.toml");
+  if (composeIsolatedConfig(currentConfig, { baseUrl: expectedBaseUrl, agentConfigPath: expectedRolePath }) !== currentConfig) {
+    throw new Error("isolated DeepSeek provider or role block changed after activation");
+  }
+  for (const item of Object.values(journal.files.files).filter((entry) => entry !== configItem)) {
+    const current = await regularOrAbsent(item.path, "managed file");
+    if (!current || !current.equals(Buffer.from(item.next, "utf8"))) throw new Error("isolated native DeepSeek configuration changed after activation");
+  }
+  const launcher = await regularOrAbsent(journal.gateway.launcher.path, "gateway task launcher");
+  if (!sameBytes(launcher, journal.gateway.launcher.next)) throw new Error("isolated gateway task launcher is missing or changed");
+  const tasks = taskAdapter || dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
+  const task = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
+  if (!task.exists || !task.owned || task.specMatches !== true || !task.enabled) throw new Error("isolated gateway Task Scheduler task is missing, changed, or disabled");
+  const paths = gatewayPaths(journal.paths.gatewayDir);
+  const launchImpl = createOwnedGatewayTaskLauncher(journal.gateway.taskPlan, tasks);
+  const gateway = dependencies.gatewayAdapter || dependencies;
+  const ensured = await (gateway.ensureGateway || ensureGateway)({ paths, launchImpl });
+  const identity = await (gateway.readGatewayIdentity || readGatewayIdentity)(paths);
+  const state = ensured?.state;
+  if (!state?.token || state.token !== identity?.token || state.port !== identity?.port || !Number.isInteger(state.pid)) {
+    throw new Error("isolated gateway health state does not match its private identity");
+  }
+  const live = await (gateway.gatewayHealth || gatewayHealth)(state);
+  if (live?.reachable !== true || live.pid !== state.pid) throw new Error("isolated gateway is not healthy for native DeepSeek dispatch");
+  return { ready: true, taskName: journal.gateway.taskPlan.name, gatewayDir: paths.dir, pid: state.pid };
+}
+
 async function main(argv) {
   const command = argv[0];
   const value = (name) => { const at = argv.indexOf(`--${name}`); return at < 0 ? undefined : argv[at + 1]; };
@@ -330,10 +585,10 @@ async function main(argv) {
   else if (command === "activate") process.stdout.write(`${JSON.stringify(await activate({ journalPath }))}\n`);
   else if (command === "rollback") process.stdout.write(`${JSON.stringify(await rollback({ journalPath }))}\n`);
   else if (command === "prepare") {
-    const options = Object.fromEntries(["version-dir", "codex-home", "gateway-dir", "startup-dir", "journal-path", "legacy-manifest-path", "expected-main-model", "expected-main-provider", "expected-root-base-url"].map((name) => [name, value(name)]).filter(([, item]) => item !== undefined));
+    const options = Object.fromEntries(["version-dir", "codex-home", "gateway-dir", "gateway-script", "plugin-root", "startup-dir", "journal-path", "legacy-manifest-path", "expected-main-model", "expected-main-provider", "expected-root-base-url"].map((name) => [name, value(name)]).filter(([, item]) => item !== undefined));
     const nullable = (item) => item === "null" ? null : item;
-    process.stdout.write(`${JSON.stringify(await prepare({ versionDir: options["version-dir"], codexHome: options["codex-home"], gatewayDir: options["gateway-dir"], startupDir: options["startup-dir"], journalPath: options["journal-path"], legacyManifestPath: options["legacy-manifest-path"], expectedMainModel: options["expected-main-model"], expectedMainProvider: nullable(options["expected-main-provider"]), expectedRootBaseUrl: nullable(options["expected-root-base-url"]) }))}\n`);
-  } else throw new Error("usage: native-isolated-install.mjs <prepare|activate|rollback|status> --journal-path PATH [--version-dir PATH --codex-home PATH --gateway-dir PATH --startup-dir PATH --expected-main-model SLUG --expected-main-provider ID|null --expected-root-base-url URL|null]");
+    process.stdout.write(`${JSON.stringify(await prepare({ versionDir: options["version-dir"], codexHome: options["codex-home"], gatewayDir: options["gateway-dir"], gatewayScriptPath: options["gateway-script"], pluginRoot: options["plugin-root"], startupDir: options["startup-dir"], journalPath: options["journal-path"], legacyManifestPath: options["legacy-manifest-path"], expectedMainModel: options["expected-main-model"], expectedMainProvider: nullable(options["expected-main-provider"]), expectedRootBaseUrl: nullable(options["expected-root-base-url"]) }))}\n`);
+  } else throw new Error("usage: native-isolated-install.mjs <prepare|activate|rollback|status> --journal-path PATH [--version-dir PATH --codex-home PATH --gateway-dir PATH --gateway-script PATH|--plugin-root PATH --startup-dir PATH --expected-main-model SLUG --expected-main-provider ID|null --expected-root-base-url URL|null]");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

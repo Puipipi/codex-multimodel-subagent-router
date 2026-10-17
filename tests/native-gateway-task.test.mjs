@@ -1,0 +1,116 @@
+import assert from "node:assert/strict";
+
+const lifecycle = await import("../scripts/native-gateway-task.mjs").catch(() => null);
+assert.ok(lifecycle, "gateway Task Scheduler lifecycle module is available");
+
+let checks = 0;
+const equal = (actual, expected, message) => { assert.equal(actual, expected, message); checks += 1; };
+const ok = (value, message) => { assert.ok(value, message); checks += 1; };
+const rejects = async (operation, pattern, message) => {
+  await assert.rejects(operation, pattern, message);
+  checks += 1;
+};
+
+const { gatewayTaskPlan, registerOwnedGatewayTask, startOwnedGatewayTask, statusOwnedGatewayTask, unregisterOwnedGatewayTask, snapshotGatewayTask, installOwnedGatewayTask, restoreGatewayTask, windowsTaskSchedulerScript, createWindowsTaskSchedulerAdapter } = lifecycle;
+const paths = {
+  dir: "C:\\Users\\Test User\\AppData\\Local\\Router\\native gateway",
+  state: "C:\\Users\\Test User\\AppData\\Local\\Router\\native gateway\\gateway.json",
+  identity: "C:\\Users\\Test User\\AppData\\Local\\Router\\native gateway\\identity.json",
+  log: "C:\\Users\\Test User\\AppData\\Local\\Router\\native gateway\\gateway.log",
+};
+const plan = gatewayTaskPlan({
+  paths,
+  nodePath: "C:\\Program Files\\nodejs\\node.exe",
+  wscriptPath: "C:\\Windows\\System32\\wscript.exe",
+  gatewayScriptPath: "C:\\Plugin\\scripts\\native-gateway.mjs",
+});
+
+ok(plan.name.startsWith("SolLunaNativeGateway-"), "task name is namespaced");
+equal(plan.name, gatewayTaskPlan({ paths: { ...paths } }).name, "task name is stable for the gateway directory");
+ok(plan.marker.includes(plan.name.slice("SolLunaNativeGateway-".length)), "ownership marker is bound to the directory hash");
+ok(plan.launcher.content.includes(", 0, True)"), "launcher hides Node and synchronously waits for its full lifetime");
+ok(plan.launcher.content.includes("native-gateway.mjs") && plan.launcher.content.includes("--serve"), "launcher runs the formal native gateway server entry point");
+ok(plan.launcher.content.includes("gateway.json") && plan.launcher.content.includes("identity.json") && plan.launcher.content.includes("gateway.log"), "launcher passes only gateway paths to the server");
+ok(plan.launcher.content.includes('""C:\\Program Files\\nodejs\\node.exe""'), "launcher escapes Windows paths with spaces and quotes");
+ok(!/api[_-]?key|token|secret|password/i.test(plan.launcher.content), "launcher contains no credential fields");
+ok(windowsTaskSchedulerScript.includes("[Console]::InputEncoding") && windowsTaskSchedulerScript.includes("[Console]::OutputEncoding"), "PowerShell adapter sets UTF-8 stdin and stdout");
+ok(windowsTaskSchedulerScript.includes("IgnoreNew") && windowsTaskSchedulerScript.includes("TimeSpan]::Zero") && windowsTaskSchedulerScript.includes("Interactive"), "task definition is single-instance, interactive, and has no execution limit");
+ok(windowsTaskSchedulerScript.includes("AllowDemandStart") && windowsTaskSchedulerScript.includes("Hidden"), "task allows on-demand startup and hides task UI entry");
+ok(windowsTaskSchedulerScript.includes("$task.Settings.MultipleInstances") && windowsTaskSchedulerScript.includes("XmlConvert]::ToTimeSpan"), "ownership status validates concurrency policy and the no-limit duration");
+ok(windowsTaskSchedulerScript.includes("$taskPrincipalSid -ceq $expectedSid") && windowsTaskSchedulerScript.includes("Principal.LogonType") && windowsTaskSchedulerScript.includes("Principal.RunLevel"), "ownership status validates current-user interactive limited principal");
+ok(windowsTaskSchedulerScript.includes("lastTaskResult = [long]$info.LastTaskResult"), "status preserves unsigned scheduler result codes without Int32 overflow");
+ok(windowsTaskSchedulerScript.includes("TASK_SCHEDULER_ACCESS_DENIED") && windowsTaskSchedulerScript.includes("TASK_SCHEDULER_OPERATION_FAILED"), "PowerShell failures produce minimal structured error codes");
+
+let scheduler = { exists: false, owned: false, state: "missing", lastTaskResult: null };
+const calls = [];
+const adapter = {
+  async status(receivedPlan) { calls.push(["status", receivedPlan.name]); return { ...scheduler }; },
+  async register(receivedPlan) { calls.push(["register", receivedPlan.name]); scheduler = { exists: true, owned: true, specMatches: true, enabled: true, state: "Ready", lastTaskResult: 0 }; return { ...scheduler }; },
+  async start(receivedPlan) { calls.push(["start", receivedPlan.name]); if (!scheduler.exists || !scheduler.owned) throw new Error("owned task required"); scheduler.state = "Running"; return { started: true }; },
+  async unregister(receivedPlan) { calls.push(["unregister", receivedPlan.name]); if (!scheduler.exists || !scheduler.owned) throw new Error("owned task required"); scheduler = { exists: false, owned: false, state: "missing", lastTaskResult: null }; return { removed: true }; },
+};
+
+await rejects(() => startOwnedGatewayTask(plan, adapter), /not registered/i, "start refuses to register a missing task implicitly");
+await registerOwnedGatewayTask(plan, adapter);
+equal((await statusOwnedGatewayTask(plan, adapter)).owned, true, "status reports the exact owned task");
+equal((await startOwnedGatewayTask(plan, adapter)).started, true, "start runs the registered task");
+equal(calls.filter(([name]) => name === "register").length, 1, "on-demand start never silently registers the task");
+equal((await unregisterOwnedGatewayTask(plan, adapter)).removed, true, "unregister removes the owned task");
+
+const absentSnapshot = await snapshotGatewayTask(plan, adapter);
+equal(absentSnapshot.priorExists, false, "snapshot records that no same-name task existed");
+equal(absentSnapshot.planFingerprint.length, 64, "snapshot is bound to the full task plan fingerprint");
+const installSnapshot = await installOwnedGatewayTask(plan, adapter);
+equal(installSnapshot.priorExists, false, "install returns a prior-state snapshot before registration");
+equal(scheduler.owned, true, "install registers and verifies only the owned task");
+equal((await restoreGatewayTask(installSnapshot, plan, adapter)).removed, true, "restore removes the task created by this transaction");
+equal(scheduler.exists, false, "restore leaves the task absent when it was absent before");
+
+await registerOwnedGatewayTask(plan, adapter);
+const ownedSnapshot = await snapshotGatewayTask(plan, adapter);
+equal(ownedSnapshot.priorOwned, true, "snapshot marks a pre-existing exact owned task");
+equal((await restoreGatewayTask(ownedSnapshot, plan, adapter)).preserved, true, "restore preserves a task that already existed in the snapshot");
+scheduler.specMatches = false;
+await rejects(() => restoreGatewayTask(ownedSnapshot, plan, adapter), /specification changed/i, "restore refuses to overwrite a previously owned task after scheduler settings drift");
+scheduler.specMatches = true;
+const changedPlan = gatewayTaskPlan({ ...{ paths }, nodePath: "C:\\Other\\node.exe", wscriptPath: "C:\\Windows\\System32\\wscript.exe", gatewayScriptPath: "C:\\Plugin\\scripts\\native-gateway.mjs" });
+await rejects(() => restoreGatewayTask(ownedSnapshot, changedPlan, adapter), /snapshot does not match/i, "restore rejects snapshots from a different executable plan");
+await unregisterOwnedGatewayTask(plan, adapter);
+
+scheduler = { exists: true, owned: false, enabled: true, state: "Ready", lastTaskResult: 0 };
+await rejects(() => registerOwnedGatewayTask(plan, adapter), /ownership conflict/i, "registration refuses a same-name unowned task");
+await rejects(() => startOwnedGatewayTask(plan, adapter), /ownership conflict/i, "start refuses a same-name unowned task");
+await rejects(() => unregisterOwnedGatewayTask(plan, adapter), /ownership conflict/i, "unregister never deletes a same-name unowned task");
+
+scheduler = { exists: true, owned: true, specMatches: false, enabled: true, state: "Ready", lastTaskResult: 0 };
+equal((await statusOwnedGatewayTask(plan, adapter)).specMatches, false, "status reports an owned task whose scheduler settings drifted");
+await rejects(() => registerOwnedGatewayTask(plan, adapter), /specification changed/i, "registration refuses an owned task with changed scheduler settings");
+await rejects(() => startOwnedGatewayTask(plan, adapter), /specification changed/i, "dispatch refuses an owned task with changed scheduler settings");
+await rejects(() => unregisterOwnedGatewayTask(plan, adapter), /specification changed/i, "unregister refuses an owned task with changed scheduler settings");
+scheduler = { exists: false, owned: false, state: "missing", lastTaskResult: null };
+
+let invocation;
+const fakeRunner = (exe, args, options) => {
+  invocation = { exe, args, options };
+  return { status: 0, stdout: JSON.stringify({ exists: true, owned: true, specMatches: true, state: "Ready", lastTaskResult: 0 }), stderr: "" };
+};
+const windowsAdapter = createWindowsTaskSchedulerAdapter({ runner: fakeRunner, powershellPath: "powershell.exe" });
+equal((await windowsAdapter.status(plan)).owned, true, "Windows adapter parses only the minimal task status");
+equal(invocation.exe, "powershell.exe", "adapter uses the injected PowerShell executable");
+ok(invocation.args.includes("-EncodedCommand"), "PowerShell receives the static script as UTF-16LE encoded command");
+const encodedScript = invocation.args[invocation.args.indexOf("-EncodedCommand") + 1];
+equal(Buffer.from(encodedScript, "base64").toString("utf16le"), windowsTaskSchedulerScript, "encoded PowerShell script is the exact static script");
+ok(windowsTaskSchedulerScript.includes("[Console]::In.ReadToEnd() | ConvertFrom-Json"), "request JSON remains on stdin, separate from the static command");
+equal(JSON.parse(invocation.options.input).operation, "status", "operation data is delivered as JSON stdin");
+equal(invocation.options.windowsHide, true, "PowerShell is started without a window");
+equal(invocation.options.timeout, 10_000, "PowerShell calls have a bounded timeout");
+ok(!JSON.stringify(invocation).includes("token"), "adapter call output contains no gateway capability");
+
+const deniedAdapter = createWindowsTaskSchedulerAdapter({
+  runner: () => ({ status: 1, stdout: JSON.stringify({ errorCode: "TASK_SCHEDULER_ACCESS_DENIED", errorCategory: "PermissionDenied" }), stderr: "secret stdout must not leak" }),
+});
+await rejects(() => deniedAdapter.status(plan), /TASK_SCHEDULER_ACCESS_DENIED/, "adapter reports a structured sanitized Windows access-denied code");
+await assert.rejects(() => deniedAdapter.status(plan), (error) => error.code === "TASK_SCHEDULER_ACCESS_DENIED");
+checks += 1;
+
+console.log(`PASS ${checks} native gateway task assertions`);

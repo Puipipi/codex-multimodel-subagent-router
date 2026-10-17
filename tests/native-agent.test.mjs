@@ -82,12 +82,9 @@ try {
   equal(lunaCli.status, 0, "Luna CLI reads the actual CODEX_HOME cache by default");
   equal(JSON.parse(lunaCli.stdout).model, "gpt-6-luna", "Luna CLI resolves the real catalog model");
   const dsCli = runCli(["--executor", "deepseek"], { CODEX_HOME: emptyHome });
-  equal(dsCli.status, 0, "DeepSeek CLI resolves without any models cache");
-  const dsSpawn = JSON.parse(dsCli.stdout);
-  equal(dsSpawn.agent_type, "native_deepseek", "DeepSeek CLI returns the dedicated native role");
-  equal(dsSpawn.model, undefined, "DeepSeek CLI omits an explicit model override");
-  equal(Object.hasOwn(dsSpawn, "model"), false, "DeepSeek CLI JSON omits model entirely");
-  equal(dsSpawn.resolved_model, "deepseek/deepseek-flash", "DeepSeek CLI exposes fixed role model informationally");
+  equal(dsCli.status, 2, "DeepSeek CLI fails closed without an activated isolated install journal");
+  assert.match(dsCli.stderr, /--install-journal is required/);
+  checks += 1;
   const missing = runCli(["--executor", "luna", "--main-model", "gpt-6.1-sol"], { CODEX_HOME: emptyHome });
   equal(missing.status, 2, "Luna CLI fails closed when the default cache is missing");
   assert.match(missing.stderr, /models_cache\.json is missing/);

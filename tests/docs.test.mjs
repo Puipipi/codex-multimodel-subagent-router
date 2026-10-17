@@ -68,6 +68,9 @@ assert.match(skill, /omit `model`/i, 'SKILL.md must not send an explicit DeepSee
 assert.match(skill, /current `CODEX_HOME\/models_cache\.json`/, 'SKILL.md must resolve Luna from the live catalog');
 assert.doesNotMatch(skill, /shared-root gateway path is the formal|root `openai_base_url`[^\n]*formal route/i, 'SKILL.md must not use shared root routing as the formal path');
 assert.match(skill, /native-isolated-install\.mjs/);
+assert.match(skill, /--install-journal/);
+assert.match(skill, /before each DeepSeek `followup_task`/);
+assert.match(skill, /does not create native Codex child sessions/);
 for (const command of ['prepare', 'activate', 'rollback', 'status']) assert.match(skill, new RegExp(`\\b${command}\\b`), `SKILL.md must list installer command ${command}`);
 assert.match(skill, /ordinary task routing.*never run them/i, 'SKILL.md must keep ordinary routing separate from setup');
 assert.match(skill, /explicitly asks to set up or activate.*authorizes.*without another approval prompt/i, 'SKILL.md must avoid redundant approval for an explicitly requested setup');

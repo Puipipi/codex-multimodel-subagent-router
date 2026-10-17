@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PICKER_SLUG } from "./native-routing.mjs";
+import { ensureNativeDeepseekDispatch } from "./native-isolated-install.mjs";
 
 const LUNA_MAP = {
   "gpt-6.1-sol": "gpt-6-luna",
@@ -44,7 +45,7 @@ export function resolveNativeAgent({ executor, mainModel, models = [] }) {
   };
 }
 
-function main(argv) {
+async function main(argv) {
   const get = (name, fallback) => {
     const at = argv.indexOf(`--${name}`);
     return at >= 0 ? argv[at + 1] : fallback;
@@ -52,6 +53,9 @@ function main(argv) {
   const executor = get("executor");
   const mainModel = get("main-model");
   if (executor === "deepseek") {
+    const journalPath = get("install-journal");
+    if (!journalPath) throw new Error("--install-journal is required for native DeepSeek dispatch; activate the isolated installer first");
+    await ensureNativeDeepseekDispatch({ journalPath });
     process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel, models: [] }))}\n`);
     return;
   }
@@ -64,5 +68,5 @@ function main(argv) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { main(process.argv.slice(2)); } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 2; }
+  main(process.argv.slice(2)).catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 2; });
 }

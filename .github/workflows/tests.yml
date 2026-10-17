@@ -64,6 +64,7 @@ jobs:
             'native-install',
             'native-manager',
             'native-autostart',
+            'native-gateway-task',
             'normalize-cargo-workspace-lock'
           )
           foreach ($name in $tests) {
