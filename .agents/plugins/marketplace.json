@@ -1,0 +1,20 @@
+{
+  "name": "sol-luna",
+  "interface": {
+    "displayName": "Sol Luna"
+  },
+  "plugins": [
+    {
+      "name": "sol-luna-deepseek-router",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

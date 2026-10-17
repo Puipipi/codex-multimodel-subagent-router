@@ -61,9 +61,20 @@ function stateRoot(stateDir) {
   return path.join(base, 'sol-luna-deepseek-router', 'session-overrides');
 }
 
+const writeQueues = new Map();
+
 function stateFile(sessionId, stateDir) {
   const digest = createHash('sha256').update(sessionId).digest('hex');
   return path.join(stateRoot(stateDir), `${digest}.json`);
+}
+
+function queueWrite(file, operation) {
+  const previous = writeQueues.get(file) || Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  writeQueues.set(file, current);
+  return current.finally(() => {
+    if (writeQueues.get(file) === current) writeQueues.delete(file);
+  });
 }
 
 async function readOverride(sessionId, stateDir) {
@@ -84,18 +95,32 @@ async function readOverride(sessionId, stateDir) {
 async function writeOverride(sessionId, executor, stateDir) {
   if (!sessionId) throw new Error('--session is required to save a session override');
   const file = stateFile(sessionId, stateDir);
-  await mkdir(path.dirname(file), { recursive: true });
-  if (executor === null) {
-    await rm(file, { force: true });
-    return;
-  }
-  const temp = `${file}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temp, `${JSON.stringify({ executor, updatedAt: new Date().toISOString() })}\n`, { encoding: 'utf8', mode: 0o600 });
-    await rename(temp, file);
-  } finally {
-    await rm(temp, { force: true });
-  }
+  return queueWrite(file, async () => {
+    await mkdir(path.dirname(file), { recursive: true });
+    if (executor === null) {
+      await rm(file, { force: true });
+      return;
+    }
+    const temp = `${file}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify({ executor, updatedAt: new Date().toISOString() })}\n`, { encoding: 'utf8', mode: 0o600 });
+      // Windows can transiently reject replacement while another process is
+      // renaming into the same destination. Retry the atomic replacement
+      // instead of surfacing a spurious CLI failure or leaving partial state.
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await rename(temp, file);
+          break;
+        } catch (error) {
+          if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 8) throw error;
+          const jitter = Math.floor(Math.random() * 7);
+          await new Promise(resolve => setTimeout(resolve, 5 * (2 ** attempt) + jitter));
+        }
+      }
+    } finally {
+      await rm(temp, { force: true });
+    }
+  });
 }
 
 export async function decideRoute({

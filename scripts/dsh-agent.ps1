@@ -15,11 +15,48 @@ if ($Action -in @('wait', 'result', 'followup', 'show', 'interrupt') -and $Argum
     $i = 1
 }
 while ($i -lt $Arguments.Count) {
-    $key = $Arguments[$i]
-    if (-not $key.StartsWith('--') -or $key.Length -lt 3) { throw "Expected --option, got: $key" }
+    $raw = $Arguments[$i]
+    if (-not $raw.StartsWith('--') -or $raw.Length -lt 3) { throw "Expected --option, got: $raw" }
+    $inline = $false
+    $inlineValue = $null
+    $equals = $raw.IndexOf('=')
+    if ($equals -ge 0) {
+        $key = $raw.Substring(0, $equals)
+        $inlineValue = $raw.Substring($equals + 1)
+        $inline = $true
+    } else {
+        $key = $raw
+    }
     $name = $key.Substring(2).Replace('-', '_')
-    if (($i + 1) -ge $Arguments.Count -or $Arguments[$i + 1].StartsWith('--')) { $values[$name] = $true; $i++ }
-    else { $values[$name] = $Arguments[$i + 1]; $i += 2 }
+    if ($name -notmatch '^[A-Za-z][A-Za-z0-9_]*$') { throw "Invalid option name: $key" }
+    if ($name -eq 'legacy') {
+        if ($inline) { $values[$name] = $inlineValue; $i++ }
+        elseif (($i + 1) -lt $Arguments.Count -and -not $Arguments[$i + 1].StartsWith('--')) { $values[$name] = $Arguments[$i + 1]; $i += 2 }
+        else { $values[$name] = $true; $i++ }
+    } elseif ($inline) {
+        $values[$name] = $inlineValue
+        $i++
+    } elseif (($i + 1) -lt $Arguments.Count) {
+        $values[$name] = $Arguments[$i + 1]
+        $i += 2
+    } else {
+        throw "Missing value for $key"
+    }
+}
+
+$required = @{
+    start = @('task', 'cwd')
+    wait = @('agent_id')
+    result = @('agent_id')
+    followup = @('agent_id', 'task')
+    show = @('agent_id')
+    list = @()
+    interrupt = @('agent_id')
+}
+foreach ($name in $required[$Action]) {
+    if (-not $values.Contains($name) -or $null -eq $values[$name] -or [string]::IsNullOrWhiteSpace([string]$values[$name])) {
+        throw "$Action requires --$($name.Replace('_', '-'))"
+    }
 }
 
 $npm = Get-Command npm.cmd -ErrorAction Stop

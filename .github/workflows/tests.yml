@@ -13,6 +13,18 @@ jobs:
         with:
           node-version: 24
       - run: node tests/route.test.mjs
+      - run: node tests/route-hook.test.mjs
+      - run: node tests/dsh-mcp-client.test.mjs
+      - run: node tests/docs.test.mjs
+      - run: node scripts/patch-backend-windows.test.mjs
+      - name: Plugin tests (only when present)
+        run: |
+          set -e
+          for test in tests/plugin-*.test.mjs; do
+            if [ -f "$test" ]; then
+              node "$test"
+            fi
+          done
 
   windows-helper:
     runs-on: windows-latest
@@ -21,5 +33,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Hook tests
+        shell: pwsh
+        run: node tests/route-hook.test.mjs
+      - name: Plugin tests (only when present)
+        shell: pwsh
+        run: |
+          Get-ChildItem tests -Filter 'plugin-*.test.mjs' | ForEach-Object {
+            node $_.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - shell: pwsh
         run: ./tests/dsh-agent-helper.test.ps1

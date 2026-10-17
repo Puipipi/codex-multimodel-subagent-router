@@ -1,0 +1,42 @@
+{
+  "name": "sol-luna-deepseek-router",
+  "version": "0.8.1",
+  "description": "Sol-led Codex routing to native Luna or a published DSH 0.7 DeepSeek executor, with per-chat agent ownership, workspace writer leases, and a read-only local DSH trace.",
+  "author": {
+    "name": "Puipipi",
+    "url": "https://github.com/Puipipi"
+  },
+  "homepage": "https://github.com/Puipipi/sol-luna-deepseek-router",
+  "repository": "https://github.com/Puipipi/sol-luna-deepseek-router",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "plugin",
+    "deepseek",
+    "dsh",
+    "mcp",
+    "subagent",
+    "routing",
+    "trace"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Sol Luna DeepSeek Router",
+    "shortDescription": "Route coding work and keep DSH agents owned by one chat.",
+    "longDescription": "Keeps Sol in charge of the Codex conversation and routes repository work to native Luna during DeepSeek peak windows or to a published DSH 0.7 DeepSeek executor during valley hours. The bundled MCP wrapper binds every agent to the trusted Codex thread identity, filters lists to that chat, serializes writers in the same workspace, and serves a read-only local browser trace built from real DSH events.",
+    "developerName": "Puipipi",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/Puipipi/sol-luna-deepseek-router",
+    "defaultPrompt": [
+      "Route this task by DeepSeek peak pricing",
+      "Show a read-only DSH trace",
+      "Continue the DSH agent owned by this chat"
+    ],
+    "brandColor": "#4D6BFE"
+  }
+}

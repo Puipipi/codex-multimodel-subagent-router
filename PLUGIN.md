@@ -1,0 +1,207 @@
+# Codex plugin: Sol Luna DeepSeek Router
+
+This directory is both the existing routing skill and a local Codex plugin. The plugin adds a guarded MCP surface over the published `dsh-subagent-mcp@0.7.0` bridge. It does not add another model loop, another DeepSeek client, or another agent runtime.
+
+## Components
+
+| Path | Purpose |
+| :--- | :--- |
+| `.codex-plugin/plugin.json` | Codex plugin manifest. Declares the MCP companion; it does not declare a second skill. |
+| `.agents/plugins/marketplace.json` | Portable repo marketplace. Its `source.path` is `./`, inside the marketplace root, so local and GitHub clone installs resolve without an absolute path. |
+| `.mcp.json` | Starts `scripts/plugin-mcp.mjs` with `cwd: "."` (the plugin root), a long tool timeout for unbounded waits, and a minimal environment allowlist. |
+| `scripts/plugin-mcp.mjs` | MCP stdio wrapper. Requires trusted `_meta.threadId`, enforces ownership, filters lists, leases writers, and exposes `dsh_trace`. |
+| `scripts/plugin-state.mjs` | Durable hashed ownership store and canonical same-workspace writer leases. |
+| `scripts/plugin-trace.mjs` | Escaped, read-only loopback HTML trace with single-use ticket exchange, per-view scoped cookies/paths, coexisting tabs, clickable details, and Simplified Chinese user-visible labels/help/errors. |
+| `scripts/dsh-mcp-client.mjs` | Existing `runClient`, extended additively for `dsh_events`, `dsh_close`, `dsh_rename`, trusted `_meta` forwarding, and the per-message Chinese output instruction. It spawns an exact verified published `dsh-subagent-mcp@0.7.0` entrypoint from a trusted location, or falls back to the pinned npx transport. |
+
+This plugin deliberately does **not** bundle a second scheduling skill. The canonical standalone `SKILL.md` at the repository root remains the single scheduling skill and is managed separately. Loading both would create two competing routing instructions.
+
+The plugin MCP server uses the same `runClient` as the PowerShell helper. Each call starts one verified published DSH 0.7 stdio transport, performs the MCP handshake, issues one tool call, and terminates the transport. The DSH daemon remains the owner of the actual agent and its conversation. The fast path only uses an explicit `SOL_LUNA_DSH_PACKAGE_ROOT`, an npm global prefix, or the trusted npm npx cache after verifying the exact package name/version and entrypoint; it never searches the current directory or `node_modules`. If no trusted 0.7.0 copy exists, it falls back to the pinned npx command. A different version or package name is rejected, and mutating calls are never retried automatically.
+
+## Ownership
+
+Every `tools/call` must carry Codex's trusted request metadata:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "dsh_start",
+    "arguments": {"task": "...", "cwd": "..."},
+    "_meta": {"threadId": "<Codex thread id>"}
+  }
+}
+```
+
+The wrapper reads only `params._meta.threadId`. It rejects `_meta`, `thread_id`, `threadId`, `owner`, `chat_id`, and similar keys inside `arguments`. Missing or blank identity fails before any DSH process is spawned. This is deliberate: there is no environment-variable fallback and no “default chat”.
+
+Ownership is persisted in:
+
+```text
+%LOCALAPPDATA%\sol-luna-deepseek-router\plugin\ownership.json
+```
+
+Only `sha256(threadId)` is stored. The raw Codex thread ID is never written to disk. All ownership mutations use an on-disk lock plus an atomic temp-file rename, so two plugin processes cannot lose an update. An agent ID that is absent or owned by another chat produces the same message: `Agent <id> is not available to this chat.`
+
+`dsh_list` requests the upstream page, removes every row whose agent ID is not owned by the caller, and only then applies `status`, `cwd`, `match`, `limit`, and `max_chars`. The returned `total` is the caller's owned count, not the global DSH store count. Other chats' names, paths, statuses, and counts never cross the MCP boundary. Agents created directly in DSH Web or by another MCP client have no plugin ownership record, so this plugin does not list or adopt them.
+
+## Writer leases
+
+A `workspace-write` or `danger-full-access` start takes a lease keyed by the **real canonical workspace**. The plugin resolves the path with `realpath` before hashing, so Windows case aliases, short names, trailing separators, symlinks, and junctions cannot create two independent locks for one directory.
+
+```text
+%LOCALAPPDATA%\sol-luna-deepseek-router\plugin\leases\<sha256(canonical-workspace)>.json
+```
+
+The lease records the hashed owner, agent ID, canonical workspace, a `bound` flag, and informational timestamps. A second write-capable start in the same workspace does **not** replace the lease based on PID death or elapsed time. The plugin calls the real DSH `dsh_status` for the bound agent and permits replacement only when DSH confirms `idle` or a terminal state (`completed`, `error`, `interrupted`, `context_exhausted`, `closed`).
+
+- An active `starting`/`running`/`interrupting` agent keeps the workspace busy even if the plugin process is gone and every timestamp is old.
+- If DSH is unavailable, times out, or returns an unknown status, the lease remains locked. It is never silently stolen. The error names the lease file; retry when DSH is reachable. Do not remove it while the task may still be running.
+- A start whose outcome is unknown (timeout, transport exit, or no agent ID) leaves an **unbound reservation**. Reservations have no verified DSH agent ID and **never expire automatically**. The exact recovery limitation is reported: verify that no DSH task is running, then deliberately remove the named lease file and retry. This avoids a silent duplicate dispatch.
+- A follow-up failure with an unknown outcome keeps the existing lease. The plugin does not release a writer because a transport failed.
+- Read-only agents do not take the lease and may run in parallel.
+
+`dsh_status`, `dsh_wait`, `dsh_list`, `dsh_trace`, `dsh_interrupt`, and `dsh_close` release the lease only when DSH returns a confirmed terminal state or a deliberate close/interrupt. The recorded PID is diagnostic only; no timestamp or PID can expire a lease.
+
+`dsh_followup` reacquires the lease for a write-capable agent. If the lease is held by another chat, the follow-up fails before the follow-up DSH call; only the read-only status reconciliation runs.
+
+## Trace
+
+`dsh_trace` performs an ownership check, reads real DSH events through `dsh_events` (`include_progress`, `include_descendants`, `include_tool_events`), renders a snapshot, and returns a single-use exchange URL:
+
+```text
+http://127.0.0.1:<ephemeral-port>/trace/<43-character-base64url-ticket>
+```
+
+The actual DSH 0.7 `dsh_events` payload uses `events`, `has_more`, and `next_cursor` (not `items`). The wrapper extracts that schema and reports `event_count`, `has_more`, `next_cursor`, and `truncated` truthfully. Pass `after` to continue from a cursor. Pass `event_id` to request one selected tool event in full detail; the page labels the selected event.
+
+Ticket exchange and browser access:
+
+- The initial URL contains a 256-bit random single-use ticket. It is exchanged once.
+- A successful `GET /trace/<ticket>` returns `303 Location: /trace/view/<view-id>/` and `Set-Cookie: dsh_trace_<view-id>=<random>; HttpOnly; SameSite=Strict; Path=/trace/view/<view-id>/; Max-Age=...`.
+- The resulting page URL is `/trace/view/<view-id>/` and contains **no ticket**. The cookie is an HttpOnly, SameSite=Strict, short-lived capability scoped to that one view, not a DSH/DeepSeek/Codex/OpenAI credential.
+- Each view has a different cookie name and path. Opening a trace for agent B does not overwrite the cookie for agent A, so two tabs can keep both detail pages usable. A detail request with another view's cookie is rejected before any event data is returned.
+- Accessing a view without its cookie returns `401`. Reusing the exchanged ticket returns `410`. Legacy unscoped `/trace/view` and `/trace/event/...` links return `410`; request a fresh trace.
+- The ticket is not placed in the redirect target, page body, or cookie value. The cookie value is a fresh random token.
+- The HTTP server binds to `127.0.0.1` only.
+- Tickets and sessions expire after two minutes; a session allows at most 20 views. Terminal observation revokes both tickets and sessions.
+- Only `GET` and `HEAD` are accepted. There is no control endpoint.
+- Every event field, agent ID, title, status, cursor, and JSON blob is HTML-escaped. A restrictive `Content-Security-Policy` disables scripts, framing, forms, and external resources.
+- Obvious API-key and bearer-token patterns are redacted from rendered text.
+- Browser labels, help text, and error pages are Simplified Chinese. Commands, event types, status values, and code remain unchanged.
+- Events with an `event_id` expose a clickable `查看详情` link. The detail callback rechecks ownership and is bound to the same per-view session; it is not a control channel.
+
+### Browser-trace limitation
+
+DSH agents run inside the external DeepSeek Harness runtime. Codex's native subagent/child surface only knows about agents that Codex itself spawned. A DSH agent therefore **cannot** be displayed as a native Codex child, and this plugin does not pretend otherwise. The browser trace is a separate read-only snapshot of the external DSH event stream. It is not a Codex subagent panel, not a live terminal, and not a control channel. It is clickable only while the plugin process is alive and the per-view HttpOnly cookie is valid; separate views keep separate cookies and paths, so different agents' tabs can remain open together. Browser labels, help, and errors are Chinese; commands and code are unchanged.
+
+## Chinese output contract
+
+Every `dsh_start` and every `dsh_followup` message receives exactly one appended instruction:
+
+```text
+用户可见的进度与最终报告必须使用简体中文；代码、命令和内部 GPT-DeepSeek 通信可保持原文。
+```
+
+The original task remains a verbatim prefix. A follow-up to an agent created before this contract still gets the marker once, so its conversation does not need to be restarted or replaced. A marker already present is not duplicated. Code, commands, paths, and internal GPT-DeepSeek communication may remain in their original language.
+
+## Measured performance limits
+
+Read-only `dsh_status` / `dsh_events` measurements on completed agent `ffbbbc39-f3c0-4d78-86cf-b1df492eed14` (Windows, npm cache already populated; “cold” is the first sample, not an empty cache/offline install):
+
+| Path | Cold | Warm median | Samples |
+| :--- | ---: | ---: | ---: |
+| Old one-shot `runClient` via npx | 1314 ms | 1308 ms | 1 + 5 |
+| Direct published 0.7 CLI | 272 ms | 298 ms | 1 + 5 |
+| Direct bridge socket | 6 ms | 5 ms | 1 + 5 |
+| New verified-entrypoint `runClient` | 289 ms | 280 ms | 1 + 5 |
+| New plugin `dsh_status` | 282 ms | 287 ms | 1 + 5 |
+
+The npx resolver cost about 1.0 s per call (roughly 77%). The fast path removes it while keeping the exact published 0.7.0 backend. The ownership hook adds about 5 ms per call. The remaining ~280 ms is fresh Node/MCP SDK/CLI startup; the 2–5 ms bridge floor is not used because persistent reuse would add unsafe lifecycle and mutating-replay risk. Helper calls use two node processes instead of three; the plugin host adds one child instead of two. Concurrent work, antivirus, and host load can increase these times. No mutating call is retried automatically, and no backend/provider/model/effort is silently changed.
+
+## Native Responses alternative
+
+A reference-project review suggested native Responses global routing as a possible alternative. This plugin does not install that reference and does not change the global model, provider, or base URL. Native DeepSeek spawning on Windows is unverified, so it is not treated as a supported replacement. The published DSH 0.7 bridge remains the only implemented executor path.
+
+## Failure behavior
+
+- Missing identity: fails before spawning DSH.
+- Unsupported field or identity in arguments: fails before spawning DSH.
+- Agent owned by another chat: fails without an upstream call.
+- Same-workspace writer lease busy: fails before the upstream start. The lease is retained unless DSH confirms `idle` or a terminal state.
+- DSH unavailable or unknown during lease reconciliation: the workspace remains locked; the plugin never guesses that an independent DSH task stopped.
+- Uncertain start: the unbound reservation remains until deliberate manual recovery; it never expires into a duplicate dispatch.
+- Uncertain follow-up: the existing writer lease remains held.
+- Upstream error or timeout: returned as an MCP tool error with common credential patterns redacted. A timed-out start is never retried. Inspect the same agent ID instead.
+- Ownership write failure after a successful start: the plugin best-effort interrupts only an agent it does not know belongs to another chat, and retains the lease until DSH confirms idle/terminal or a human deliberately recovers it.
+- Trace rendering failure: no ticket is returned. Unknown, expired, revoked, or already-exchanged tickets get `410`; a missing viewer cookie gets `401`.
+
+## Deployment
+
+Release integration syncs the canonical `SKILL.md` and `scripts/` to the existing local skill, then refreshes the installed plugin cache with the supported Codex CLI:
+
+```powershell
+codex plugin add sol-luna-deepseek-router@sol-luna --json
+```
+
+This refresh copies the current intended source/docs/tests and updates the cache hashes. It does not mark hooks trusted, change the main model/provider/base URL, or restart the DSH backend. A running Codex host may still need a plugin reload to discover new tools; the automated release itself does not restart it. Reopen `/hooks` after an update to review the new hook hashes.
+
+1. Install Node.js 24+ with npm. Confirm `node --version` and `npm --version`.
+2. Install the published DSH bridge at a deliberate setup point with the upstream companion skill disabled:
+
+   ```powershell
+   npx --yes dsh-subagent-mcp@0.7.0 setup --no-skill --service background
+   ```
+
+3. Install this repository as a Codex plugin through its portable repo marketplace:
+
+   ```powershell
+   codex plugin marketplace add <repo-root>
+   codex plugin add sol-luna-deepseek-router@sol-luna
+   ```
+
+   `.agents/plugins/marketplace.json` points at `./`, inside the marketplace root, so a local checkout and a GitHub clone use the same entry. The manifest is `.codex-plugin/plugin.json`; the MCP companion is `.mcp.json`. Do not install a second routing skill from this plugin: the package has no bundled skill, and the canonical root `SKILL.md` remains the single standalone scheduling skill.
+
+4. Reload plugins or restart Codex once after installation so the new MCP tools and hooks are discovered. Do not open a new chat merely to switch peak/valley routes; preserve the current conversation. A running session may need that plugin reload to pick up the new MCP tools.
+
+5. Review the discovered hooks in `/hooks` before enabling them. Both hooks are untrusted until a human inspects their command, source, and hash and approves them. The plugin does not mark them trusted, edit the trust store, or bypass the review. Hook notices stay inactive until that approval; routing and MCP tools do not depend on the hooks.
+
+6. Ask Codex to call `dsh_list` or `dsh_start`. Codex supplies `_meta.threadId` automatically. If a host build does not supply it, the plugin fails safely; use the PowerShell helper with an explicit local workflow instead of inventing an identity.
+
+The manifest and MCP companion follow the Codex plugin contract described in the official OpenAI documentation: [Package your plugin](https://developers.openai.com/plugins/build/plugins) and [Build an MCP server](https://developers.openai.com/plugins/build/mcp-server). The `.mcp.json` fields `cwd`, `env_vars`, and `tool_timeout_sec` match the shape used by bundled first-party plugins.
+
+### State and privacy
+
+- Plugin state: `%LOCALAPPDATA%\sol-luna-deepseek-router\plugin`.
+- The plugin stores no API keys, tokens, or raw thread IDs on disk. The trace capability cookie lives only in the browser and expires quickly.
+- Trace content is derived from DSH events. It can contain repository text, commands, and paths. Treat the single-use exchange URL and cookie as sensitive until they expire.
+- The trace server is loopback-only and short-lived, but it is not a replacement for reviewing the repository and test evidence.
+
+## Validation
+
+```powershell
+node .\tests\plugin-state.test.mjs
+node .\tests\plugin-cross-process.test.mjs
+node .\tests\plugin-trace.test.mjs
+node .\tests\plugin-mcp.test.mjs
+node .\tests\plugin-client.test.mjs
+node .\tests\plugin-manifest.test.mjs
+node .\tests\route.test.mjs
+node .\tests\route-hook.test.mjs
+node .\tests\dsh-mcp-client.test.mjs
+node .\tests\docs.test.mjs
+node .\scripts\patch-backend-windows.test.mjs
+pwsh -NoProfile -File .\tests\plugin-live-events.ps1
+pwsh -NoProfile -File .\tests\dsh-agent-helper.test.ps1
+```
+
+Manifest and skill validation:
+
+```powershell
+python "$env:USERPROFILE\.dsh\skills\plugin-creator\scripts\validate_plugin.py" .
+python "$env:USERPROFILE\.dsh\skills\skill-creator\scripts\quick_validate.py" .
+```
+
+The plugin tests use a fake backend and fake MCP children. They do not require a DeepSeek account, a live DSH daemon, or network access. The cross-process suite starts hidden Node workers and proves that one workspace admits only one writer while separate chat owners survive concurrent durable updates. `tests/plugin-live-events.ps1` is the explicit live exception: it uses the installed published DSH 0.7 runtime to read `dsh_status` and `dsh_events` for the terminal legacy agent `ffbbbc39-f3c0-4d78-86cf-b1df492eed14`. It never calls `dsh_start`/`dsh_attach`/`dsh_watch` and never writes plugin ownership state.
