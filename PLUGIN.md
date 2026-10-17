@@ -2,6 +2,8 @@
 
 This repository contains the canonical standalone routing skill and an optional Codex plugin. The formal native DeepSeek path uses the patched, versioned CLI with an isolated `native_deepseek` role, dedicated `deepseek-native` provider, and child-only catalog; Sol and Luna retain their normal provider/catalog. The published `dsh-subagent-mcp@0.7.0` bridge remains explicit legacy compatibility. The older shared-root gateway, global catalog, and GPT relay are historical compatibility only, not the formal isolated setup path.
 
+The formal gateway lifecycle is an owned current-user Task Scheduler task started and health-checked at DeepSeek dispatch. A private Windows PowerShell 7 probe passed for a self-owned Job teardown with a mock loopback service: the direct helper/gateway died with the Job, while the scheduled gateway survived and remained hidden. This did not close a real DSH tree or validate the installed gateway or desktop child UI; see the [lifecycle test receipt](docs/native-gateway-lifecycle-2026-10-18.md). The native route does not create DSH sessions, agents, or workspaces. `native-autostart.mjs` is retained only as an optional legacy Startup launcher.
+
 ## Components
 
 | Path | Purpose |
@@ -11,7 +13,8 @@ This repository contains the canonical standalone routing skill and an optional 
 | `.mcp.json` | Starts `scripts/plugin-mcp.mjs` with `cwd: "."` (the plugin root), a long tool timeout for unbounded waits, and a minimal environment allowlist. |
 | `scripts/native-isolated-install.mjs`, `native-isolated-files.mjs`, `native-isolated-smoke.mjs` | Prepare, smoke-test, activate, inspect, and roll back the isolated runtime/configuration transaction. |
 | `scripts/native-runtime.mjs`, `native-runtime-env.mjs` | Verify/stage the pinned CLI runtime and transactionally manage its user environment variables. |
-| `scripts/native-gateway-manager.mjs`, `native-autostart.mjs` | Manage a gateway by explicit state directory and configure its optional startup launcher. The isolated installer uses a separate gateway directory; the legacy default instance remains separate. |
+| `scripts/native-gateway-manager.mjs`, `native-gateway-task.mjs` | Manage the isolated gateway and its owned Task Scheduler task. The task runs a hidden synchronous launcher so the gateway lifecycle is independent of the DSH/Codex child tree; DeepSeek dispatch checks task ownership and gateway health. |
+| `scripts/native-autostart.mjs` | Optional legacy Startup VBS launcher; the formal isolated installer removes a previously managed instance after Task Scheduler health succeeds. |
 | `scripts/native-catalog.mjs`, `native-install.mjs` | `native-catalog.mjs` builds the isolated child catalog; `native-install.mjs` retains the older shared-root transaction for historical compatibility. |
 | `scripts/native-state.mjs`, `native-agent.mjs` | Parent/child ownership, reserve-before-spawn writer leases, and Luna catalog resolution plus the native DeepSeek role dispatch contract. |
 | `scripts/plugin-mcp.mjs` | Legacy MCP stdio wrapper. Requires trusted `_meta.threadId`, enforces ownership, filters lists, leases writers, and exposes `dsh_trace`. |
@@ -198,9 +201,11 @@ node .\tests\native-relay.test.mjs
 node .\tests\native-gateway.test.mjs
 node .\tests\native-state.test.mjs
 node .\tests\native-agent.test.mjs
+node .\tests\native-isolated-install.test.mjs
 node .\tests\native-install.test.mjs
 node .\tests\native-manager.test.mjs
 node .\tests\native-autostart.test.mjs
+node .\tests\native-gateway-task.test.mjs
 node .\tests\native-config-read.test.mjs
 node .\tests\plugin-state.test.mjs
 node .\tests\plugin-cross-process.test.mjs

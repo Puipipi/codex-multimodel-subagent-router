@@ -1,0 +1,15 @@
+{
+  "evidence_type": "private_temporary_windows_job_task_scheduler_probe",
+  "module_commit": "ec850f2c81d86f34c5702bd5a75b5998ce3f1136",
+  "shell": "Windows PowerShell 7",
+  "exit_code": 0,
+  "invocation": "Private temporary probe; the exact invocation is not packaged in this repository.",
+  "test_driver": "work/native-gateway-lifecycle-probe/windows-job-lifecycle.ps1 (private work tree; not packaged)",
+  "stdout": "{\"result\":\"passed\",\"direct_spawn_detached_and_hidden\":true,\"direct_helper_died_on_job_close\":true,\"direct_helper_visible_window_count\":0,\"direct_gateway_died_on_job_close\":true,\"direct_gateway_visible_window_count\":0,\"task_gateway_survived_job_close\":true,\"task_helper_visible_window_count\":0,\"task_gateway_visible_window_count\":0,\"task_state_running_after_two_starts\":true,\"unique_task_launcher_process_count\":1,\"task_launcher_visible_window_count\":0,\"control_a_visible_window_count\":0,\"control_b_visible_window_count\":0,\"no_model_or_upstream_request\":true}",
+  "scope": "Self-owned Windows Job plus Task Scheduler and a mock loopback service. This did not terminate a real DSH process tree, exercise the installed production gateway, or test desktop child UI acceptance.",
+  "cleanup": {
+    "this_probe": "All owned temporary task, processes, and directories were cleaned successfully.",
+    "earlier_attempt": "Two empty log files in an older temporary directory remain because deletion was blocked by policy; this is separate from the successful probe cleanup."
+  },
+  "installation_and_desktop_acceptance": "pending"
+}

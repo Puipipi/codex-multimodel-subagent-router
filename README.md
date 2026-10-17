@@ -126,6 +126,8 @@ The formal native DeepSeek path uses the patched, versioned CLI and the `native_
 
 The isolated installer runs an app-server smoke against a temporary Codex home before activation. Its local and mocked checks have passed, but no real isolated CLI installation has been performed and desktop acceptance remains pending. `activate` reports a configured state and restart requirement; neither status nor a successful smoke proves that the desktop launched or accepted the patched CLI.
 
+The formal gateway lifecycle uses an owned current-user Task Scheduler task, with a hidden synchronous launcher; `native-agent.mjs` checks the owned task and gateway health before each DeepSeek dispatch. A private Windows PowerShell 7 probe passed against a self-owned Job teardown and mock loopback service: the detached helper/gateway died with the Job, while the Task Scheduler gateway survived and remained hidden. This did not close a real DSH tree or test the installed gateway or desktop child UI. See the [lifecycle test receipt](docs/native-gateway-lifecycle-2026-10-18.md). `native-autostart.mjs` remains an optional legacy Startup launcher and is not the formal lifecycle. The native route uses no DSH agent/session/workspace; DSH remains an explicit legacy workflow.
+
 The older `native-install.mjs` shared-root gateway, global catalog, and transparent GPT relay remain historical compatibility paths. They are not the formal isolated setup route and must not be used as its installation instructions. The old native acceptance record documents that earlier path only; it is not evidence of isolated-role or desktop acceptance.
 
 The formal native child call uses `spawn_agent` with `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the isolated role selects its configured model. If the role is unavailable, stop and report the setup failure. Do not fall back to the shared-root provider, an explicit model override, or another executor. Native writer coordination reserves the workspace before spawn, binds the real child, and releases explicitly; it is not tied to a short-lived CLI PID.
@@ -152,9 +154,11 @@ node .\tests\native-relay.test.mjs
 node .\tests\native-gateway.test.mjs
 node .\tests\native-state.test.mjs
 node .\tests\native-agent.test.mjs
+node .\tests\native-isolated-install.test.mjs
 node .\tests\native-install.test.mjs
 node .\tests\native-manager.test.mjs
 node .\tests\native-autostart.test.mjs
+node .\tests\native-gateway-task.test.mjs
 node .\tests\native-config-read.test.mjs
 node .\scripts\patch-backend-windows.test.mjs
 pwsh -NoProfile -File .\tests\dsh-agent-helper.test.ps1
