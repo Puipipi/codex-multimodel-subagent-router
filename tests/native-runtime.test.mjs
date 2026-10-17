@@ -34,7 +34,7 @@ try {
   await writeFile(path.join(companionDir, "codex.exe"), stockBinary);
   const provenance = {
     source_commit: "4ebc485ca321243727539187169425fcf972f2c4",
-    patch_sha256: "51c1a0bde0fdabd449216de6aef4e14403a39a0999057e289a939497f936eb75",
+    patch_sha256: "65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae",
     target: "x86_64-pc-windows-msvc",
   };
   await writeFile(path.join(artifactDir, "provenance.json"), `${JSON.stringify(provenance, null, 2)}\n`);
@@ -55,7 +55,7 @@ try {
   const staged = await stageRuntime({ artifactDir, companionDir, runtimeDir, versionChecker });
   ok(staged.staged, "stage reports staged without claiming activation");
   ok(staged.versionDir.startsWith(path.join(runtimeDir, "versions")), "staging stays under the versioned runtime directory");
-  ok(path.basename(staged.versionDir).startsWith("4ebc485ca321-51c1a0bde0fd-"), "version directory is keyed by source, patch, and binary hashes");
+  ok(path.basename(staged.versionDir).startsWith("4ebc485ca321-65add65b454f-"), "version directory is keyed by source, patch, and binary hashes");
   equal(await readFile(path.join(staged.versionDir, "codex.exe"), "utf8"), binary.toString("utf8"), "artifact CLI is staged");
   for (const [name, value] of Object.entries(companions)) {
     if (name === "unrelated.exe") equal(await stat(path.join(staged.versionDir, name)).catch(() => null), null, "unrelated files are not staged");

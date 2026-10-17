@@ -1,0 +1,56 @@
+{
+  "evidence_schema": "native-plaintext-wire-red-v2",
+  "date": "2026-10-18",
+  "evidence_kind": "actual_cli_encrypted_input_guard_red",
+  "tested_pre_fix_binary": {
+    "run_id": 39062300727,
+    "run_url": "https://github.com/Puipipi/sol-luna-deepseek-router/actions/runs/39062300727",
+    "run_head": "1390c4767436e1c4cdeefe61f415ced030ecc74d",
+    "source_commit": "4ebc485ca321243727539187169425fcf972f2c4",
+    "patch_sha256": "51c1a0bde0fdabd449216de6aef4e14403a39a0999057e289a939497f936eb75",
+    "binary_sha256": "beab648206ce0e42ad7dc2776f9be1be196106a567b069e4d3d2e117a4ee161b",
+    "version": "0.163.0-alpha.10.2",
+    "compiled_and_staged": true,
+    "activated": false
+  },
+  "mock_acceptance_of_pre_fix_binary": {
+    "status": "passed",
+    "exit_code": 0,
+    "main_provider_http_requests": 8,
+    "deepseek_provider_http_requests": 3,
+    "same_child_followup_completed": true,
+    "deepseek_local_auto_compaction_completed": true,
+    "luna_turn_completed_after_deepseek_mock_closed": true
+  },
+  "guard_red_on_pre_fix_binary": {
+    "expected_deepseek_provider_encrypted_input": false,
+    "observed_deepseek_provider_encrypted_input": [true, true, true],
+    "deepseek_provider_http_request_count": 3,
+    "parent_collaboration_call_metadata": [
+      {"role": "deepseek_spawn", "encrypted_function_args": "missing"},
+      {"role": "deepseek_followup", "encrypted_function_args": "missing"},
+      {"role": "luna_spawn", "encrypted_function_args": "missing"}
+    ],
+    "parent_metadata_is_one_to_one_with_deepseek_requests": false,
+    "assertion_exit_code": 1,
+    "underlying_mock_probe_status": "passed",
+    "underlying_mock_probe_exit_code": 0
+  },
+  "fix_candidate": {
+    "protocol_source_normalized_lf_sha256": "B163648D7C753F5E222F3210E90C909E5C4A81CBCFA80EA1905E63834D803967",
+    "combined_patch_sha256": "65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae",
+    "compile_status": "not_run_yet"
+  },
+  "real_provider_boundary": {
+    "gateway_preflight_stopped_run": true,
+    "child_http_status_observed": false,
+    "http_403_established": false
+  },
+  "pending_acceptance": [
+    "GitHub Rust compile and tests",
+    "new CLI build and runtime acceptance",
+    "real API behavior",
+    "cold resume",
+    "desktop acceptance"
+  ]
+}

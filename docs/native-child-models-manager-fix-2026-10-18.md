@@ -73,6 +73,19 @@ assertions (the original 50 plus four cleanup checks); the isolated installer
 test passes 179 assertions and the docs consistency test passes. This fixture
 change does not compile or test the Rust patch.
 
+## Subsequent plaintext-wire integration
+
+The protocol alias decoder was later updated to restore the canonical namespace
+and bare function name for flattened wire calls. For the three collaboration
+message aliases only, a missing `encrypted_function_args` field is represented
+as an empty vector so the existing plaintext dispatch classification can
+recognize it. Explicit encrypted arguments remain unchanged. The combined patch
+now has SHA-256
+`65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae`.
+The `51c1a0b...` value above remains the historical hash for the earlier
+ModelsManager combination and is not a build or test result for this later
+patch. The Rust tests for this protocol change have not yet run.
+
 ## Limits
 
 Rust was not compiled or tested locally, so this is not proof that the change

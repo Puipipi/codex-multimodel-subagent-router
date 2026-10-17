@@ -497,7 +497,7 @@
 +}
 --- /dev/null
 +++ b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,504 @@
 +use crate::models::ResponseItem;
 +use serde_json::{Map, Value};
 +
@@ -720,8 +720,27 @@
 +            let transformed = transform_tools(Value::Array(tools.clone()), direction)?;
 +            *tools = transformed.as_array().cloned().unwrap_or_default();
 +        }
-+        ResponseItem::FunctionCall { name, namespace, .. } => {
++        ResponseItem::FunctionCall { name, namespace, encrypted_function_args, .. } => {
 +            let effective_namespace = namespace.as_deref().map(str::to_string);
++            let flat_wire_function = if direction == Direction::Decode
++                && effective_namespace.is_none()
++            {
++                name.split_once('.').and_then(|(namespace, function)| {
++                    (namespace == WIRE_NAMESPACE).then(|| function.to_string())
++                })
++            } else {
++                None
++            };
++            let is_wire_message_alias = direction == Direction::Decode
++                && match effective_namespace.as_deref() {
++                    Some(WIRE_NAMESPACE) => {
++                        mapped_name(name.as_str(), Direction::Decode).is_some()
++                    }
++                    None => flat_wire_function.as_deref().is_some_and(|function| {
++                        mapped_name(function, Direction::Decode).is_some()
++                    }),
++                    _ => false,
++                };
 +            if let Some(value) = effective_namespace.as_deref()
 +                && let Some(mapped) = mapped_namespace(value, direction)
 +            {
@@ -734,9 +753,17 @@
 +                    *name = mapped.to_string();
 +                }
 +            } else if effective_namespace.is_none()
++                && let Some(function) = flat_wire_function
++            {
++                *namespace = Some(SOURCE_NAMESPACE.to_string());
++                *name = mapped_name(&function, direction).unwrap_or(&function).to_string();
++            } else if effective_namespace.is_none()
 +                && let Some(mapped) = mapped_flat_name(name, direction)
 +            {
 +                *name = mapped;
++            }
++            if is_wire_message_alias && encrypted_function_args.is_none() {
++                *encrypted_function_args = Some(Vec::new());
 +            }
 +        }
 +        _ => {}
@@ -854,6 +881,108 @@
 +            "arguments": "{\"message\":\"fixture\"}", "status": "completed",
 +            "encrypted_function_args": ["opaque"]
 +        }));
++    }
++
++    #[test]
++    fn decoding_wire_message_aliases_without_encrypted_args_marks_them_plaintext() {
++        let cases = [
++            (Some(WIRE_NAMESPACE), "start_delegated_task", "spawn_agent"),
++            (Some(WIRE_NAMESPACE), "deliver_delegated_message", "send_message"),
++            (Some(WIRE_NAMESPACE), "continue_delegated_task", "followup_task"),
++            (None, "collaboration-optimize.start_delegated_task", "spawn_agent"),
++            (None, "collaboration-optimize.deliver_delegated_message", "send_message"),
++            (None, "collaboration-optimize.continue_delegated_task", "followup_task"),
++        ];
++
++        for (namespace, wire_name, canonical_name) in cases {
++            let mut item_value = json!({
++                "type": "function_call",
++                "id": "fc-plaintext",
++                "call_id": "call-plaintext",
++                "name": wire_name,
++                "arguments": "{}"
++            });
++            if let Some(namespace) = namespace {
++                item_value["namespace"] = json!(namespace);
++            }
++            let mut item: ResponseItem = serde_json::from_value(item_value)
++                .expect("deserialize aliased function call");
++
++            decode_response_item(&mut item).expect("decode aliased function call");
++
++            let decoded = serde_json::to_value(item).expect("serialize decoded function call");
++            assert_eq!(decoded["namespace"], SOURCE_NAMESPACE);
++            assert_eq!(decoded["name"], canonical_name);
++            assert_eq!(decoded["encrypted_function_args"], json!([]));
++        }
++    }
++
++    #[test]
++    fn decoding_wire_message_aliases_preserves_explicit_encrypted_args() {
++        for encrypted_args in [json!([]), json!(["opaque"])] {
++            let mut item: ResponseItem = serde_json::from_value(json!({
++                "type": "function_call",
++                "call_id": "call-explicit-args",
++                "name": "start_delegated_task",
++                "namespace": WIRE_NAMESPACE,
++                "arguments": "{}",
++                "encrypted_function_args": encrypted_args
++            }))
++            .expect("deserialize aliased function call with explicit encrypted args");
++
++            decode_response_item(&mut item).expect("decode aliased function call");
++
++            let decoded = serde_json::to_value(item).expect("serialize decoded function call");
++            assert_eq!(decoded["encrypted_function_args"], encrypted_args);
++        }
++    }
++
++    #[test]
++    fn decoding_only_marks_wire_message_aliases_and_encode_does_not_synthesize_args() {
++        let cases = [
++            (json!({
++                "type": "function_call", "call_id": "call-canonical-none",
++                "name": "spawn_agent", "namespace": SOURCE_NAMESPACE, "arguments": "{}"
++            }), SOURCE_NAMESPACE, "spawn_agent"),
++            (json!({
++                "type": "function_call", "call_id": "call-external-namespace",
++                "name": "start_delegated_task", "namespace": "external", "arguments": "{}"
++            }), "external", "start_delegated_task"),
++            (json!({
++                "type": "function_call", "call_id": "call-wire-non-alias",
++                "name": "list_agents", "namespace": WIRE_NAMESPACE, "arguments": "{}"
++            }), SOURCE_NAMESPACE, "list_agents"),
++            (json!({
++                "type": "function_call", "call_id": "call-flat-non-alias",
++                "name": "collaboration-optimize.list_agents", "arguments": "{}"
++            }), SOURCE_NAMESPACE, "list_agents"),
++        ];
++
++        for (item_value, expected_namespace, expected_name) in cases {
++            let mut item: ResponseItem =
++                serde_json::from_value(item_value).expect("deserialize function call");
++            decode_response_item(&mut item).expect("decode function call");
++            let decoded = serde_json::to_value(item).expect("serialize decoded function call");
++            assert!(decoded.get("encrypted_function_args").is_none());
++            assert_eq!(decoded["namespace"], expected_namespace);
++            assert_eq!(decoded["name"], expected_name);
++        }
++
++        let mut item: ResponseItem = serde_json::from_value(json!({
++            "type": "function_call",
++            "call_id": "call-encode-none",
++            "name": "spawn_agent",
++            "namespace": SOURCE_NAMESPACE,
++            "arguments": "{}"
++        }))
++        .expect("deserialize canonical function call");
++
++        encode_response_item(&mut item).expect("encode canonical function call");
++
++        let encoded = serde_json::to_value(item).expect("serialize encoded function call");
++        assert_eq!(encoded["namespace"], WIRE_NAMESPACE);
++        assert_eq!(encoded["name"], "start_delegated_task");
++        assert!(encoded.get("encrypted_function_args").is_none());
 +    }
 +
 +    #[test]
