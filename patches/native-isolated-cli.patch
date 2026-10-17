@@ -873,3 +873,248 @@
 +        assert_eq!(canonical["tools"][1]["parameters"]["properties"]["message"]["encrypted"], true);
 +    }
 +}
+diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
+index 2fb6da8..145b5b4 100644
+--- a/codex-rs/core/src/thread_manager.rs
++++ b/codex-rs/core/src/thread_manager.rs
+@@ -15,6 +15,9 @@ use crate::agent::LocalAgentControl;
+ use crate::agent::api::AgentConfigUpdate;
+ use crate::agent::api::AgentControl;
+ use crate::agent::control::AgentControlInit;
++use crate::agent::native_deepseek::NATIVE_DEEPSEEK_MODEL;
++use crate::agent::native_deepseek::NATIVE_DEEPSEEK_PROVIDER_ID;
++use crate::agent::native_deepseek::NATIVE_DEEPSEEK_ROLE_NAME;
+ use crate::agents_md_manager::SessionInstructions;
+ use crate::attestation::AttestationProvider;
+ use crate::codex_thread::CodexThread;
+@@ -461,6 +464,45 @@ pub fn build_models_manager(
+     manager
+ }
+ 
++/// Selects the model manager at the `spawn_thread` boundary.
++///
++/// Ordinary root, Sol, and Luna sessions keep sharing the root manager. A
++/// `native_deepseek` child owns an explicit provider and catalog, so it must use
++/// a manager built from that child config instead of inheriting the root
++/// manager's fallback metadata and compaction threshold.
++fn select_models_manager_for_session(
++    config: &Config,
++    auth_manager: Arc<AuthManager>,
++    root_models_manager: SharedModelsManager,
++    session_source: &SessionSource,
++) -> CodexResult<SharedModelsManager> {
++    if session_source.get_agent_role().as_deref() != Some(NATIVE_DEEPSEEK_ROLE_NAME) {
++        return Ok(root_models_manager);
++    }
++
++    if config.model_provider_id != NATIVE_DEEPSEEK_PROVIDER_ID
++        || !config
++            .model_providers
++            .contains_key(NATIVE_DEEPSEEK_PROVIDER_ID)
++    {
++        return Err(CodexErr::InvalidRequest(format!(
++            "native_deepseek child requires provider `{NATIVE_DEEPSEEK_PROVIDER_ID}`"
++        )));
++    }
++    if !config.model_catalog.as_ref().is_some_and(|catalog| {
++        catalog
++            .models
++            .iter()
++            .any(|model| model.slug == NATIVE_DEEPSEEK_MODEL)
++    }) {
++        return Err(CodexErr::InvalidRequest(format!(
++            "native_deepseek child catalog must include `{NATIVE_DEEPSEEK_MODEL}`"
++        )));
++    }
++
++    Ok(build_models_manager(config, auth_manager))
++}
++
+ pub fn thread_store_from_config(
+     config: &Config,
+     state_db: Option<StateDbHandle>,
+@@ -2323,6 +2365,20 @@ impl ThreadManagerState {
+         };
+         let attachment_source =
+             forked_from_thread_id.filter(|_| matches!(&initial_history, InitialHistory::Forked(_)));
++        let models_manager = match select_models_manager_for_session(
++            &config,
++            Arc::clone(&auth_manager),
++            Arc::clone(&self.models_manager),
++            &tracked_session_source,
++        ) {
++            Ok(models_manager) => models_manager,
++            Err(error) => {
++                if let Some(startup_guard) = startup_guard {
++                    startup_guard.cleanup().await;
++                }
++                return Err(error);
++            }
++        };
+         let spawn_result = Session::spawn(SessionSpawnArgs {
+             startup,
+             config,
+@@ -2330,7 +2386,7 @@ impl ThreadManagerState {
+             instructions,
+             installation_id: self.installation_id.clone(),
+             auth_manager,
+-            models_manager: Arc::clone(&self.models_manager),
++            models_manager,
+             git_root_discovery: Arc::clone(&self.git_root_discovery),
+             environment_manager: Arc::clone(&self.environment_manager),
+             skills_service: Arc::clone(&self.skills_service),
+@@ -2768,3 +2824,154 @@ fn append_interrupted_boundary(
+ #[cfg(test)]
+ #[path = "thread_manager_tests.rs"]
+ mod tests;
++
++#[cfg(test)]
++mod native_deepseek_models_manager_tests {
++    use super::{build_models_manager, select_models_manager_for_session};
++    use crate::agent::native_deepseek::{
++        NATIVE_DEEPSEEK_MODEL, NATIVE_DEEPSEEK_PROVIDER_ID, NATIVE_DEEPSEEK_ROLE_NAME,
++    };
++    use crate::config::ConfigBuilder;
++    use codex_login::{AuthManager, CodexAuth};
++    use codex_models_manager::model_info::model_info_from_slug;
++    use codex_protocol::openai_models::ModelsResponse;
++    use codex_protocol::protocol::{SessionSource, SubAgentSource};
++    use pretty_assertions::assert_eq;
++    use std::sync::Arc;
++    use tempfile::TempDir;
++
++    #[tokio::test]
++    async fn native_deepseek_spawn_uses_child_catalog_without_replacing_root_manager() {
++        let home = TempDir::new().expect("create codex home");
++        let mut root_config = ConfigBuilder::default()
++            .codex_home(home.path().to_path_buf())
++            .fallback_cwd(Some(home.path().to_path_buf()))
++            .build()
++            .await
++            .expect("build root test config");
++        let mut root_model = model_info_from_slug("gpt-6-luna");
++        root_model.context_window = Some(32_000);
++        root_config.model_catalog = Some(ModelsResponse {
++            models: vec![root_model],
++        });
++        let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
++        let root_manager = build_models_manager(&root_config, Arc::clone(&auth_manager));
++
++        let mut child_config = root_config.clone();
++        child_config.model = Some(NATIVE_DEEPSEEK_MODEL.to_string());
++        let mut child_provider = child_config.model_provider.clone();
++        child_provider.name = "DeepSeek native test provider".to_string();
++        child_provider.base_url = Some("https://example.invalid/v1".to_string());
++        child_provider.requires_openai_auth = false;
++        child_config.model_providers.insert(
++            NATIVE_DEEPSEEK_PROVIDER_ID.to_string(),
++            child_provider.clone(),
++        );
++        child_config.model_provider_id = NATIVE_DEEPSEEK_PROVIDER_ID.to_string();
++        child_config.model_provider = child_provider;
++        let mut child_model = model_info_from_slug(NATIVE_DEEPSEEK_MODEL);
++        child_model.context_window = Some(1_000_000);
++        child_model.max_context_window = Some(1_000_000);
++        child_model.auto_compact_token_limit = Some(1);
++        child_config.model_catalog = Some(ModelsResponse {
++            models: vec![child_model],
++        });
++
++        let deepseek_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
++            parent_thread_id: codex_protocol::ThreadId::new(),
++            depth: 1,
++            agent_path: None,
++            agent_nickname: None,
++            agent_role: Some(NATIVE_DEEPSEEK_ROLE_NAME.to_string()),
++        });
++        // `spawn_thread` invokes this selector with the tracked session source before
++        // `Session::spawn`; fresh and cold-resumed threads share the same path.
++        let selected = select_models_manager_for_session(
++            &child_config,
++            Arc::clone(&auth_manager),
++            Arc::clone(&root_manager),
++            &deepseek_source,
++        )
++        .expect("native child manager selection should succeed");
++        assert!(!Arc::ptr_eq(&selected, &root_manager));
++
++        let info = selected
++            .get_model_info(
++                NATIVE_DEEPSEEK_MODEL,
++                &child_config.to_models_manager_config(),
++            )
++            .await;
++        assert_eq!(info.context_window, Some(1_000_000));
++        assert_eq!(info.auto_compact_token_limit, Some(1));
++        assert!(!info.used_fallback_model_metadata);
++
++        let mut mismatched_provider = child_config.clone();
++        mismatched_provider.model_provider_id = "openai".to_string();
++        let error = select_models_manager_for_session(
++            &mismatched_provider,
++            Arc::clone(&auth_manager),
++            Arc::clone(&root_manager),
++            &deepseek_source,
++        )
++        .expect_err("mismatched provider id must not build a child manager");
++        assert!(error.to_string().contains(NATIVE_DEEPSEEK_PROVIDER_ID));
++
++        let mut missing_provider = child_config.clone();
++        missing_provider
++            .model_providers
++            .remove(NATIVE_DEEPSEEK_PROVIDER_ID);
++        let error = select_models_manager_for_session(
++            &missing_provider,
++            Arc::clone(&auth_manager),
++            Arc::clone(&root_manager),
++            &deepseek_source,
++        )
++        .expect_err("missing native provider must not build a child manager");
++        assert!(error.to_string().contains(NATIVE_DEEPSEEK_PROVIDER_ID));
++
++        let mut missing_catalog = child_config.clone();
++        missing_catalog.model_catalog = None;
++        let error = select_models_manager_for_session(
++            &missing_catalog,
++            Arc::clone(&auth_manager),
++            Arc::clone(&root_manager),
++            &deepseek_source,
++        )
++        .expect_err("missing child catalog must not build a child manager");
++        assert!(error.to_string().contains(NATIVE_DEEPSEEK_MODEL));
++
++        let root_after = root_manager
++            .get_model_info("gpt-6-luna", &root_config.to_models_manager_config())
++            .await;
++        assert_eq!(root_after.context_window, Some(32_000));
++        assert!(!root_after.used_fallback_model_metadata);
++        assert!(Arc::ptr_eq(
++            &select_models_manager_for_session(
++                &root_config,
++                Arc::clone(&auth_manager),
++                Arc::clone(&root_manager),
++                &SessionSource::Cli,
++            )
++            .expect("root manager selection should succeed"),
++            &root_manager,
++        ));
++
++        let luna_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
++            parent_thread_id: codex_protocol::ThreadId::new(),
++            depth: 1,
++            agent_path: None,
++            agent_nickname: None,
++            agent_role: Some("native_luna".to_string()),
++        });
++        assert!(Arc::ptr_eq(
++            &select_models_manager_for_session(
++                &root_config,
++                auth_manager,
++                Arc::clone(&root_manager),
++                &luna_source,
++            )
++            .expect("Luna manager selection should succeed"),
++            &root_manager,
++        ));
++    }
++}

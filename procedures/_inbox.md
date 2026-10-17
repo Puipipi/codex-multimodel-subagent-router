@@ -9,6 +9,7 @@
 - 临时目录清理：精确临时目录删除若被策略阻止，应记录清理失败并保留证据，不得换用其他工具绕过策略；可能遗留空日志文件时只记录通用现象，不记录私人路径、token 或随机标识。
 - DeepSeek 直连计费隔离：正式 Task 的 `--serve` 旧默认仍启用 GPT relay（`maxRelayCalls=Infinity`），因此不能仅凭 DeepSeek provider 配置声称已消除 GPT 桥接。原因是 strict flag 未进入正式 serve command/constructor；修复方向为显式 `--deepseek-only`，仅接受已知 DeepSeek 模型、封锁加密 GPT relay 输入并将 relay cap 设为 0。尚未真实触发 GPT relay 或产生计费；只用 loopback/fake-fetch 验证。
 - 多工作目录：临时 probe 目录不是 Git 仓库；Git 审计、提交与推送必须显式指定实际源码仓库的 workdir，避免把 not-a-repository 当成仓库故障。
+- Release 构建缓存：workflow 若只缓存 `target/debug`，即使 Cargo 依赖缓存命中，后续 `--release` 仍需完整重编译；恢复和保存路径都应包含 `target/release`，并记录旧缓存缺少 release 产物这一限制。
 
 - 旧共享网关迁移卸载：原始文件快照含受管 localhost 区块，主动 rollback 若直接恢复会复活已退役地址；安装失败仍恢复原快照，成功迁移后的卸载应恢复验证过的 prior_root 干净配置，并保留后续编辑冲突检查。
 
@@ -21,3 +22,4 @@
 ## 2026-10-18：native child agent_name 格式校验
 
 - 正式 CLI 的本地 mock probe 实测拒绝了 `native-isolation-deepseek-child`，错误为 `agent_name must use only lowercase letters, digits, and underscores`；native/Luna/测试 task name 及由 nonce 生成的后缀必须规范化为小写字母、数字和下划线。修复 harness 名称后再验证 child dispatch，不能把 tool call 已发出当成 child 已创建。
+- 组合 patch：公共 patch 是无 `diff --git` header 的 unified diff；追加 portable patch 时要按字节拼接并保持 LF，PowerShell `Add-Content`/`Set-Content` 可能写 CRLF。用 .NET `WriteAllBytes`，再以 `git -c core.autocrlf=false apply --check` 和落盘 SHA 验证；只替换当前 runtime 常量/断言/文档 SHA，历史 run/binary SHA 保持原样。

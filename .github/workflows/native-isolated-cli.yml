@@ -89,7 +89,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "Verified packages codex-protocol/codex-core and target codex in package codex-cli."
 
-      - name: Restore Cargo dependency and debug build cache
+      - name: Restore Cargo dependencies and build cache
         id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -97,6 +97,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             codex-rs/target/debug
+            codex-rs/target/release
           key: windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-${{ hashFiles('router/patches/native-isolated-cli.patch', 'codex-rs/Cargo.lock') }}
           restore-keys: |
             windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-
@@ -133,7 +134,7 @@ jobs:
             throw 'Cargo reported success but codex-rs/target/release/codex.exe is missing.'
           }
 
-      - name: Save Cargo dependency and debug build cache
+      - name: Save Cargo dependencies and build cache
         if: ${{ always() && !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -142,6 +143,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             codex-rs/target/debug
+            codex-rs/target/release
           key: windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-${{ hashFiles('router/patches/native-isolated-cli.patch', 'codex-rs/Cargo.lock') }}
 
       - name: Stage executable and provenance

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NATIVE_RUNTIME_PATCH_SHA256, NATIVE_RUNTIME_SOURCE_COMMIT, NATIVE_RUNTIME_TARGET, NATIVE_RUNTIME_VERSION } from "../scripts/native-runtime.mjs";
@@ -13,7 +13,31 @@ const ok = (value, message) => { assert.ok(value, message); checks += 1; };
 const rejects = async (fn, pattern, message) => { await assert.rejects(fn, pattern, message); checks += 1; };
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 
+async function unlinkOwnedJunction(junctionPath, ownedRoot) {
+  const rootPath = path.resolve(ownedRoot);
+  const linkPath = path.resolve(junctionPath);
+  const relativePath = path.relative(rootPath, linkPath);
+  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error("refusing to unlink a junction outside the test-owned root");
+  }
+
+  let linkStat;
+  try {
+    linkStat = await lstat(linkPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  if (!linkStat.isSymbolicLink()) {
+    throw new Error("refusing to unlink a test path that is not a symbolic link");
+  }
+  await unlink(linkPath);
+  return true;
+}
+
 const root = await mkdtemp(path.join(os.tmpdir(), "native-isolated-files-test-"));
+let ownedJunctionPath;
+let ownedJunctionTarget;
 try {
   const codexHome = path.join(root, "codex-home");
   const versionDir = path.join(root, "runtime", "versions", "approved");
@@ -230,7 +254,11 @@ try {
   const symlinkTarget = path.join(root, "symlink-target-agents");
   await mkdir(symlinkHome);
   await mkdir(symlinkTarget);
-  await symlink(symlinkTarget, path.join(symlinkHome, "agents"), "junction");
+  await writeFile(path.join(symlinkTarget, "sentinel.txt"), "junction target sentinel\n");
+  const junctionPath = path.join(symlinkHome, "agents");
+  await symlink(symlinkTarget, junctionPath, "junction");
+  ownedJunctionPath = junctionPath;
+  ownedJunctionTarget = symlinkTarget;
   await rejects(() => plan({ codexHome: symlinkHome, baseUrl, versionDir }), /agents directory must be a real directory/i, "agents junction is refused");
 
   const userEditPlan = await plan({ codexHome, baseUrl, versionDir, legacyManifest });
@@ -251,7 +279,21 @@ try {
   await rollback(vanishApplied);
   equal(await readFile(path.join(vanishHome, "config.toml"), "utf8"), oldConfig, "rollback succeeds after staged runtime is deleted");
 } finally {
+  if (ownedJunctionPath) {
+    const removed = await unlinkOwnedJunction(ownedJunctionPath, root);
+    equal(removed, true, "cleanup unlinks the test-owned agents junction explicitly");
+    equal(await readFile(path.join(ownedJunctionTarget, "sentinel.txt"), "utf8"), "junction target sentinel\n", "unlinking the junction leaves its target contents intact");
+    await rejects(() => lstat(ownedJunctionPath), { code: "ENOENT" }, "the owned junction is absent before recursive root cleanup");
+  }
+  const resolvedRoot = path.resolve(root);
+  const resolvedTempRoot = path.resolve(os.tmpdir());
+  if (path.dirname(resolvedRoot).toLowerCase() !== resolvedTempRoot.toLowerCase()
+    || !path.basename(resolvedRoot).startsWith("native-isolated-files-test-")) {
+    throw new Error("refusing to recursively remove a path that is not this test's mkdtemp root");
+  }
   await rm(root, { recursive: true, force: true });
 }
+
+await rejects(() => lstat(root), { code: "ENOENT" }, "the test-owned temporary root is removed after junction unlink");
 
 console.log(`PASS ${checks} isolated file transaction assertions`);
