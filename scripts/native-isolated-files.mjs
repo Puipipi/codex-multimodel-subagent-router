@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildChildCatalog, readCatalogCache } from "./native-catalog.mjs";
-import { composeIsolatedConfig, hasIsolatedConfigMarker, isolatedAgentToml } from "./native-isolated-config.mjs";
+import { composeIsolatedConfig, hasIsolatedConfigMarker, hasLegacyGatewayConfigMarker, isolatedAgentToml, removeIsolatedConfig } from "./native-isolated-config.mjs";
 import { verifyRuntimeVersion } from "./native-runtime.mjs";
 
 const FILES = ["config.toml", "agents/native_deepseek.toml", "sol-luna-native-models.json"];
@@ -133,8 +133,10 @@ export async function plan({ codexHome, baseUrl, versionDir, legacyManifest } = 
   const configFile = targetPath(home, "config.toml");
   const catalogFile = targetPath(home, "sol-luna-native-models.json");
   const snapshots = Object.fromEntries(await Promise.all(FILES.map(async (name) => [name, await snapshot(targetPath(home, name))])));
+  const priorConfigText = snapshots["config.toml"].exists ? snapshots["config.toml"].bytes.toString("utf8") : "";
+  const legacyMigration = hasLegacyGatewayConfigMarker(priorConfigText);
   const next = {
-    "config.toml": composeIsolatedConfig(snapshots["config.toml"].exists ? snapshots["config.toml"].bytes.toString("utf8") : "", {
+    "config.toml": composeIsolatedConfig(priorConfigText, {
       baseUrl,
       agentConfigPath: agentFile,
       legacyManifest,
@@ -151,15 +153,23 @@ export async function plan({ codexHome, baseUrl, versionDir, legacyManifest } = 
       throw new Error(`unowned ${name} already exists; refusing to overwrite it`);
     }
   }
+  const files = Object.fromEntries(FILES.map((name) => {
+    const uninstallPrior = name === "config.toml" && legacyMigration
+      ? { exists: true, bytes: Buffer.from(removeIsolatedConfig(next[name]), "utf8") }
+      : snapshots[name];
+    return [name, {
+      path: targetPath(home, name),
+      prior: snapshots[name],
+      uninstallPrior,
+      next: next[name],
+    }];
+  }));
   return {
     codexHome: home,
     versionDir: path.resolve(versionDir),
     runtimeExePath: verified.exePath,
-    files: Object.fromEntries(FILES.map((name) => [name, {
-      path: targetPath(home, name),
-      prior: snapshots[name],
-      next: next[name],
-    }])),
+    legacyMigration,
+    files,
   };
 }
 
@@ -189,11 +199,24 @@ export async function apply(transaction, { writeFileAtomic = defaultAtomicWrite 
   return transaction;
 }
 
-export async function rollback(transaction, { writeFileAtomic = defaultAtomicWrite } = {}) {
+export async function rollback(transaction, { writeFileAtomic = defaultAtomicWrite, target = "prior" } = {}) {
+  if (target !== "prior" && target !== "uninstall") throw new Error(`unsupported isolated rollback target: ${target}`);
   assertPlan(transaction);
   const home = await validateHome(transaction.codexHome);
+  const restoreSnapshot = (item) => {
+    if (target === "prior") return item.prior;
+    if (item.uninstallPrior) return item.uninstallPrior;
+    const priorHasLegacyBlock = item.prior?.exists
+      && path.basename(item.path).toLowerCase() === "config.toml"
+      && hasLegacyGatewayConfigMarker(item.prior.bytes.toString("utf8"));
+    if ((transaction.legacyMigration || priorHasLegacyBlock) && path.basename(item.path).toLowerCase() === "config.toml") {
+      throw new Error("legacy migration uninstall target is missing; refusing to restore deprecated gateway config");
+    }
+    return item.prior;
+  };
   for (const name of FILES) {
     const item = transaction.files[name];
+    restoreSnapshot(item);
     if (path.resolve(item.path) !== targetPath(home, name)) throw new Error(`isolated file plan path mismatch: ${name}`);
     if (!await currentMatches(item.path, { exists: true, bytes: Buffer.from(item.next, "utf8") })) {
       throw new Error(`file changed since apply: ${name}`);
@@ -205,14 +228,14 @@ export async function rollback(transaction, { writeFileAtomic = defaultAtomicWri
       const item = transaction.files[name];
       if (!await currentMatches(item.path, { exists: true, bytes: Buffer.from(item.next, "utf8") })) throw new Error(`file changed since apply: ${name}`);
       attempted.push(name);
-      await restorePrior(item.path, item.prior, writeFileAtomic);
+      await restorePrior(item.path, restoreSnapshot(item), writeFileAtomic);
     }
   } catch (error) {
     const recoveryErrors = [];
     for (const name of [...attempted].reverse()) {
       const item = transaction.files[name];
       try {
-        if (await currentMatches(item.path, item.prior)) await writeNext(item.path, item.next, writeFileAtomic);
+        if (await currentMatches(item.path, restoreSnapshot(item))) await writeNext(item.path, item.next, writeFileAtomic);
       } catch (recoveryError) { recoveryErrors.push(new Error(`failed to restore applied ${name}: ${recoveryError.message}`, { cause: recoveryError })); }
     }
     throw aggregateFailure(error, recoveryErrors, "isolated file rollback failed");

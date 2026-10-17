@@ -282,6 +282,11 @@ export function removeIsolatedConfig(content) {
   return isolated.length ? removeBlock(content, isolated[0]) : content;
 }
 
+export function hasLegacyGatewayConfigMarker(content) {
+  if (typeof content !== "string") throw new TypeError("content must be a string");
+  return matches(content, LEGACY_BEGIN, LEGACY_END).length === 1;
+}
+
 export function hasIsolatedConfigMarker(content) {
   if (typeof content !== "string") throw new TypeError("content must be a string");
   return matches(content, ISOLATED_BEGIN, ISOLATED_END).length === 1;

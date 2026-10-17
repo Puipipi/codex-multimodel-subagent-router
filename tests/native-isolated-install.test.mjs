@@ -196,6 +196,72 @@ try {
   } });
   equal(smokeSawMigrated, true, "legacy smoke fixture migrates prior root settings and uses a temporary local main catalog");
 
+  const migratedRollback = await fixture("legacy-active-rollback");
+  await writeFile(path.join(migratedRollback.codexHome, "config.toml"), legacyText);
+  const migratedManifestPath = path.join(migratedRollback.dir, "legacy-manifest.json");
+  await writeFile(migratedManifestPath, JSON.stringify({ prior_root: { openai_base_url: "https://api.openai.com/v1", model_catalog_json: null } }));
+  await prepare({ ...migratedRollback.common, legacyManifestPath: migratedManifestPath });
+  const migratedJournalBeforeActivation = decodeJournal(await readFile(migratedRollback.journalPath, "utf8"));
+  ok(migratedJournalBeforeActivation.files.files["config.toml"].uninstallPrior?.exists, "journal serializes the distinct migrated uninstall target");
+  equal(migratedJournalBeforeActivation.files.files["config.toml"].prior.bytes.toString("utf8"), legacyText, "journal retains exact legacy bytes for activation-failure recovery");
+  equal(decodeJournal(encodeJournal(migratedJournalBeforeActivation)).files.files["config.toml"].uninstallPrior.bytes.toString("utf8").includes("sol-luna-native-gateway begin"), false,
+    "journal roundtrip preserves the clean uninstall target without the retired gateway block");
+  const oldJournalPath = path.join(migratedRollback.dir, "journal", "old-format.json");
+  const oldJournal = { ...migratedJournalBeforeActivation, files: { ...migratedJournalBeforeActivation.files, files: { ...migratedJournalBeforeActivation.files.files } } };
+  oldJournal.files.files["config.toml"] = { ...oldJournal.files.files["config.toml"] };
+  delete oldJournal.files.files["config.toml"].uninstallPrior;
+  delete oldJournal.files.legacyMigration;
+  await mkdir(path.dirname(oldJournalPath), { recursive: true });
+  await writeFile(oldJournalPath, encodeJournal(oldJournal));
+  await rejects(() => rollback({ journalPath: oldJournalPath, envAdapter: migratedRollback.envAdapter, autostartAdapter: migratedRollback.autostartAdapter, taskAdapter: migratedRollback.taskAdapter }),
+    /legacy migration uninstall target is missing/i, "an old migration journal without a clean uninstall target is refused before mutation");
+  equal(migratedRollback.startup.size, 1, "old migration journal refusal leaves the managed Startup snapshot unchanged");
+  await migratedRollback.activateFixture();
+  await migratedRollback.rollbackFixture();
+  const migratedAfterRollback = await readFile(path.join(migratedRollback.codexHome, "config.toml"), "utf8");
+  equal(migratedAfterRollback.includes("sol-luna-native-gateway begin"), false, "active migration rollback does not revive the retired localhost block");
+  equal(migratedAfterRollback.includes('openai_base_url = "https://api.openai.com/v1"'), true, "active migration rollback restores the manifest prior root");
+  equal(migratedRollback.startup.size, 0, "active migration rollback does not restore retired managed Startup VBS");
+
+  const migratedActivationFailure = await fixture("legacy-activation-failure");
+  await writeFile(path.join(migratedActivationFailure.codexHome, "config.toml"), legacyText);
+  const failedMigrationManifest = path.join(migratedActivationFailure.dir, "legacy-manifest.json");
+  await writeFile(failedMigrationManifest, JSON.stringify({ prior_root: { openai_base_url: "https://api.openai.com/v1", model_catalog_json: null } }));
+  await prepare({ ...migratedActivationFailure.common, legacyManifestPath: failedMigrationManifest });
+  const failingMigrationEnv = {
+    ...migratedActivationFailure.envAdapter,
+    async set(key, value) {
+      if (key === "SOL_LUNA_NATIVE_PLAINTEXT_V2") throw new Error("migration activation environment failure");
+      return migratedActivationFailure.envAdapter.set(key, value);
+    },
+  };
+  await rejects(() => migratedActivationFailure.activateFixture({ envAdapter: failingMigrationEnv }), /migration activation environment failure/i,
+    "migration activation failure is surfaced after files and Startup were changed");
+  equal(await readFile(path.join(migratedActivationFailure.codexHome, "config.toml"), "utf8"), legacyText,
+    "failed migration activation restores the exact legacy config because the old gateway remains available");
+  equal(migratedActivationFailure.startup.size, 1, "failed migration activation restores the previous managed Startup VBS");
+
+  const migratedLaterEdit = await fixture("legacy-later-edit");
+  await writeFile(path.join(migratedLaterEdit.codexHome, "config.toml"), legacyText);
+  const laterEditManifest = path.join(migratedLaterEdit.dir, "legacy-manifest.json");
+  await writeFile(laterEditManifest, JSON.stringify({ prior_root: { openai_base_url: "https://api.openai.com/v1", model_catalog_json: null } }));
+  await prepare({ ...migratedLaterEdit.common, legacyManifestPath: laterEditManifest });
+  await migratedLaterEdit.activateFixture();
+  await writeFile(path.join(migratedLaterEdit.codexHome, "config.toml"), "later user edit\n");
+  await rejects(() => migratedLaterEdit.rollbackFixture(), /file changed since activation/i, "migrated uninstall refuses to overwrite a later config edit");
+  equal(migratedLaterEdit.environment.get("SOL_LUNA_NATIVE_PLAINTEXT_V2").value, "1", "migrated uninstall refusal preserves other active stages");
+
+  const legacyUserLocalhost = await fixture("legacy-user-localhost-prior");
+  await writeFile(path.join(legacyUserLocalhost.codexHome, "config.toml"), legacyText);
+  const userLocalhostManifest = path.join(legacyUserLocalhost.dir, "legacy-manifest.json");
+  const userLocalhostUrl = "http://127.0.0.1:59999/user-owned/v1";
+  await writeFile(userLocalhostManifest, JSON.stringify({ prior_root: { openai_base_url: userLocalhostUrl, model_catalog_json: null } }));
+  await prepare({ ...legacyUserLocalhost.common, legacyManifestPath: userLocalhostManifest });
+  await legacyUserLocalhost.activateFixture();
+  await legacyUserLocalhost.rollbackFixture();
+  equal((await readFile(path.join(legacyUserLocalhost.codexHome, "config.toml"), "utf8")).includes(userLocalhostUrl), true,
+    "active migration rollback preserves a user localhost URL already present in prior_root");
+
   const startFailure = await fixture("task-start-failure");
   await prepare(startFailure.common);
   await rejects(() => startFailure.activateFixture({}, {

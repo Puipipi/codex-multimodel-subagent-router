@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { NATIVE_RUNTIME_PATCH_SHA256, NATIVE_RUNTIME_SOURCE_COMMIT, NATIVE_RUNTIME_TARGET, NATIVE_RUNTIME_VERSION } from "../scripts/native-runtime.mjs";
 import { apply, plan, rollback } from "../scripts/native-isolated-files.mjs";
+import { removeIsolatedConfig } from "../scripts/native-isolated-config.mjs";
 
 let checks = 0;
 const equal = (actual, expected, message) => { assert.equal(actual, expected, message); checks += 1; };
@@ -69,6 +70,8 @@ try {
   ok(firstPlan.files["config.toml"].next.includes('openai_base_url = "https://api.openai.com/v1"'), "migration restores the prior root OpenAI URL");
   ok(firstPlan.files["config.toml"].next.includes('model_catalog_json = "user-root-catalog"'), "migration restores the prior root catalog value");
   equal(firstPlan.files["config.toml"].next.includes("legacy-global-catalog"), false, "migration removes the old shared gateway block");
+  const expectedUninstallConfig = removeIsolatedConfig(firstPlan.files["config.toml"].next);
+  equal(firstPlan.files["config.toml"].uninstallPrior?.bytes?.toString("utf8"), expectedUninstallConfig, "verified legacy migration records a clean uninstall config separately from exact activation prior");
   const plannedChildCatalog = JSON.parse(firstPlan.files["sol-luna-native-models.json"].next);
   equal(plannedChildCatalog.models.length, 1, "child catalog has exactly one model");
   equal(plannedChildCatalog.models[0].slug, "deepseek/deepseek-flash", "child catalog contains only DeepSeek");
@@ -96,6 +99,56 @@ try {
   equal(await readFile(path.join(codexHome, "agents/native_deepseek.toml")).catch(() => null), null, "first-install rollback removes the initially absent role");
   equal(await readFile(path.join(codexHome, "sol-luna-native-models.json")).catch(() => null), null, "first-install rollback removes the initially absent catalog");
   equal(snapshotBeforeApply["config.toml"].toString("utf8"), oldConfig, "plan snapshots original config bytes");
+
+  const migratedUninstallHome = path.join(root, "migrated-uninstall-home");
+  await mkdir(path.join(migratedUninstallHome, "agents"), { recursive: true });
+  await writeFile(path.join(migratedUninstallHome, "config.toml"), oldConfig);
+  await writeFile(path.join(migratedUninstallHome, "models_cache.json"), cacheBytes);
+  const migratedPlan = await plan({ codexHome: migratedUninstallHome, baseUrl, versionDir, legacyManifest });
+  const migratedApplied = await apply(migratedPlan);
+  await rollback(migratedApplied, { target: "uninstall" });
+  const cleanedMigratedConfig = await readFile(path.join(migratedUninstallHome, "config.toml"), "utf8");
+  equal(cleanedMigratedConfig.includes("sol-luna-native-gateway begin"), false, "active uninstall does not restore the retired shared gateway block");
+  equal(cleanedMigratedConfig.includes('openai_base_url = "https://api.openai.com/v1"'), true, "active uninstall restores manifest prior root URL");
+  equal(cleanedMigratedConfig.includes("sol-luna-native-isolated begin"), false, "active uninstall removes isolated provider config");
+
+  await writeFile(path.join(migratedUninstallHome, "config.toml"), oldConfig);
+  const oldFormatBasePlan = await plan({ codexHome: migratedUninstallHome, baseUrl, versionDir, legacyManifest });
+  await apply(oldFormatBasePlan);
+  const oldStandalonePlan = { ...oldFormatBasePlan, files: { ...oldFormatBasePlan.files } };
+  delete oldStandalonePlan.legacyMigration;
+  oldStandalonePlan.files["config.toml"] = { ...oldStandalonePlan.files["config.toml"] };
+  delete oldStandalonePlan.files["config.toml"].uninstallPrior;
+  await rejects(() => rollback(oldStandalonePlan, { target: "uninstall" }), /legacy migration uninstall target is missing/i,
+    "standalone old-format file plan detects the legacy block and refuses to restore it");
+  equal(await readFile(path.join(migratedUninstallHome, "config.toml"), "utf8"), oldFormatBasePlan.files["config.toml"].next,
+    "standalone old-format refusal leaves the active config untouched");
+  await rollback(oldFormatBasePlan);
+
+  const localhostPriorHome = path.join(root, "localhost-prior-home");
+  await mkdir(path.join(localhostPriorHome, "agents"), { recursive: true });
+  await writeFile(path.join(localhostPriorHome, "config.toml"), oldConfig);
+  await writeFile(path.join(localhostPriorHome, "models_cache.json"), cacheBytes);
+  const userLocalhost = "http://127.0.0.1:59999/user-owned/v1";
+  const localhostPlan = await plan({ codexHome: localhostPriorHome, baseUrl, versionDir, legacyManifest: { prior_root: { openai_base_url: userLocalhost, model_catalog_json: null } } });
+  ok(localhostPlan.files["config.toml"].uninstallPrior.bytes.toString("utf8").includes(userLocalhost), "uninstall preserves a user localhost URL recorded in prior_root");
+
+  const uninstallFailureHome = path.join(root, "uninstall-failure-home");
+  await mkdir(path.join(uninstallFailureHome, "agents"), { recursive: true });
+  await writeFile(path.join(uninstallFailureHome, "config.toml"), oldConfig);
+  await writeFile(path.join(uninstallFailureHome, "models_cache.json"), cacheBytes);
+  const uninstallFailurePlan = await plan({ codexHome: uninstallFailureHome, baseUrl, versionDir, legacyManifest });
+  await apply(uninstallFailurePlan);
+  let uninstallWrites = 0;
+  await rejects(() => rollback(uninstallFailurePlan, { target: "uninstall", async writeFileAtomic(file, bytes) {
+    uninstallWrites += 1;
+    const { writeFile, rename } = await import("node:fs/promises");
+    const temp = `${file}.uninstall-${uninstallWrites}`;
+    await writeFile(temp, bytes, { flag: "wx" });
+    await rename(temp, file);
+    if (uninstallWrites === 1) throw new Error("uninstall config mutation failure");
+  } }), /uninstall config mutation failure/i, "uninstall reports a write-after-change failure");
+  equal(await readFile(path.join(uninstallFailureHome, "config.toml"), "utf8"), uninstallFailurePlan.files["config.toml"].next, "failed uninstall write-after-throw reapplies the active config");
 
   const failureHome = path.join(root, "failure-home");
   await mkdir(path.join(failureHome, "agents"), { recursive: true });

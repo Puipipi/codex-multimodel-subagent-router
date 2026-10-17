@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { apply as applyFiles, plan as planFiles, rollback as rollbackFiles } from "./native-isolated-files.mjs";
 import { autostartFile } from "./native-autostart.mjs";
-import { composeIsolatedConfig, withTemporaryRootModelCatalog } from "./native-isolated-config.mjs";
+import { composeIsolatedConfig, hasLegacyGatewayConfigMarker, withTemporaryRootModelCatalog } from "./native-isolated-config.mjs";
 import { runIsolatedConfigSmoke } from "./native-isolated-smoke.mjs";
 import { ensureGateway, gatewayHealth, gatewayPaths, prepareGatewayIdentity, readGatewayIdentity, readGatewayState, stopGateway } from "./native-gateway-manager.mjs";
 import { createWindowsTaskSchedulerAdapter, gatewayTaskPlan, registerOwnedGatewayTask, restoreGatewayTask, snapshotGatewayTask, statusOwnedGatewayTask, createOwnedGatewayTaskLauncher } from "./native-gateway-task.mjs";
@@ -468,6 +468,12 @@ export async function activate({ journalPath, envAdapter = createWindowsUserEnvi
 export async function rollback({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), autostartAdapter, taskAdapter } = {}, dependencies = {}) {
   if (typeof journalPath !== "string" || !journalPath) throw new Error("journalPath must be provided explicitly");
   const journal = await readJournal(journalPath);
+  const configFilePlan = journal.files?.files?.["config.toml"];
+  const legacyMigration = journal.files?.legacyMigration === true
+    || (configFilePlan?.prior?.exists && hasLegacyGatewayConfigMarker(configFilePlan.prior.bytes.toString("utf8")));
+  if (legacyMigration && !configFilePlan?.uninstallPrior?.exists) {
+    throw new Error("legacy migration uninstall target is missing; refusing to restore deprecated gateway config");
+  }
   if (journal.indeterminateStages?.length) throw new Error(`transaction has indeterminate stages requiring manual recovery: ${journal.indeterminateStages.join(", ")}`);
   if (!Object.values(journal.completed || {}).some(Boolean)) throw new Error(`nothing to roll back in phase ${journal.phase}`);
   const startup = autostartAdapter || await defaultAutostartAdapter();
@@ -512,8 +518,11 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
     await (dependencies.stopGateway || stopGateway)({ paths }); journal.gateway.startedByTransaction = false; journal.completed.gateway = false; journal.gateway.cleanup = "stopped";
   } catch (error) { journal.gateway.cleanup = "failed"; errors.push(error); }
   if (journal.completed.environment) try { await rollbackEnvironment(journal.environmentSnapshot, envAdapter); journal.completed.environment = false; } catch (error) { journal.completed.environment = null; indeterminate.push("environment"); errors.push(error); }
-  if (journal.completed.files) try { await rollbackFiles(journal.files); journal.completed.files = false; } catch (error) { journal.completed.files = null; indeterminate.push("files"); errors.push(error); }
-  if (journal.completed.autostart) try { await restoreStartupChecked(journal.autostart, startup); journal.completed.autostart = false; } catch (error) { journal.completed.autostart = null; indeterminate.push("autostart"); errors.push(error); }
+  if (journal.completed.files) try { await rollbackFiles(journal.files, { target: legacyMigration ? "uninstall" : "prior" }); journal.completed.files = false; } catch (error) { journal.completed.files = null; indeterminate.push("files"); errors.push(error); }
+  if (journal.completed.autostart) try {
+    if (!legacyMigration) await restoreStartupChecked(journal.autostart, startup);
+    journal.completed.autostart = false;
+  } catch (error) { journal.completed.autostart = null; indeterminate.push("autostart"); errors.push(error); }
   if (journal.completed.task) try { await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks); journal.completed.task = false; } catch (error) { journal.completed.task = null; indeterminate.push("task"); errors.push(error); }
   if (journal.completed.launcher) try { await restoreLauncherChecked(journal.gateway.launcher); journal.completed.launcher = false; } catch (error) { journal.completed.launcher = null; indeterminate.push("launcher"); errors.push(error); }
   journal.indeterminateStages = [...new Set([...(journal.indeterminateStages || []), ...indeterminate])];

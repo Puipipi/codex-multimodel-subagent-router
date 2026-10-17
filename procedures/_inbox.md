@@ -9,3 +9,5 @@
 - 临时目录清理：精确临时目录删除若被策略阻止，应记录清理失败并保留证据，不得换用其他工具绕过策略；可能遗留空日志文件时只记录通用现象，不记录私人路径、token 或随机标识。
 - DeepSeek 直连计费隔离：正式 Task 的 `--serve` 旧默认仍启用 GPT relay（`maxRelayCalls=Infinity`），因此不能仅凭 DeepSeek provider 配置声称已消除 GPT 桥接。原因是 strict flag 未进入正式 serve command/constructor；修复方向为显式 `--deepseek-only`，仅接受已知 DeepSeek 模型、封锁加密 GPT relay 输入并将 relay cap 设为 0。尚未真实触发 GPT relay 或产生计费；只用 loopback/fake-fetch 验证。
 - 多工作目录：临时 probe 目录不是 Git 仓库；Git 审计、提交与推送必须显式指定实际源码仓库的 workdir，避免把 not-a-repository 当成仓库故障。
+
+- 旧共享网关迁移卸载：原始文件快照含受管 localhost 区块，主动 rollback 若直接恢复会复活已退役地址；安装失败仍恢复原快照，成功迁移后的卸载应恢复验证过的 prior_root 干净配置，并保留后续编辑冲突检查。
