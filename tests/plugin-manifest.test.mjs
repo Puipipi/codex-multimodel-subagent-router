@@ -26,6 +26,9 @@ ok(existsSync(new URL('../SKILL.md', import.meta.url)), 'the root canonical stan
 equal(manifest.interface.displayName, 'Sol 主控 · 原生 Luna/DeepSeek 峰谷分工', 'the display name is present');
 ok(manifest.interface.shortDescription.length > 10, 'the short description is present');
 ok(manifest.interface.longDescription.length > 50, 'the long description is present');
+match(manifest.interface.longDescription, /native_deepseek.*provider.*catalog/i, 'the manifest describes the isolated DeepSeek role');
+doesNotMatch(manifest.interface.longDescription, /shared `openai` provider|transparently relays GPT traffic/i, 'the manifest does not describe shared-root GPT relay as the formal route');
+doesNotMatch(manifest.interface.defaultPrompt.join(' '), /Start the native DeepSeek gateway/i, 'default prompts do not start the old gateway');
 equal(manifest.interface.developerName, 'Puipipi', 'the developer name is present');
 equal(manifest.interface.category, 'Developer Tools', 'the category is present');
 ok(Array.isArray(manifest.interface.capabilities) && manifest.interface.capabilities.includes('Write'), 'the capabilities include write');
@@ -59,8 +62,8 @@ doesNotMatch(wrapper, /new Manager|session\/prompt/, 'the wrapper adds no DSH ma
 match(pluginDoc, /native Codex child/, 'the deployment doc states the browser-trace limitation');
 match(pluginDoc, /single-use (?:exchange )?ticket|short-lived/i, 'the deployment doc explains trace ticket exchange');
 match(pluginDoc, /does \*\*not\*\* bundle a second scheduling skill|does not bundle a second scheduling skill/, 'the deployment doc records the single-skill rule');
-match(pluginDoc, /Release integration syncs the canonical/, 'the deployment doc records the release integration boundary');
-match(pluginDoc, /does not mark hooks trusted/, 'the deployment doc preserves the human hook trust review');
+match(pluginDoc, /no automatic release.integration script/i, 'the deployment doc records that skill and plugin synchronization remains separate');
+match(pluginDoc, /does not mark them trusted/, 'the deployment doc preserves the human hook trust review');
 doesNotMatch(pluginDoc, /[A-Za-z]:\\Users\\[^\\\s]+\\/i, 'the new docs contain no real Windows user path');
 doesNotMatch(pluginDoc, /(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})/, 'the new docs contain no credential');
 

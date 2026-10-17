@@ -1,6 +1,6 @@
 # Codex plugin: Sol Luna Native + Legacy DSH
 
-This directory is both the existing routing skill and a local Codex plugin. The current formal path is native collaboration through the hidden loopback gateway; the plugin also keeps the published `dsh-subagent-mcp@0.7.0` bridge as an explicit legacy compatibility surface. It does not add another model loop, another DeepSeek client, or another agent runtime.
+This repository contains the canonical standalone routing skill and an optional Codex plugin. The formal native DeepSeek path uses the patched, versioned CLI with an isolated `native_deepseek` role, dedicated `deepseek-native` provider, and child-only catalog; Sol and Luna retain their normal provider/catalog. The published `dsh-subagent-mcp@0.7.0` bridge remains explicit legacy compatibility. The older shared-root gateway, global catalog, and GPT relay are historical compatibility only, not the formal isolated setup path.
 
 ## Components
 
@@ -9,10 +9,11 @@ This directory is both the existing routing skill and a local Codex plugin. The 
 | `.codex-plugin/plugin.json` | Codex plugin manifest. Declares the MCP companion; it does not declare a second skill. |
 | `.agents/plugins/marketplace.json` | Portable repo marketplace. Its `source.path` is `./`, inside the marketplace root, so local and GitHub clone installs resolve without an absolute path. |
 | `.mcp.json` | Starts `scripts/plugin-mcp.mjs` with `cwd: "."` (the plugin root), a long tool timeout for unbounded waits, and a minimal environment allowlist. |
-| `scripts/native-routing.mjs`, `native-relay.mjs`, `native-gateway.mjs` | Exact DeepSeek slug routing, native/GPT collaboration normalization, relay cache, transparent GPT forwarding, and per-request usage. |
-| `scripts/native-gateway-manager.mjs`, `native-autostart.mjs` | Hidden single-instance gateway with stable private port/token identity, explicit stop, and Windows login launcher. |
-| `scripts/native-catalog.mjs`, `native-install.mjs` | Merge the existing Sol/Luna catalog, add the exact DeepSeek entry, manage the root config block, and roll back only owned changes. |
-| `scripts/native-state.mjs`, `native-agent.mjs` | Parent/child ownership, reserve-before-spawn writer leases, and catalog-supported native Luna/DeepSeek model resolution. |
+| `scripts/native-isolated-install.mjs`, `native-isolated-files.mjs`, `native-isolated-smoke.mjs` | Prepare, smoke-test, activate, inspect, and roll back the isolated runtime/configuration transaction. |
+| `scripts/native-runtime.mjs`, `native-runtime-env.mjs` | Verify/stage the pinned CLI runtime and transactionally manage its user environment variables. |
+| `scripts/native-gateway-manager.mjs`, `native-autostart.mjs` | Manage a gateway by explicit state directory and configure its optional startup launcher. The isolated installer uses a separate gateway directory; the legacy default instance remains separate. |
+| `scripts/native-catalog.mjs`, `native-install.mjs` | `native-catalog.mjs` builds the isolated child catalog; `native-install.mjs` retains the older shared-root transaction for historical compatibility. |
+| `scripts/native-state.mjs`, `native-agent.mjs` | Parent/child ownership, reserve-before-spawn writer leases, and Luna catalog resolution plus the native DeepSeek role dispatch contract. |
 | `scripts/plugin-mcp.mjs` | Legacy MCP stdio wrapper. Requires trusted `_meta.threadId`, enforces ownership, filters lists, leases writers, and exposes `dsh_trace`. |
 | `scripts/plugin-state.mjs` | Durable hashed ownership store and canonical same-workspace writer leases. |
 | `scripts/plugin-trace.mjs` | Escaped, read-only loopback HTML trace with single-use ticket exchange, per-view scoped cookies/paths, coexisting tabs, clickable details, and Simplified Chinese user-visible labels/help/errors. |
@@ -125,13 +126,13 @@ Read-only `dsh_status` / `dsh_events` measurements on completed agent `ffbbbc39-
 
 The npx resolver cost about 1.0 s per call (roughly 77%). The fast path removes it while keeping the exact published 0.7.0 backend. The ownership hook adds about 5 ms per call. The remaining ~280 ms is fresh Node/MCP SDK/CLI startup; the 2–5 ms bridge floor is not used because persistent reuse would add unsafe lifecycle and mutating-replay risk. Helper calls use two node processes instead of three; the plugin host adds one child instead of two. Concurrent work, antivirus, and host load can increase these times. No mutating call is retried automatically, and no backend/provider/model/effort is silently changed.
 
-## Native gateway path
+## Formal native DeepSeek path
 
-The current path keeps the main `openai` provider and current Sol model. `native-install.mjs` starts one hidden gateway before writing the marker-owned root `openai_base_url`/`model_catalog_json` block. The stable private identity keeps the same port and capability token across restarts, so a reboot does not leave Codex pointed at a dead random endpoint. The Windows login VBS launcher is implemented as opt-in and is not run by tests.
+The `native_deepseek` role has a dedicated `deepseek-native` provider and child-only `sol-luna-native-models.json`; the parent Sol session and native Luna keep their normal provider and live model catalog. The route does not add a root `openai_base_url` or global `model_catalog_json`. Setup is explicit through [`native-isolated-install.mjs`](docs/native-isolated-install.md): `prepare` runs a temporary-home app-server smoke and writes a journal, `activate` applies the prepared files/environment/startup, and `rollback` restores only unchanged managed values.
 
-Unrecognized models remain raw GPT traffic. The exact `deepseek/deepseek-flash` slug goes to the official DeepSeek Responses API. GPT authorization is never forwarded to DeepSeek. Native GPT ciphertext collaboration items are relayed once and cached by account+ciphertext; plaintext DeepSeek payloads stored in `encrypted_content` are restored directly. Main GPT streaming usage, DeepSeek per-request usage, and relay usage are recorded separately; absence is reported as unknown, never estimated.
+The local/mock installer and smoke checks have passed. The actual isolated CLI installation has not been run; `activate` reports `configured` and `restartNeeded`, while runtime observation and desktop acceptance remain false until separately verified. Do not treat the historical shared-provider acceptance record as acceptance of the isolated role or desktop UI.
 
-Native child spawning uses `spawn_agent` with `task_name`, `model: "deepseek/deepseek-flash"`, and `fork_turns: "none"`. Do not pass `agent_type`; current v2 does not expose it. The role file is compatibility documentation only. Writer ownership reserves the workspace before spawn, binds the child explicitly, and requires explicit terminal release; it is not based on a short-lived helper PID. The accepted evidence is in `docs/native-deepseek-acceptance-2026-10-17.md`; the desktop UI is still unverified because the local Node REPL ACL file lock blocks the interface check.
+Native child spawning uses `spawn_agent` with `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the role owns model selection. If the role is unavailable, report setup failure and stop. Do not fall back to the shared-root gateway, an explicit model override, or Luna. Writer ownership reserves the workspace before spawn, binds the real child, and releases only at explicit finish or verified terminal state.
 
 ## Failure behavior
 
@@ -148,32 +149,23 @@ Native child spawning uses `spawn_agent` with `task_name`, `model: "deepseek/dee
 
 ## Deployment
 
-Release integration syncs the canonical `SKILL.md` and `scripts/` to the existing local skill, then refreshes the installed plugin cache with the supported Codex CLI:
+The standalone routing skill and plugin are updated separately. There is no automatic release-integration script in this repository that synchronizes the canonical `SKILL.md` into the installed skill directory. Update the existing standalone skill in place through the configured skill workflow or by copying the root `SKILL.md`; do not create a second routing skill. To refresh the plugin cache from the marketplace, use the supported Codex CLI:
 
 ```powershell
 codex plugin add sol-luna-deepseek-router@sol-luna --json
 ```
 
-This refresh copies the current intended source/docs/tests and updates the cache hashes. It does not mark hooks trusted, change the main model/provider/base URL, or restart the DSH backend. A running Codex host may still need a plugin reload to discover new tools; the automated release itself does not restart it. Reopen `/hooks` after an update to review the new hook hashes.
+This refresh updates the installed plugin source/cache; it does not update the separately installed standalone skill, mark hooks trusted, change the main model/provider/base URL, or restart Codex. A running Codex host may need a plugin reload to discover new tools. Reopen `/hooks` after an update to review the hook hashes.
 
 1. Install Node.js 24+ with npm. Confirm `node --version` and `npm --version`.
-2. For the current native path, review the diff and run the dry-run first:
-
-   ```powershell
-   node .\scripts\native-install.mjs install --dry-run
-   node .\scripts\native-config-validate.mjs --source-home $env:USERPROFILE\.codex
-   node .\scripts\native-install.mjs install --autostart
-   node .\scripts\native-gateway-manager.mjs status --json
-   ```
-
-   The install starts the hidden gateway before writing config, keeps the main model/provider unchanged, and writes only the marker-owned root keys. `--autostart` writes the hidden Startup-folder VBS launcher; do not use it where login startup is not authorized.
+2. For isolated native DeepSeek setup, follow [the isolated installer guide](docs/native-isolated-install.md) only after an explicit setup request. Its `prepare`, `status`, `activate`, and `rollback` commands are the formal setup interface. Do not use `native-install.mjs install` or start the legacy default gateway as the new setup path. The guide distinguishes staged, configured, and desktop-accepted states; real installation and desktop acceptance remain pending.
 3. The DSH bridge below is legacy compatibility only. Install it at a deliberate setup point with the upstream companion skill disabled:
 
    ```powershell
    npx --yes dsh-subagent-mcp@0.7.0 setup --no-skill --service background
    ```
 
-3. Install this repository as a Codex plugin through its portable repo marketplace:
+4. Install this repository as a Codex plugin through its portable repo marketplace:
 
    ```powershell
    codex plugin marketplace add <repo-root>
@@ -182,11 +174,11 @@ This refresh copies the current intended source/docs/tests and updates the cache
 
    `.agents/plugins/marketplace.json` points at `./`, inside the marketplace root, so a local checkout and a GitHub clone use the same entry. The manifest is `.codex-plugin/plugin.json`; the MCP companion is `.mcp.json`. Do not install a second routing skill from this plugin: the package has no bundled skill, and the canonical root `SKILL.md` remains the single standalone scheduling skill.
 
-4. Reload plugins or restart Codex once after installation so the new MCP tools and hooks are discovered. Do not open a new chat merely to switch peak/valley routes; preserve the current conversation. A running session may need that plugin reload to pick up the new MCP tools.
+5. Reload plugins or restart Codex once after installation so the new MCP tools and hooks are discovered. Do not open a new chat merely to switch peak/valley routes; preserve the current conversation. A running session may need that plugin reload to pick up the new MCP tools.
 
-5. Review the discovered hooks in `/hooks` before enabling them. Both hooks are untrusted until a human inspects their command, source, and hash and approves them. The plugin does not mark them trusted, edit the trust store, or bypass the review. Hook notices stay inactive until that approval; routing and MCP tools do not depend on the hooks.
+6. Review the discovered hooks in `/hooks` before enabling them. Both hooks are untrusted until a human inspects their command, source, and hash and approves them. The plugin does not mark them trusted, edit the trust store, or bypass the review. Hook notices stay inactive until that approval; routing and MCP tools do not depend on the hooks.
 
-6. Ask Codex to call `dsh_list` or `dsh_start`. Codex supplies `_meta.threadId` automatically. If a host build does not supply it, the plugin fails safely; use the PowerShell helper with an explicit local workflow instead of inventing an identity.
+7. Ask Codex to call `dsh_list` or `dsh_start`. Codex supplies `_meta.threadId` automatically. If a host build does not supply it, the plugin fails safely; use the PowerShell helper with an explicit local workflow instead of inventing an identity.
 
 The manifest and MCP companion follow the Codex plugin contract described in the official OpenAI documentation: [Package your plugin](https://developers.openai.com/plugins/build/plugins) and [Build an MCP server](https://developers.openai.com/plugins/build/mcp-server). The `.mcp.json` fields `cwd`, `env_vars`, and `tool_timeout_sec` match the shape used by bundled first-party plugins.
 

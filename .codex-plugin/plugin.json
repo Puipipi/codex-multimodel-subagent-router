@@ -1,7 +1,7 @@
 {
   "name": "sol-luna-deepseek-router",
   "version": "0.9.1",
-  "description": "Sol-led native Luna/DeepSeek routing through a hidden loopback gateway, with explicit DSH compatibility, per-chat ownership, and writer leases.",
+  "description": "Sol-led routing to native Luna and an isolated native DeepSeek child role, with explicit DSH compatibility, per-chat ownership, and writer leases.",
   "author": {
     "name": "Puipipi",
     "url": "https://github.com/Puipipi"
@@ -23,7 +23,7 @@
   "interface": {
     "displayName": "Sol 主控 · 原生 Luna/DeepSeek 峰谷分工",
     "shortDescription": "Keep Sol in charge; route new work to native Luna or native DeepSeek by peak/valley schedule.",
-    "longDescription": "Keeps Sol and the current conversation intact while routing new coding tasks to native Luna at DeepSeek peak windows or to a native DeepSeek child at valley windows. The optional hidden loopback gateway preserves the shared openai provider, transparently relays GPT traffic, and adds the exact deepseek/deepseek-flash model without replacing the main model. DSH MCP tools and the read-only trace remain available as explicit legacy compatibility.",
+    "longDescription": "Keeps Sol and the current conversation intact while routing new coding tasks to native Luna at DeepSeek peak windows or to an isolated native_deepseek child role at valley windows. The child role uses its own deepseek-native provider and model catalog; Sol and Luna retain their normal provider and live catalog. The older shared-root gateway and GPT relay remain historical compatibility only. DSH MCP tools and the read-only trace remain available as explicit legacy compatibility.",
     "developerName": "Puipipi",
     "category": "Developer Tools",
     "capabilities": [
@@ -34,8 +34,8 @@
     "websiteURL": "https://github.com/Puipipi/sol-luna-deepseek-router",
     "defaultPrompt": [
       "Route this task by DeepSeek peak pricing",
-      "Start the native DeepSeek gateway",
-      "Show the native acceptance evidence"
+      "Review the isolated native DeepSeek setup status",
+      "Show the current native acceptance status"
     ],
     "brandColor": "#4D6BFE"
   }

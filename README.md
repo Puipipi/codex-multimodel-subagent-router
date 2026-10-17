@@ -1,6 +1,6 @@
 # Sol 主控 · 原生 Luna/DeepSeek 峰谷分工
 
-This repository contains one routing skill and an optional Codex plugin. Sol stays in charge of the current conversation, then routes repository file search and reading, code or document edits, debugging, and tests to native Luna during DeepSeek's official weekday peak windows or to a native DeepSeek child during valley hours. A deterministic Node.js helper evaluates the schedule; Sol interprets user intent and does not send ordinary Q&A through the router. The formal DeepSeek path uses a shared `openai` provider and a hidden loopback gateway; DSH remains explicit legacy compatibility. Sol stays responsible for decisions and review. Users can explicitly ask Sol to work directly.
+This repository contains one routing skill and an optional Codex plugin. Sol stays in charge of the current conversation, then routes repository file search and reading, code or document edits, debugging, and tests to native Luna during DeepSeek's official weekday peak windows or to a native DeepSeek child during valley hours. A deterministic Node.js helper evaluates the schedule; Sol interprets user intent and does not send ordinary Q&A through the router. The formal native DeepSeek route uses the isolated `native_deepseek` child role, its own `deepseek-native` provider, and a child-only model catalog. Sol and native Luna continue using their normal provider and live model catalog. DSH remains explicit legacy compatibility. Sol stays responsible for decisions and review. Users can explicitly ask Sol to work directly.
 
 The standalone root `SKILL.md` is the canonical routing policy. The optional plugin adds the native gateway helpers, a guarded legacy DSH MCP wrapper, real DSH event access, and local lifecycle hooks; it does not add a second scheduler, a second DeepSeek client, another agent loop, or any bundled skill. Install and enable exactly one routing skill: the root standalone scheduler.
 
@@ -120,27 +120,17 @@ The DeepSeek executor is the external [dsh-subagent-mcp](https://github.com/dqtz
 
 This repository also includes an optional idempotent Windows console-window patch, `scripts/patch-backend-windows.mjs`. It changes only the managed 0.7.0 runtime's `spawn(process.execPath, ...)` options by adding `windowsHide: true`; it does not touch the service lifecycle, `package.json`, or the license, and it keeps a verified backup. When that patch is applied, the managed install contains local changes beyond upstream 0.7.0. Run it only at a deliberate maintenance point, not while tasks are active.
 
-## Native gateway (current path)
+## Native DeepSeek route (isolated path)
 
-The native route keeps the main `openai` provider and the current Sol model. A hidden loopback gateway is the only `openai_base_url`; unrecognized model names are forwarded transparently to ChatGPT, while the exact `deepseek/deepseek-flash` slug goes to the official DeepSeek Responses API. GPT authorization stays on GPT. DeepSeek requests prefer the signed-in DSH account grant, refreshed on every request and sent only in `x-dsh-auth-token` to the exact official API origin; when no account grant exists, the legacy DSH API key remains supported. Invalid grants fail closed. Health shows credential mode and availability, not successful authentication. See [the account authentication note](docs/native-account-auth.md). A native collaboration payload in real GPT ciphertext is relayed once through the signed-in native backend and cached by account+ciphertext; a plaintext DeepSeek payload stored in `encrypted_content` is restored directly without a relay.
+The formal native DeepSeek path uses the patched, versioned CLI and the `native_deepseek` child role. That role uses its own `deepseek-native` provider and `sol-luna-native-models.json` catalog. Sol's main session and native Luna retain their normal provider and live model catalog; this path does not set root `openai_base_url` or a global `model_catalog_json`. See [the isolated installer guide](docs/native-isolated-install.md) for the explicit `prepare`, `activate`, `status`, and `rollback` workflow. Do not run setup during ordinary task routing.
 
-```powershell
-node .\scripts\native-gateway-manager.mjs start
-node .\scripts\native-gateway-manager.mjs status --json
-node .\scripts\native-gateway-manager.mjs stop
-node .\scripts\native-install.mjs install --dry-run
-node .\scripts\native-config-validate.mjs --source-home $env:USERPROFILE\.codex
-node .\scripts\native-install.mjs install --autostart
-node .\scripts\native-autostart.mjs install
-node .\scripts\native-autostart.mjs status
-node .\scripts\native-autostart.mjs remove
-```
+The isolated installer runs an app-server smoke against a temporary Codex home before activation. Its local and mocked checks have passed, but no real isolated CLI installation has been performed and desktop acceptance remains pending. `activate` reports a configured state and restart requirement; neither status nor a successful smoke proves that the desktop launched or accepted the patched CLI.
 
-The gateway identity (stable loopback port and capability token) is persisted privately, so a restart reuses the same `openai_base_url`; the manager never replaces the endpoint with a random port. `install` starts the gateway before writing the config and inserts the marker-owned root keys before the first TOML table. `rollback` removes only the managed block and its own prior key values, preserving post-install keys. Windows login startup is provided by a hidden Startup-folder VBS launcher (`native-autostart.mjs install`); it is implemented but not run by this repository's tests.
+The older `native-install.mjs` shared-root gateway, global catalog, and transparent GPT relay remain historical compatibility paths. They are not the formal isolated setup route and must not be used as its installation instructions. The old native acceptance record documents that earlier path only; it is not evidence of isolated-role or desktop acceptance.
 
-The native child call is verified with `spawn_agent`, `task_name`, `model: "deepseek/deepseek-flash"`, and `fork_turns: "none"`. Do not pass `agent_type`; current v2 does not expose it. The optional role file remains for compatibility only. Native writer coordination reserves the workspace before spawn, binds the real child, and releases explicitly; it is not tied to a short-lived CLI PID.
+The formal native child call uses `spawn_agent` with `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the isolated role selects its configured model. If the role is unavailable, stop and report the setup failure. Do not fall back to the shared-root provider, an explicit model override, or another executor. Native writer coordination reserves the workspace before spawn, binds the real child, and releases explicitly; it is not tied to a short-lived CLI PID.
 
-The accepted evidence is in `docs/native-deepseek-acceptance-2026-10-17.md`. The desktop-panel UI is not yet verified: the local Node REPL ACL file lock blocks the intended UI check.
+The evidence in `docs/native-deepseek-acceptance-2026-10-17.md` is historical and covers the earlier shared-provider contract. Isolated-role end-to-end and desktop acceptance remain pending.
 
 The legacy DSH MCP/trace path remains explicit and is never an automatic fallback from native DeepSeek.
 
@@ -193,19 +183,9 @@ codex plugin add sol-luna-deepseek-router@sol-luna
 
 After this initial plugin installation or a plugin update, reload plugins or restart Codex so the new MCP tools and hooks are discovered. Do not open a new chat merely to switch peak/valley routes; preserve the current conversation. Codex lists the hooks as untrusted until you review and approve them in `/hooks`.
 
-### Native gateway
+### Isolated native DeepSeek setup
 
-At a deliberate setup point, after reviewing the diff:
-
-```powershell
-node .\scripts\native-install.mjs install --dry-run
-node .\scripts\native-config-validate.mjs --source-home $env:USERPROFILE\.codex
-node .\scripts\native-install.mjs install --autostart
-node .\scripts\native-gateway-manager.mjs status --json
-node .\scripts\native-install.mjs rollback
-```
-
-The install command starts the hidden gateway before Codex's first request, writes the merged catalog and the `native_deepseek` compatibility role, and owns only the two root routing keys. It does not change the main model or provider. `--autostart` writes a hidden Windows Startup-folder launcher; do not run it in an environment where login startup is not authorized. The gateway state/identity/logs live under LocalAppData, never in this repository.
+Only perform setup when explicitly requested. Follow [the isolated installer guide](docs/native-isolated-install.md) and its staged `prepare` → `status` → `activate` flow. The legacy `native-install.mjs` command is not the formal setup entrypoint. Real installation and desktop acceptance are still pending; do not describe a prepared or configured state as desktop acceptance.
 
 ### DSH bridge
 
