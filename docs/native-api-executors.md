@@ -276,18 +276,29 @@ fixture disables web search explicitly.
 ## Verification and current limits
 
 The current runtime approval hash is
-`fce9b9cc3de46df547a7403c9e71a4ac07f3c81eee47742907d68496ff63e18c`. Runtime
+`b0116833b2ecacf712ed2151b5175a5980b511a797d18aefaea13ecc5f8e8846`. Runtime
 manifests built with the older `7a5c...` patch (including the installed 6ec
 binary) are not accepted by the API dispatch gate. The old binary may still be
 used as an adapter-level CLI smoke target, but it is not evidence that a new
 native API role passed end-to-end.
 
-The final patch is 108080 bytes. The first build run `39132413744` failed on a
-test-only missing import, and its cache was saved. The corrected run
-`39134187187` at head `36d9f11ef3bbdc137215647c4ce4259b5646e558` was still in
-progress when this checkpoint was written; it is not claimed GREEN until the
-run completes. This is build evidence, not a local installation, restart, or
-desktop API-role acceptance. No new runtime was installed in this worktree.
+The final patch is 108172 bytes. The first build run `39132413744` failed on a
+test-only missing import, and its cache was saved. Run `39134187187` at head
+`36d9f11ef3bbdc137215647c4ce4259b5646e558` completed as a FAILURE: the
+native API suite reached eight running tests and two override/mismatch tests
+passed before the none cold-resume test hit `STATUS_STACK_OVERFLOW`. The cache
+step succeeded, but no release artifact was produced. Neither run is GREEN.
+The corrected build is run `39136590575` at head
+`1155c51dcb64cd8ba3216b26639ed9b8878a3be2`, ref
+`fix/native-deepseek-bounded-retries`; at this checkpoint it was `in_progress`
+on the current toolchain with no observed failure. It is not claimed GREEN
+until the run completes. This is build evidence, not a local installation,
+restart, or desktop API-role acceptance. No new runtime was installed in this
+worktree.
+
+The two corrected cold-resume tests box their futures and retain the
+`Feature` result `.expect`; production code is unchanged. The eight Rust
+native API tests, guard, and assertions remain in the patch.
 
 Mocked/free tests cover artifacts, install/rollback, Task namespace, health,
 gate failures, source-bundle stability, immutable state bindings, and CLI

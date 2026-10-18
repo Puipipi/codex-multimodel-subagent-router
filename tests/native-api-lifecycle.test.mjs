@@ -470,7 +470,7 @@ try {
 
   const patchBytes = await readFile(path.join(repoRoot, "patches", "native-isolated-cli.patch"));
   equal(NATIVE_RUNTIME_PATCH_SHA256, createHash("sha256").update(patchBytes).digest("hex"), "runtime approval hash tracks the tracked patch");
-  equal(NATIVE_RUNTIME_PATCH_SHA256, "fce9b9cc3de46df547a7403c9e71a4ac07f3c81eee47742907d68496ff63e18c", "runtime approval hash matches the final integration patch");
+  equal(NATIVE_RUNTIME_PATCH_SHA256, "b0116833b2ecacf712ed2151b5175a5980b511a797d18aefaea13ecc5f8e8846", "runtime approval hash matches the final integration patch");
 
   console.log(`PASS ${checks} native API lifecycle assertions`);
 } finally {
