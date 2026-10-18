@@ -195,6 +195,8 @@ After this initial plugin installation or a plugin update, reload plugins or res
 
 Only perform setup when explicitly requested. Follow [the isolated installer guide](docs/native-isolated-install.md) and its staged `prepare` → `status` → `activate` flow. The legacy `native-install.mjs` command is not the formal setup entrypoint. Real installation and desktop acceptance are still pending; do not describe a prepared or configured state as desktop acceptance.
 
+The installer manages three user environment values, including `SOL_LUNA_NATIVE_INSTALL_JOURNAL`, which lets future DeepSeek chats find the active journal without an explicit CLI flag. Fully exit and restart Codex after activation so new chats inherit the updated environment; a running app does not refresh it. Generic runtime environment plans continue to manage only the original two keys, and older two-key journals remain supported.
+
 ### DSH bridge
 
 At a deliberate setup point, install the upstream bridge with the companion skill disabled:

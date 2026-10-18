@@ -55,9 +55,11 @@ function runCli(args, env = {}) {
   const errFd = openSync(err, "w");
   let result;
   try {
+    const childEnv = { ...process.env };
+    delete childEnv.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
     result = spawnSync(process.execPath, [cliPath, ...args], {
       cwd: repoRoot,
-      env: { ...process.env, ...env },
+      env: { ...childEnv, ...env },
       stdio: ["ignore", outFd, errFd],
       windowsHide: true,
     });
@@ -83,8 +85,43 @@ try {
   equal(JSON.parse(lunaCli.stdout).model, "gpt-6-luna", "Luna CLI resolves the real catalog model");
   const dsCli = runCli(["--executor", "deepseek"], { CODEX_HOME: emptyHome });
   equal(dsCli.status, 2, "DeepSeek CLI fails closed without an activated isolated install journal");
-  assert.match(dsCli.stderr, /--install-journal is required/);
+  assert.match(dsCli.stderr, /installed isolation journal path is required/);
   checks += 1;
+  const inheritedHostJournal = path.join(root, "host-install-journal-must-not-leak.json");
+  const priorHostJournal = process.env.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
+  process.env.SOL_LUNA_NATIVE_INSTALL_JOURNAL = inheritedHostJournal;
+  let isolatedDefault;
+  try { isolatedDefault = runCli(["--executor", "deepseek"], { CODEX_HOME: emptyHome }); }
+  finally {
+    if (priorHostJournal === undefined) delete process.env.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
+    else process.env.SOL_LUNA_NATIVE_INSTALL_JOURNAL = priorHostJournal;
+  }
+  equal(isolatedDefault.status, 2, "default test subprocess has no host journal and fails closed");
+  assert.match(isolatedDefault.stderr, /installed isolation journal path is required/);
+  equal(isolatedDefault.stderr.includes(inheritedHostJournal), false, "default test subprocess cannot inherit a host journal path");
+  checks += 2;
+  const envJournal = path.join(root, "env-only-journal.json");
+  const envOnly = runCli(["--executor", "deepseek"], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: envJournal });
+  equal(envOnly.status, 2, "env-only journal proceeds to the unchanged activation gate");
+  equal(envOnly.stderr.includes(envJournal), true, "env-only journal path reaches the activation gate");
+  checks += 1;
+  const explicitJournal = path.join(root, "explicit-journal.json");
+  const ignoredEnvJournal = path.join(root, "ignored-env-journal.json");
+  const explicitWins = runCli(["--executor", "deepseek", "--install-journal", explicitJournal], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: ignoredEnvJournal });
+  equal(explicitWins.status, 2, "explicit journal proceeds to the unchanged activation gate");
+  equal(explicitWins.stderr.includes(explicitJournal), true, "explicit journal path reaches the activation gate");
+  equal(explicitWins.stderr.includes(ignoredEnvJournal), false, "explicit journal takes precedence over environment fallback");
+  checks += 2;
+  const emptyExplicit = runCli(["--executor", "deepseek", "--install-journal", ""], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: envJournal });
+  equal(emptyExplicit.status, 2, "an explicitly empty journal fails closed");
+  assert.match(emptyExplicit.stderr, /must not be empty|empty install-journal/i);
+  equal(emptyExplicit.stderr.includes(envJournal), false, "empty explicit journal does not silently fall back to environment");
+  checks += 2;
+  const missingExplicit = runCli(["--executor", "deepseek", "--install-journal"], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: envJournal });
+  equal(missingExplicit.status, 2, "an explicit journal flag without a following value fails closed");
+  assert.match(missingExplicit.stderr, /must not be empty/);
+  equal(missingExplicit.stderr.includes(envJournal), false, "missing explicit value never falls back to environment");
+  checks += 2;
   const missing = runCli(["--executor", "luna", "--main-model", "gpt-6.1-sol"], { CODEX_HOME: emptyHome });
   equal(missing.status, 2, "Luna CLI fails closed when the default cache is missing");
   assert.match(missing.stderr, /models_cache\.json is missing/);

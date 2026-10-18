@@ -53,8 +53,15 @@ async function main(argv) {
   const executor = get("executor");
   const mainModel = get("main-model");
   if (executor === "deepseek") {
-    const journalPath = get("install-journal");
-    if (!journalPath) throw new Error("--install-journal is required for native DeepSeek dispatch; activate the isolated installer first");
+    const journalFlagAt = argv.indexOf("--install-journal");
+    let journalPath;
+    if (journalFlagAt >= 0) {
+      journalPath = argv[journalFlagAt + 1];
+      if (typeof journalPath !== "string" || !journalPath.trim() || journalPath.startsWith("--")) throw new Error("--install-journal must not be empty");
+    } else {
+      journalPath = process.env.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
+      if (typeof journalPath !== "string" || !journalPath.trim()) throw new Error("an installed isolation journal path is required for native DeepSeek dispatch; activate the isolated installer first");
+    }
     await ensureNativeDeepseekDispatch({ journalPath });
     process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel, models: [] }))}\n`);
     return;

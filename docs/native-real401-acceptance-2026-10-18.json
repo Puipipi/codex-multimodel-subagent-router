@@ -1,0 +1,65 @@
+{
+  "schema": "native-real401-acceptance/v1",
+  "scope": "production_gateway_cli_private_instance_authentication_diagnostic",
+  "plugin_version": "0.10.0",
+  "run_status": "completed",
+  "credential_scope": {
+    "fake_non_secret_key": true,
+    "process_scoped_isolated_dsh_home": true,
+    "real_credentials_read": false,
+    "real_credentials_copied": false,
+    "real_credentials_modified": false
+  },
+  "gateway": {
+    "healthy": true,
+    "deepseek_only": true,
+    "relay_allowed": false,
+    "expected_model": true
+  },
+  "request": {
+    "attempt_count": 1,
+    "local_http_status": 401,
+    "upstream_http_status": 401,
+    "elapsed_ms": 118,
+    "elapsed_scope": "gateway_request_event_to_upstream_response_event",
+    "observation_timeout_ms": 30000
+  },
+  "usage": {
+    "present": false,
+    "tokens": null,
+    "cost": "unknown"
+  },
+  "relay_call_count": 0,
+  "production_config_unchanged": true,
+  "production_sources_unchanged": [
+    {
+      "file": "native-gateway.mjs",
+      "sha256": "664d1771c6ea0a949c2f93579a6b01c00ba7d9f9a9130af34335d667e65aa587"
+    },
+    {
+      "file": "native-gateway-manager.mjs",
+      "sha256": "042b7c7e97a15a98469a94409987575bf2458100744c814b09d8dcc6f080bcad"
+    },
+    {
+      "file": "native-routing.mjs",
+      "sha256": "cef5726dae3e6f4b8aef8f6ee2815a70e2291edf35a9d3305957647148fb7a4f"
+    },
+    {
+      "file": "native-credentials.mjs",
+      "sha256": "68b089912a8b0d7bd2eabf63514093f4c035cf6d1267e88a8b1b9298048b0519"
+    }
+  ],
+  "cleanup": {
+    "child_exit_observed": true,
+    "exit_signal": "SIGTERM",
+    "private_diagnostics_retained": true,
+    "private_state_retained": true,
+    "run_directory_removed": false
+  },
+  "private_receipt_sha256": "316cdd731106eb93dfc9cb5ffc632f47c07231b53e82edb4f598091bcb79f187",
+  "limitations": [
+    "No usage data was returned; token usage and cost are unknown.",
+    "This does not establish Task Scheduler operation or native child acceptance in the desktop UI.",
+    "This does not establish a desktop restart or complete routing acceptance."
+  ]
+}

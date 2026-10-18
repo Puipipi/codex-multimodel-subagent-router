@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -72,6 +73,19 @@ try {
   equal(environment.get("SOL_LUNA_NATIVE_PLAINTEXT_V2"), "0", "rollback restores the prior alias value");
   equal(environment.get("PATH"), "keep-path-value", "rollback preserves PATH");
   equal(environment.get("OTHER"), "keep-other-value", "rollback preserves unrelated environment values");
+
+  const journalKey = "SOL_LUNA_NATIVE_INSTALL_JOURNAL";
+  environment.set(journalKey, "C:\\Codex\\old-install.json");
+  const journalTransaction = await plan({ versionDir, currentEnvironment: Object.fromEntries(environment), installJournalPath: "C:\\Codex\\install.json" });
+  equal(Object.keys(journalTransaction.next).sort().join(","), "CODEX_CLI_PATH,SOL_LUNA_NATIVE_INSTALL_JOURNAL,SOL_LUNA_NATIVE_PLAINTEXT_V2", "explicit journal opt-in adds exactly one managed key");
+  equal(journalTransaction.next[journalKey].value, path.resolve("C:\\Codex\\install.json"), "journal path is resolved before planning");
+  const journalApplied = await apply(journalTransaction, adapter);
+  equal(environment.get(journalKey), path.resolve("C:\\Codex\\install.json"), "apply sets the opted-in journal path");
+  environment.set(journalKey, "later-user-journal.json");
+  await rejects(() => rollback(journalApplied, adapter), /environment changed since apply.*SOL_LUNA_NATIVE_INSTALL_JOURNAL/i, "rollback preserves a later journal-path change");
+  equal(environment.get(journalKey), "later-user-journal.json", "journal-path drift is preserved");
+  environment.set(journalKey, "C:\\Codex\\old-install.json");
+  environment.set("SOL_LUNA_NATIVE_PLAINTEXT_V2", "0");
 
   const stale = await plan({ versionDir, currentEnvironment: Object.fromEntries(environment) });
   environment.set("CODEX_CLI_PATH", "C:\\User\\changed-after-plan.exe");
@@ -207,6 +221,27 @@ try {
   }
   equal(calls[1].options.input.includes('"value":"1"'), true, "adapter sends values only in stdin JSON");
   await rejects(() => windowsAdapter.get("PATH"), /not an owned environment key/i, "Windows adapter rejects all keys outside its whitelist");
+  await rejects(() => windowsAdapter.get(journalKey), /not an owned environment key/i, "default Windows adapter rejects the journal key");
+  let optedScript = "";
+  const optedWindowsAdapter = createWindowsUserEnvironmentAdapter({ allowInstallJournal: true, runner: async (_exe, args, options) => {
+    ok(options.input.includes(journalKey), "opt-in adapter requests the journal key over stdin");
+    optedScript = args.at(-1);
+    return { status: 0, stdout: JSON.stringify({ key: journalKey, present: false, value: null }) };
+  } });
+  equal((await optedWindowsAdapter.get(journalKey)).present, false, "installer opt-in permits journal key in Windows adapter");
+  equal(optedScript.includes(journalKey), true, "opt-in PowerShell allowlist includes only the declared journal key addition");
+  if (process.platform === "win32") {
+    const parsePowerShell = (source) => spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+      "$source = [Console]::In.ReadToEnd(); $tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors) > $null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Output $_.ErrorId }; exit 1 }; exit 0"],
+    { input: source, encoding: "utf8", windowsHide: true });
+    const defaultScript = calls[0].args.at(-1);
+    const defaultParsed = parsePowerShell(defaultScript);
+    equal(defaultParsed.status, 0, "default Windows adapter PowerShell script parses without execution");
+    equal(defaultScript.includes("$allowed = @('CODEX_CLI_PATH', 'SOL_LUNA_NATIVE_PLAINTEXT_V2')"), true, "default PowerShell whitelist contains exactly two managed keys");
+    const optedParsed = parsePowerShell(optedScript);
+    equal(optedParsed.status, 0, "opt-in Windows adapter PowerShell script parses without execution");
+    equal(optedScript.includes("$allowed = @('CODEX_CLI_PATH', 'SOL_LUNA_NATIVE_PLAINTEXT_V2', 'SOL_LUNA_NATIVE_INSTALL_JOURNAL')"), true, "opt-in PowerShell whitelist contains exactly the managed third key");
+  }
 } finally {
   await rm(root, { recursive: true, force: true });
 }

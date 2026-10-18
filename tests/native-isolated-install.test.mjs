@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { NATIVE_RUNTIME_PATCH_SHA256, NATIVE_RUNTIME_SOURCE_COMMIT, NATIVE_RUNTIME_TARGET, NATIVE_RUNTIME_VERSION } from "../scripts/native-runtime.mjs";
 import { gatewayPaths, readGatewayIdentity } from "../scripts/native-gateway-manager.mjs";
 import { autostartFile, autostartScript } from "../scripts/native-autostart.mjs";
-import { activate, decodeJournal, encodeJournal, ensureNativeDeepseekDispatch, prepare, rollback, status } from "../scripts/native-isolated-install.mjs";
+import * as installModule from "../scripts/native-isolated-install.mjs";
+const { activate, decodeJournal, encodeJournal, ensureNativeDeepseekDispatch, prepare, rollback, status } = installModule;
 
 let checks = 0;
 const equal = (a, b, m) => { assert.equal(a, b, m); checks += 1; };
@@ -42,7 +43,7 @@ async function fixture(label) {
   }, null, 2)}\n`);
   await writeFile(path.join(codexHome, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-current", visibility: "list", context_window: 1000 }] }));
   await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-current"\n');
-  const environment = new Map([["CODEX_CLI_PATH", { present: false, value: null }], ["SOL_LUNA_NATIVE_PLAINTEXT_V2", { present: false, value: null }], ["PATH", { present: true, value: "keep" }]]);
+  const environment = new Map([["CODEX_CLI_PATH", { present: false, value: null }], ["SOL_LUNA_NATIVE_PLAINTEXT_V2", { present: false, value: null }], ["SOL_LUNA_NATIVE_INSTALL_JOURNAL", { present: false, value: null }], ["PATH", { present: true, value: "keep" }]]);
   const envAdapter = {
     async get(key) { return structuredClone(environment.get(key) ?? { present: false, value: null }); },
     async set(key, value) { environment.set(key, structuredClone(value)); },
@@ -133,14 +134,20 @@ try {
   await prepare(envFailure.common);
   const failingEnv = {
     ...envFailure.envAdapter,
+    failedJournalSet: false,
     async set(key, value) {
-      if (key === "SOL_LUNA_NATIVE_PLAINTEXT_V2") throw new Error("environment setter failed");
+      if (key === "SOL_LUNA_NATIVE_INSTALL_JOURNAL" && !this.failedJournalSet) {
+        this.failedJournalSet = true;
+        await envFailure.envAdapter.set(key, value);
+        throw new Error("journal environment setter failed after mutation");
+      }
       return envFailure.envAdapter.set(key, value);
     },
   };
-  await rejects(() => envFailure.activateFixture({ envAdapter: failingEnv }), /environment setter failed/i, "environment failure is surfaced");
+  await rejects(() => envFailure.activateFixture({ envAdapter: failingEnv }), /journal environment setter failed after mutation/i, "third-key environment failure is surfaced");
   equal(await readFile(path.join(envFailure.codexHome, "config.toml"), "utf8"), 'model = "gpt-current"\n', "environment failure rolls back previously applied files");
   equal(envFailure.environment.get("CODEX_CLI_PATH").present, false, "environment failure restores the first environment key");
+  equal(envFailure.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").present, false, "third-key environment failure restores journal path after mutation");
 
   const uncertainEnv = await fixture("environment-recovery-failure");
   await prepare(uncertainEnv.common);
@@ -173,6 +180,112 @@ try {
   await rejects(() => prepare({ ...failedSmoke.common, smokeCheck: async () => ({ status: "failed", checks: [] }) }), /status=passed/i, "failed smoke prevents a journal and activation");
   equal(failedSmoke.ensureCalls.length, 0, "failed prepare smoke never starts a gateway process");
   equal(await readFile(failedSmoke.journalPath).catch(() => null), null, "failed smoke leaves no install journal");
+
+  const failedSmokeDetails = await fixture("failed-smoke-details");
+  let smokeFailure;
+  await assert.rejects(() => prepare({
+    ...failedSmokeDetails.common,
+    smokeCheck: async () => ({ status: "failed", stage: "model_list", failure: { stage: "model_list", code: -32602 }, checks: { app_server_closed: false } }),
+  }, {
+    removeSmokeFixture: async (fixtureHome, options) => {
+      equal(options.maxRetries, 3, "smoke fixture removal has three bounded retries");
+      equal(options.retryDelay, 100, "smoke fixture removal uses the bounded retry delay");
+      await rm(fixtureHome, { recursive: true, force: true });
+    },
+  }), (error) => {
+    smokeFailure = error;
+    return error.code === "ISOLATED_CONFIG_SMOKE_FAILED";
+  }, "failed smoke preserves its structured safe diagnostic after successful cleanup");
+  equal(smokeFailure.smoke.status, "failed", "failed smoke status is preserved");
+  equal(smokeFailure.smoke.stage, "model_list", "failed smoke stage is preserved");
+  equal(smokeFailure.smoke.failureStage, "model_list", "underlying smoke failure stage is preserved");
+  equal(smokeFailure.smoke.failureCode, -32602, "underlying smoke failure code is preserved");
+  equal(smokeFailure.smoke.appServerClosed, false, "critical app-server close check is preserved");
+  equal(await readFile(failedSmokeDetails.journalPath).catch(() => null), null, "failed smoke with successful cleanup leaves no journal");
+
+  const failedSmokeAndCleanup = await fixture("failed-smoke-cleanup-failure");
+  let combinedSmokeFailure;
+  await assert.rejects(() => prepare({
+    ...failedSmokeAndCleanup.common,
+    smokeCheck: async () => ({ status: "failed", stage: "config_read", failure: { stage: "config_read", code: "RPC_TIMEOUT" }, checks: { app_server_closed: false } }),
+  }, {
+    removeSmokeFixture: async () => { throw Object.assign(new Error("private capability must not leak"), { code: "EBUSY" }); },
+  }), (error) => {
+    combinedSmokeFailure = error;
+    return error.code === "ISOLATED_CONFIG_PREPARE_FAILED";
+  }, "smoke failure remains primary when temporary cleanup also fails");
+  equal(combinedSmokeFailure.smoke.status, "failed", "cleanup failure retains smoke status");
+  equal(combinedSmokeFailure.smoke.stage, "config_read", "cleanup failure retains smoke stage");
+  equal(combinedSmokeFailure.smoke.failureCode, "RPC_TIMEOUT", "cleanup failure retains original smoke code");
+  equal(combinedSmokeFailure.smoke.appServerClosed, false, "cleanup failure retains app-server close check");
+  equal(combinedSmokeFailure.cleanupCode, "EBUSY", "cleanup error is reduced to its safe code");
+  equal(combinedSmokeFailure.message.includes("private capability"), false, "cleanup diagnostic does not leak raw error text");
+  equal(await readFile(failedSmokeAndCleanup.journalPath).catch(() => null), null, "smoke and cleanup failure leave no journal");
+  equal(typeof installModule.formatInstallError, "function", "CLI catch exposes the same safe diagnostic formatter for testing");
+  const formattedSmokeFailure = installModule.formatInstallError(combinedSmokeFailure);
+  equal(formattedSmokeFailure.includes('"status":"failed"'), true, "CLI diagnostic includes smoke status");
+  equal(formattedSmokeFailure.includes('"stage":"config_read"'), true, "CLI diagnostic includes smoke stage");
+  equal(formattedSmokeFailure.includes('"failureCode":"RPC_TIMEOUT"'), true, "CLI diagnostic includes safe smoke failure code");
+  equal(formattedSmokeFailure.includes('"appServerClosed":false'), true, "CLI diagnostic includes app-server close check");
+  equal(formattedSmokeFailure.includes('"cleanupCode":"EBUSY"'), true, "CLI diagnostic includes safe cleanup code");
+  equal(formattedSmokeFailure.includes("private capability"), false, "CLI diagnostic omits raw errors and secrets");
+  const unsafeDiagnostic = installModule.formatInstallError(Object.assign(new Error("https://private.invalid/token SECRET"), {
+    code: "ISOLATED_CONFIG_PREPARE_FAILED",
+    primaryCode: "Bearer SECRET",
+    cleanupCode: "https://private.invalid/token",
+    smoke: { status: "failed", stage: "https://private.invalid/token", failureStage: "Authorization: SECRET", failureCode: "Bearer SECRET", appServerClosed: false },
+  }));
+  equal(unsafeDiagnostic.includes("private.invalid"), false, "CLI formatter omits URL values from diagnostic fields");
+  equal(unsafeDiagnostic.includes("SECRET"), false, "CLI formatter omits token and header values from diagnostic fields");
+  equal(unsafeDiagnostic.includes('"stage":"unknown"'), true, "CLI formatter constrains unknown stages to the fixed enum");
+  equal(unsafeDiagnostic.includes('"failureCode":"UNKNOWN"'), true, "CLI formatter constrains unknown codes to safe values");
+  equal(installModule.formatInstallError(new Error("legacy CLI error text")), "legacy CLI error text", "ordinary CLI errors retain their existing message output");
+
+  const passedSmokeAndCleanup = await fixture("passed-smoke-cleanup-failure");
+  let cleanupFailure;
+  await assert.rejects(() => prepare({
+    ...passedSmokeAndCleanup.common,
+    smokeCheck: async () => ({ status: "passed", stage: "complete", checks: { app_server_closed: true } }),
+  }, {
+    removeSmokeFixture: async () => { throw Object.assign(new Error("private capability must not leak"), { code: "EBUSY" }); },
+  }), (error) => {
+    cleanupFailure = error;
+    return error.code === "TEMP_SMOKE_CLEANUP_FAILED";
+  }, "cleanup failure prevents prepare even when smoke passed");
+  equal(cleanupFailure.cleanupCode, "EBUSY", "cleanup-only failure reports a safe error code");
+  equal(cleanupFailure.smoke.status, "passed", "cleanup-only failure preserves successful smoke status");
+  equal(cleanupFailure.smoke.stage, "complete", "cleanup-only failure preserves successful smoke stage");
+  equal(cleanupFailure.smoke.appServerClosed, true, "cleanup-only failure preserves successful app-server close check");
+  const formattedCleanupFailure = installModule.formatInstallError(cleanupFailure);
+  equal(formattedCleanupFailure.includes('"status":"passed"'), true, "CLI diagnostic reports passed smoke before cleanup failure");
+  equal(formattedCleanupFailure.includes('"appServerClosed":true'), true, "CLI diagnostic preserves successful close check");
+  equal(cleanupFailure.message.includes("private capability"), false, "cleanup-only diagnostic does not leak raw error text");
+  equal(await readFile(passedSmokeAndCleanup.journalPath).catch(() => null), null, "passed smoke with cleanup failure leaves no journal");
+
+  const setupAndCleanupFailure = await fixture("setup-cleanup-failure");
+  const setupFailureTaskAdapter = {
+    ...setupAndCleanupFailure.taskAdapter,
+    async status(plan) {
+      const result = await setupAndCleanupFailure.taskAdapter.status(plan);
+      await rm(path.join(setupAndCleanupFailure.codexHome, "models_cache.json"), { force: true });
+      return result;
+    },
+  };
+  let combinedSetupFailure;
+  await assert.rejects(() => prepare({ ...setupAndCleanupFailure.common, taskAdapter: setupFailureTaskAdapter }, {
+    removeSmokeFixture: async () => { throw Object.assign(new Error("private capability must not leak"), { code: "EBUSY" }); },
+  }), (error) => {
+    combinedSetupFailure = error;
+    return error.code === "ISOLATED_CONFIG_PREPARE_FAILED";
+  }, "cleanup failure retains an earlier setup error code");
+  equal(combinedSetupFailure.primaryCode, "ENOENT", "cleanup failure retains safe pre-smoke error code");
+  equal(combinedSetupFailure.cleanupCode, "EBUSY", "cleanup failure also retains cleanup code");
+  equal(combinedSetupFailure.smoke, null, "pre-smoke failure does not fabricate smoke evidence");
+  const formattedSetupFailure = installModule.formatInstallError(combinedSetupFailure);
+  equal(formattedSetupFailure.includes('"primaryCode":"ENOENT"'), true, "CLI diagnostic includes safe pre-smoke code");
+  equal(formattedSetupFailure.includes('"cleanupCode":"EBUSY"'), true, "CLI diagnostic includes cleanup code with pre-smoke error");
+  equal(formattedSetupFailure.includes("private capability"), false, "CLI diagnostic omits raw pre-smoke and cleanup errors");
+  equal(await readFile(setupAndCleanupFailure.journalPath).catch(() => null), null, "pre-smoke and cleanup failure leave no journal");
 
   const residualLegacy = await fixture("residual-legacy-without-marker");
   const residualConfigPath = path.join(residualLegacy.codexHome, "config.toml");
@@ -360,12 +473,15 @@ try {
     "activation refuses a healthy gateway while the owned Task is only Ready");
 
   const success = await fixture("success");
-  await prepare(success.common);
+  const preparedSuccess = await prepare(success.common);
+  const preparedJournal = decodeJournal(await readFile(success.journalPath, "utf8"));
+  equal(preparedJournal.environment.next.SOL_LUNA_NATIVE_INSTALL_JOURNAL?.value, path.resolve(success.journalPath), "prepare plans the exact resolved journal path");
   const activated = await success.activateFixture();
   equal(activated.phase, "active", "activation reports completion only after all stages");
   equal(activated.restartNeeded, true, "configuration requires a desktop restart before runtime use can be observed");
   equal(activated.desktopAccepted, false, "configuration does not claim desktop acceptance");
   equal(success.environment.get("PATH").value, "keep", "activation preserves unrelated environment values");
+  equal(success.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").value, path.resolve(success.journalPath), "activation publishes journal path for future chats");
   equal(success.startup.size, 0, "activation removes the older managed Startup VBS after gateway health");
   const configPath = path.join(success.codexHome, "config.toml");
   const activatedConfig = await readFile(configPath);
@@ -378,6 +494,9 @@ try {
   });
   equal(dispatch.ready, true, "DeepSeek dispatch gate confirms configured files, owned task and healthy isolated gateway");
   equal((await readFile(configPath, "utf8")).includes('model = "new-sol-model"'), true, "dispatch permits a later user-selected main model without freezing the parent catalog");
+  success.environment.set("SOL_LUNA_NATIVE_INSTALL_JOURNAL", { present: true, value: "later-user-journal.json" });
+  await rejects(() => ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: success.taskAdapter }, {}), /environment changed.*SOL_LUNA_NATIVE_INSTALL_JOURNAL/i, "dispatch rejects journal environment drift");
+  success.environment.set("SOL_LUNA_NATIVE_INSTALL_JOURNAL", { present: true, value: path.resolve(success.journalPath) });
   const stopsBeforeNonStrict = success.stopCalls.length;
   await rejects(() => ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: success.taskAdapter }, {
     ensureGateway: async () => ({ state: { ...success.state, port: (await readGatewayIdentity(gatewayPaths(success.gatewayDir))).port, token: (await readGatewayIdentity(gatewayPaths(success.gatewayDir))).token }, started: false }),
@@ -406,8 +525,40 @@ try {
   await success.rollbackFixture();
   equal(await readFile(path.join(success.codexHome, "config.toml"), "utf8"), 'model = "gpt-current"\n', "rollback restores original config bytes");
   equal(success.environment.get("CODEX_CLI_PATH").present, false, "rollback restores original environment state");
+  equal(success.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").present, false, "rollback restores original journal environment state");
   equal(success.startup.size, 0, "successful rollback does not restore the retired managed Startup VBS");
   equal(success.stopCalls.length, 1, "rollback stops only the gateway started by this transaction after identity health verification");
+
+  const oldEnvironmentJournal = await fixture("old-two-key-environment-journal");
+  oldEnvironmentJournal.environment.set("SOL_LUNA_NATIVE_INSTALL_JOURNAL", { present: true, value: "user-owned-journal.json" });
+  await prepare(oldEnvironmentJournal.common);
+  const oldEnvironmentJournalData = decodeJournal(await readFile(oldEnvironmentJournal.journalPath, "utf8"));
+  delete oldEnvironmentJournalData.environment.prior.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
+  delete oldEnvironmentJournalData.environment.next.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
+  await writeFile(oldEnvironmentJournal.journalPath, encodeJournal(oldEnvironmentJournalData));
+  let oldJournalKeyReads = 0;
+  let oldJournalKeyWrites = 0;
+  const oldTwoKeyAdapter = {
+    async get(key) {
+      if (key === "SOL_LUNA_NATIVE_INSTALL_JOURNAL") oldJournalKeyReads += 1;
+      return oldEnvironmentJournal.envAdapter.get(key);
+    },
+    async set(key, value) {
+      if (key === "SOL_LUNA_NATIVE_INSTALL_JOURNAL") oldJournalKeyWrites += 1;
+      return oldEnvironmentJournal.envAdapter.set(key, value);
+    },
+  };
+  oldJournalKeyReads = 0;
+  await oldEnvironmentJournal.activateFixture({ envAdapter: oldTwoKeyAdapter });
+  equal(oldJournalKeyReads, 0, "activating an old two-key journal never reads the new journal environment key");
+  equal(oldJournalKeyWrites, 0, "activating an old two-key journal never writes the new journal environment key");
+  equal(oldEnvironmentJournal.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").value, "user-owned-journal.json", "old journal activation preserves the unrelated user journal value");
+  oldJournalKeyReads = 0;
+  oldJournalKeyWrites = 0;
+  await oldEnvironmentJournal.rollbackFixture({ envAdapter: oldTwoKeyAdapter });
+  equal(oldJournalKeyReads, 0, "rolling back an old two-key journal never reads the new journal environment key");
+  equal(oldJournalKeyWrites, 0, "rolling back an old two-key journal never writes the new journal environment key");
+  equal(oldEnvironmentJournal.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").value, "user-owned-journal.json", "old journal rollback preserves the unrelated user journal value");
 
   const changedAfterActivation = await fixture("later-edit");
   await prepare(changedAfterActivation.common);

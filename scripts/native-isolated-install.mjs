@@ -13,6 +13,58 @@ import { createWindowsUserEnvironmentAdapter, apply as applyEnvironment, plan as
 import { verifyRuntimeVersion } from "./native-runtime.mjs";
 
 const JOURNAL_VERSION = 1;
+const SMOKE_STAGES = new Set(["preflight", "app_server_start", "initialize", "config_read", "model_list", "provider_config", "role_config", "cleanup", "complete"]);
+
+function safeDiagnosticCode(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return typeof value === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(value) ? value : "UNKNOWN";
+}
+
+function smokeDiagnosticEvidence(result) {
+  const stage = (value) => SMOKE_STAGES.has(value) ? value : "unknown";
+  const appServerClosed = result?.checks?.app_server_closed ?? result?.appServerClosed;
+  return {
+    status: result?.status === "passed" || result?.status === "failed" ? result.status : "unknown",
+    stage: stage(result?.stage),
+    failureStage: stage(result?.failure?.stage ?? result?.failureStage),
+    failureCode: safeDiagnosticCode(result?.failure?.code ?? result?.failureCode),
+    appServerClosed: typeof appServerClosed === "boolean" ? appServerClosed : null,
+  };
+}
+
+function smokeFailureError(evidence) {
+  const error = new Error("isolated config smoke check did not report status=passed");
+  error.code = "ISOLATED_CONFIG_SMOKE_FAILED";
+  error.smoke = evidence;
+  return error;
+}
+
+function cleanupFailureError(cleanupError, smoke = null, primaryError = null) {
+  const error = new Error(primaryError
+    ? "isolated config prepare and temporary fixture cleanup failed"
+    : "isolated config temporary fixture cleanup failed");
+  error.code = primaryError ? "ISOLATED_CONFIG_PREPARE_FAILED" : "TEMP_SMOKE_CLEANUP_FAILED";
+  error.cleanupCode = safeDiagnosticCode(cleanupError?.code);
+  error.primaryCode = primaryError ? safeDiagnosticCode(primaryError.code) : undefined;
+  error.smoke = smoke;
+  return error;
+}
+
+const PREPARE_ERROR_MESSAGES = Object.freeze({
+  ISOLATED_CONFIG_SMOKE_FAILED: "isolated config smoke failed",
+  ISOLATED_CONFIG_PREPARE_FAILED: "isolated config prepare and cleanup failed",
+  TEMP_SMOKE_CLEANUP_FAILED: "isolated config smoke cleanup failed",
+});
+
+export function formatInstallError(error) {
+  const message = PREPARE_ERROR_MESSAGES[error?.code];
+  if (!Object.hasOwn(PREPARE_ERROR_MESSAGES, error?.code)) return error?.message ?? String(error);
+  const diagnostic = { code: error.code };
+  if (error.smoke && typeof error.smoke === "object") diagnostic.smoke = smokeDiagnosticEvidence(error.smoke);
+  if (error.primaryCode !== undefined) diagnostic.primaryCode = safeDiagnosticCode(error.primaryCode);
+  if (error.cleanupCode !== undefined) diagnostic.cleanupCode = safeDiagnosticCode(error.cleanupCode);
+  return `${message} ${JSON.stringify(diagnostic)}`;
+}
 
 function encodeValue(value) {
   if (Buffer.isBuffer(value)) return { $native_buffer_base64: value.toString("base64") };
@@ -152,9 +204,11 @@ function stateSummary(journal) {
   };
 }
 
-async function snapshotEnvironment(adapter) {
+const INSTALL_JOURNAL_ENV_KEY = "SOL_LUNA_NATIVE_INSTALL_JOURNAL";
+
+async function snapshotEnvironment(adapter, keys = ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2"]) {
   const currentEnvironment = {};
-  for (const key of ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2"]) currentEnvironment[key] = await adapter.get(key);
+  for (const key of keys) currentEnvironment[key] = await adapter.get(key);
   return currentEnvironment;
 }
 
@@ -168,7 +222,7 @@ function sameBytes(actual, expected) {
 function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 
 async function requireEnvironmentPrior(transaction, adapter) {
-  for (const key of ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2"]) {
+  for (const key of Object.keys(transaction.prior)) {
     const current = await adapter.get(key);
     const expected = transaction.prior[key];
     if (current?.present !== expected?.present || (current?.present && current.value !== expected.value)) {
@@ -230,7 +284,7 @@ export async function prepare(options = {}, dependencies = {}) {
     throw new Error("expectedRootBaseUrl must be explicitly provided as a URL or null");
   }
   await verifyRuntimeVersion(versionDir);
-  const envAdapter = dependencies.envAdapter || options.envAdapter || createWindowsUserEnvironmentAdapter();
+  const envAdapter = dependencies.envAdapter || options.envAdapter || createWindowsUserEnvironmentAdapter({ allowInstallJournal: true });
   const autostartAdapter = dependencies.autostartAdapter || options.autostartAdapter || await defaultAutostartAdapter();
   const taskAdapter = dependencies.taskAdapter || options.taskAdapter || createWindowsTaskSchedulerAdapter();
   const prepareIdentity = dependencies.prepareGatewayIdentity || options.prepareGatewayIdentity || prepareGatewayIdentity;
@@ -247,7 +301,12 @@ export async function prepare(options = {}, dependencies = {}) {
   const persistedIdentity = identityBytes === null ? null : JSON.parse(identityBytes.toString("utf8"));
   if (!persistedIdentity?.token || persistedIdentity.token !== identity.token || persistedIdentity.port !== identity.port) throw new Error("gateway identity could not be verified");
   const baseUrl = `http://127.0.0.1:${identity.port}/${identity.token}/v1`;
-  const envPlan = await planEnvironment({ versionDir, currentEnvironment: await snapshotEnvironment(envAdapter) });
+  const resolvedJournalPath = path.resolve(journalPath);
+  const envPlan = await planEnvironment({
+    versionDir,
+    currentEnvironment: await snapshotEnvironment(envAdapter, ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2", INSTALL_JOURNAL_ENV_KEY]),
+    installJournalPath: resolvedJournalPath,
+  });
   const startupPrior = await snapshotStartup(autostartAdapter, startupFile);
   if (!isManagedOldStartup(startupPrior)) throw new Error("unowned Startup VBS exists; refusing to remove or replace it");
   let legacyManifest = null;
@@ -266,6 +325,8 @@ export async function prepare(options = {}, dependencies = {}) {
 
   const fixtureHome = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp(path.join(os.tmpdir(), "native-isolated-smoke-")));
   let smokeEvidence;
+  let smokeOutcome = null;
+  let primaryError = null;
   try {
     await mkdir(path.join(fixtureHome, "agents"), { recursive: true });
     const cacheBytes = await readFile(path.join(codexHome, "models_cache.json"));
@@ -277,19 +338,41 @@ export async function prepare(options = {}, dependencies = {}) {
     const smokeConfigPath = path.join(fixtureHome, "config.toml");
     const smokeConfig = withTemporaryRootModelCatalog(await readFile(smokeConfigPath, "utf8"), path.join(fixtureHome, "models_cache.json"));
     await writeFile(smokeConfigPath, smokeConfig, { mode: 0o600 });
-    const smokeResult = await smokeCheck({
-      exePath: realFiles.runtimeExePath,
-      preparedHome: fixtureHome,
-      expectedMainModel,
-      expectedMainProvider,
-      expectedRootBaseUrl,
-    });
-    if (smokeResult?.status !== "passed") throw new Error("isolated config smoke check did not report status=passed");
+    let smokeResult;
+    try {
+      smokeResult = await smokeCheck({
+        exePath: realFiles.runtimeExePath,
+        preparedHome: fixtureHome,
+        expectedMainModel,
+        expectedMainProvider,
+        expectedRootBaseUrl,
+      });
+    } catch (error) {
+      smokeOutcome = smokeDiagnosticEvidence({ status: "failed", stage: "unknown", failure: { stage: "unknown", code: error?.code } });
+      throw smokeFailureError(smokeOutcome);
+    }
+    smokeOutcome = smokeDiagnosticEvidence(smokeResult);
+    if (smokeResult?.status !== "passed") throw smokeFailureError(smokeOutcome);
     smokeEvidence = { status: "passed", checks: smokeResult.checks ?? {} };
-  } finally {
-    const resolvedFixture = path.resolve(fixtureHome);
-    if (resolvedFixture.startsWith(path.resolve(os.tmpdir()) + path.sep)) await rm(resolvedFixture, { recursive: true, force: true });
+  } catch (error) {
+    primaryError = error;
   }
+  const resolvedFixture = path.resolve(fixtureHome);
+  let cleanupError = null;
+  if (resolvedFixture.startsWith(path.resolve(os.tmpdir()) + path.sep)) {
+    try {
+      await (dependencies.removeSmokeFixture ?? ((target, options) => rm(target, options)))(resolvedFixture, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+  if (cleanupError) throw cleanupFailureError(cleanupError, smokeOutcome, primaryError);
+  if (primaryError) throw primaryError;
 
   const journalData = {
     version: JOURNAL_VERSION,
@@ -338,7 +421,7 @@ async function stopTransactionGateway(journal, { paths, readState, readIdentity,
   return true;
 }
 
-export async function activate({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), autostartAdapter, taskAdapter } = {}, dependencies = {}) {
+export async function activate({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter({ allowInstallJournal: true }), autostartAdapter, taskAdapter } = {}, dependencies = {}) {
   if (typeof journalPath !== "string" || !journalPath) throw new Error("journalPath must be provided explicitly");
   const journal = await readJournal(journalPath);
   if (journal.phase !== "prepared") throw new Error(`cannot activate install transaction in phase ${journal.phase}`);
@@ -470,7 +553,7 @@ export async function activate({ journalPath, envAdapter = createWindowsUserEnvi
   }
 }
 
-export async function rollback({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), autostartAdapter, taskAdapter } = {}, dependencies = {}) {
+export async function rollback({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter({ allowInstallJournal: true }), autostartAdapter, taskAdapter } = {}, dependencies = {}) {
   if (typeof journalPath !== "string" || !journalPath) throw new Error("journalPath must be provided explicitly");
   const journal = await readJournal(journalPath);
   const configFilePlan = journal.files?.files?.["config.toml"];
@@ -492,7 +575,7 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
     if (!currentTask.exists || !currentTask.owned || currentTask.specMatches !== true || !currentTask.enabled) throw new Error("gateway task changed since activation; preserving the later change");
   }
   if (journal.completed.environment) {
-    for (const key of ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2"]) {
+    for (const key of Object.keys(journal.environmentSnapshot.next)) {
       const current = await envAdapter.get(key);
       const expected = journal.environmentSnapshot.next[key];
       if (current?.present !== expected?.present || (current?.present && current.value !== expected.value)) throw new Error(`environment changed since activation: ${key}`);
@@ -546,14 +629,14 @@ export async function status({ journalPath } = {}) {
 
 // Called only at native DeepSeek dispatch time. It never registers a task or
 // falls back to a child process; a missing/inactive install fails closed.
-export async function ensureNativeDeepseekDispatch({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter(), taskAdapter } = {}, dependencies = {}) {
+export async function ensureNativeDeepseekDispatch({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter({ allowInstallJournal: true }), taskAdapter } = {}, dependencies = {}) {
   if (typeof journalPath !== "string" || !journalPath) throw new Error("an installed isolation journal path is required for native DeepSeek dispatch");
   const journal = await readJournal(journalPath);
   if (journal.phase !== "active" || Object.values(journal.completed || {}).some((value) => value !== true)) {
     throw new Error("isolated native DeepSeek gateway is not fully activated");
   }
   await verifyRuntimeVersion(journal.paths.versionDir);
-  for (const key of ["CODEX_CLI_PATH", "SOL_LUNA_NATIVE_PLAINTEXT_V2"]) {
+  for (const key of Object.keys(journal.environment.next)) {
     const current = await envAdapter.get(key);
     const expected = journal.environment.next[key];
     if (current?.present !== expected?.present || (current?.present && current.value !== expected.value)) {
@@ -617,5 +700,5 @@ async function main(argv) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
+  main(process.argv.slice(2)).catch((error) => { process.stderr.write(`${formatInstallError(error)}\n`); process.exitCode = 1; });
 }
