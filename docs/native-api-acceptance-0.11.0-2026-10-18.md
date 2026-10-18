@@ -26,14 +26,23 @@
 - stack-test 集成 `0a04684` 已包含在 `895d05e`，上述公开 CI 覆盖该代码；
   本文新增验收记录仅运行 `docs.test`，不将文档新增等同桌面验收。
   0.11 尚未正式安装。
+- 当前 Rust patch 为 `2b3eebd587fa7fa17872644a726048d53f35f6e8651947ff98df62488b00ef45`
+  （109095 bytes）；四个 large-fixture 测试使用同名 `#[test]` wrapper +
+  `async_impl` 和 pinned `run_test_with_large_stack` 8 MiB，测试 body、
+  八项计数和断言不变，production 仍为 16 MiB。
 - Rust 构建 run `39136590575`，head `1155c51`，ref
   `fix/native-deepseek-bounded-retries`：wire 与旧 native DS 测试已通过，
-  但 native API profile tests 再次失败。随后处于“Save Cargo dependencies
-  and build cache”步骤，完整日志尚未 ready；当前不能推断失败是 stack、
-  assert 或其他原因，不能写 GREEN，也不能声称 release artifact 或新
-  binary 已存在。
-- 旧 run `39134187187` 已失败（native API cold-resume
-  `STATUS_STACK_OVERFLOW`），无 release artifact；失败不能被后续文本覆盖。
+  native API profile tests 失败；run 最终 completed FAILURE、cache SUCCESS，
+  running 8 中两项轻测试通过，none cold-resume 与
+  `prepare_agent_spawn_config` 两项均 `STATUS_STACK_OVERFLOW`，没有 release
+  artifact。不能写 GREEN，也不能声称新 binary 已存在。
+- 旧 run `39134187187` 也失败于 none cold-resume
+  `STATUS_STACK_OVERFLOW`；失败记录不能被后续文本覆盖。第四次 build 为
+  run `39138841194`，head
+  `45a3bd343c4bf4fc99115e7d68ee74d685429c01`，ref
+  `fix/native-deepseek-bounded-retries`；当前 `in_progress`，处于
+  “Restore Cargo dependencies and build cache”，尚无失败 step，不能提前写
+  GREEN。
 
 ## 原目标八组
 
@@ -98,6 +107,8 @@ role 桌面可用，也不能替代上面的真实 API role 验收。
 0.10.5 的 DeepSeek 桌面、工具卡、完整重启、故障 readiness 恢复、双 chat、
 hidden launcher 与 lease 行为有既有历史证据；0.11 的 generic API 目前是
 candidate。0.11 尚未正式安装，MCP 侧栏尚无 human 确认，MiMo 实际 API 尚无
-已配置凭据。Rust build `39136590575` 尚未完成，不能写 GREEN；旧失败
-`39134187187` 不能改写成成功。本文不包含内部 token、local gateway URL、
-temporary journal 路径、完整 journal 或任何密钥。
+已配置凭据。Rust run `39136590575` 已 completed FAILURE（cache SUCCESS，
+无 release artifact），不能写 GREEN；旧失败 `39134187187` 不能改写成成功；
+第四次 build `39138841194` 仍在 “Restore Cargo dependencies and build
+cache” in-progress，尚无失败 step，也不能提前写 GREEN。本文不包含内部 token、
+local gateway URL、temporary journal 路径、完整 journal 或任何密钥。
