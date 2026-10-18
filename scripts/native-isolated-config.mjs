@@ -83,6 +83,8 @@ function matches(content, begin, end) {
     body: content.slice(first.end, last.start),
     startAt: first.start,
     endAt: last.contentEnd,
+    bodyStartAt: first.end,
+    bodyEndAt: last.start,
   }];
 }
 
@@ -172,6 +174,80 @@ function startsWithPath(value, prefix) {
   return value.length >= prefix.length && prefix.every((part, index) => value[index] === part);
 }
 
+const ISOLATED_TABLES = [
+  ["model_providers", "deepseek-native"],
+  ["model_providers", "deepseek-native", "capabilities"],
+  ["agents", "native_deepseek"],
+];
+
+function isolatedTableSegments(content, block) {
+  const headers = [];
+  for (const record of scanTomlLines(content)) {
+    if (record.start < block.bodyStartAt || record.start >= block.bodyEndAt || record.insideAtStart) continue;
+    const line = record.visible.trim();
+    if (!line.startsWith("[") || !line.endsWith("]")) continue;
+    const array = line.startsWith("[[") && line.slice(-2) === "]]";
+    const normal = !array && line.startsWith("[") && line.endsWith("]");
+    if (!array && !normal) throw new Error("invalid isolated table header");
+    const source = line.slice(array ? 2 : 1, array ? -2 : -1).trim();
+    const path = parseDottedKeys(source);
+    if (!path?.length) throw new Error("invalid isolated table header");
+    const exactIndex = ISOLATED_TABLES.findIndex((ownerPath) => path.length === ownerPath.length && startsWithPath(path, ownerPath));
+    let ownerIndex = exactIndex;
+    if (exactIndex >= 0 && array) throw new Error("invalid isolated table shape");
+    if (exactIndex < 0 && ISOLATED_TABLES.some((ownerPath) => startsWithPath(path, ownerPath) || startsWithPath(ownerPath, path))) {
+      throw new Error("invalid isolated table shape");
+    }
+    headers.push({ start: record.start, ownerIndex, path, array });
+  }
+  const owned = headers.filter((header) => header.ownerIndex >= 0);
+  if (owned.length !== ISOLATED_TABLES.length
+      || owned.some((header, index) => header.ownerIndex !== index)) {
+    throw new Error("invalid isolated table layout");
+  }
+  return headers.map((header, index) => ({
+    ...header,
+    end: headers[index + 1]?.start ?? block.bodyEndAt,
+  }));
+}
+
+function tableContentEnd(content, segment) {
+  const lines = scanTomlLines(content).filter((record) => record.start >= segment.start && record.start < segment.end);
+  let end = segment.end;
+  for (const record of lines.reverse()) {
+    if (record.insideAtStart || record.visible.trim()) break;
+    end = record.start;
+  }
+  return end;
+}
+
+function removeOwnedIsolatedTables(content, block) {
+  const segments = isolatedTableSegments(content, block);
+  let result = content;
+  for (const segment of segments.filter((item) => item.ownerIndex >= 0).reverse()) {
+    result = splice(result, segment.start, tableContentEnd(content, segment));
+  }
+  return result;
+}
+
+function foreignIsolatedBody(content, block) {
+  const segments = isolatedTableSegments(content, block);
+  let result = content.slice(block.bodyStartAt, block.bodyEndAt);
+  for (const segment of segments.filter((item) => item.ownerIndex >= 0).reverse()) {
+    result = splice(result, segment.start - block.bodyStartAt, tableContentEnd(content, segment) - block.bodyStartAt);
+  }
+  return result;
+}
+
+function replaceOwnedIsolatedTables(content, block, replacements) {
+  const segments = isolatedTableSegments(content, block);
+  let result = content;
+  for (const segment of segments.filter((item) => item.ownerIndex >= 0).reverse()) {
+    result = splice(result, segment.start, tableContentEnd(content, segment), `${replacements[segment.ownerIndex]}\n`);
+  }
+  return result;
+}
+
 function validateLegacyBlock(body, legacyManifest) {
   if (!legacyManifest || !legacyManifest.prior_root || typeof legacyManifest.prior_root !== "object") {
     throw new Error("legacy gateway block requires a valid legacy manifest");
@@ -248,30 +324,35 @@ export function composeIsolatedConfig(content, { baseUrl, agentConfigPath, legac
     base = restoreLegacyRoot(base, legacyManifest.prior_root);
   }
   const current = matches(base, ISOLATED_BEGIN, ISOLATED_END);
-  const outsideOwnedBlock = current.length ? removeBlock(base, current[0]) : base;
+  const outsideOwnedBlock = current.length ? removeOwnedIsolatedTables(base, current[0]) : base;
   if (hasTargetConfig(outsideOwnedBlock, ["model_providers", "deepseek-native"])) {
     throw new Error("user-owned DeepSeek provider config conflicts with isolated provider");
   }
   if (hasTargetConfig(outsideOwnedBlock, ["agents", "native_deepseek"])) {
     throw new Error("user-owned native_deepseek agent config conflicts with isolated agent");
   }
-  const ownedBlock = [
-    ISOLATED_BEGIN,
-    "[model_providers.deepseek-native]",
-    'name = "DeepSeek Native"',
-    `base_url = ${escapeTomlString(baseUrl)}`,
-    'wire_api = "responses"',
-    "requires_openai_auth = false",
-    "request_max_retries = 0",
-    "stream_max_retries = 0",
-    "[model_providers.deepseek-native.capabilities]",
-    'remote_compaction = "unsupported"',
-    "[agents.native_deepseek]",
-    'description = "Native DeepSeek collaboration child"',
-    `config_file = ${escapeTomlString(agentConfigPath)}`,
-    ISOLATED_END,
-  ].join("\n");
-  if (current.length) return splice(base, current[0].startAt, current[0].endAt, ownedBlock);
+  const ownedTables = [
+    [
+      "[model_providers.deepseek-native]",
+      'name = "DeepSeek Native"',
+      `base_url = ${escapeTomlString(baseUrl)}`,
+      'wire_api = "responses"',
+      "requires_openai_auth = false",
+      "request_max_retries = 0",
+      "stream_max_retries = 0",
+    ].join("\n"),
+    [
+      "[model_providers.deepseek-native.capabilities]",
+      'remote_compaction = "unsupported"',
+    ].join("\n"),
+    [
+      "[agents.native_deepseek]",
+      'description = "Native DeepSeek collaboration child"',
+      `config_file = ${escapeTomlString(agentConfigPath)}`,
+    ].join("\n"),
+  ];
+  const ownedBlock = [ISOLATED_BEGIN, ...ownedTables, ISOLATED_END].join("\n");
+  if (current.length) return replaceOwnedIsolatedTables(base, current[0], ownedTables);
   const separator = base.length === 0 ? "" : base.endsWith("\n") ? "\n" : "\n\n";
   return `${base}${separator}${ownedBlock}\n`;
 }
@@ -279,7 +360,29 @@ export function composeIsolatedConfig(content, { baseUrl, agentConfigPath, legac
 export function removeIsolatedConfig(content) {
   if (typeof content !== "string") throw new TypeError("content must be a string");
   const isolated = matches(content, ISOLATED_BEGIN, ISOLATED_END);
-  return isolated.length ? removeBlock(content, isolated[0]) : content;
+  return isolated.length
+    ? splice(content, isolated[0].startAt, isolated[0].endAt, foreignIsolatedBody(content, isolated[0]))
+    : content;
+}
+
+export function hasOnlyAddedForeignSkillTables(current, planned, options) {
+  if (typeof current !== "string" || typeof planned !== "string") return false;
+  try {
+    const currentBlocks = matches(current, ISOLATED_BEGIN, ISOLATED_END);
+    const plannedBlocks = matches(planned, ISOLATED_BEGIN, ISOLATED_END);
+    if (currentBlocks.length !== 1 || plannedBlocks.length !== 1) return false;
+    const currentSegments = isolatedTableSegments(current, currentBlocks[0]);
+    const plannedSegments = isolatedTableSegments(planned, plannedBlocks[0]);
+    const currentForeign = currentSegments.filter((item) => item.ownerIndex < 0);
+    const plannedForeign = plannedSegments.filter((item) => item.ownerIndex < 0);
+    if (currentForeign.length === 0 || plannedForeign.length !== 0
+        || currentForeign.some((item) => !item.array || item.path.length !== 2
+          || item.path[0] !== "skills" || item.path[1] !== "config")) return false;
+    if (composeIsolatedConfig(planned, options) !== planned || composeIsolatedConfig(current, options) !== current) return false;
+    return removeBlock(current, currentBlocks[0]) === removeBlock(planned, plannedBlocks[0]);
+  } catch {
+    return false;
+  }
 }
 
 export function hasLegacyGatewayConfigMarker(content) {

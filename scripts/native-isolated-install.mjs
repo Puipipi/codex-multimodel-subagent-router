@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { apply as applyFiles, plan as planFiles, rollback as rollbackFiles } from "./native-isolated-files.mjs";
 import { autostartFile } from "./native-autostart.mjs";
-import { composeIsolatedConfig, hasLegacyGatewayConfigMarker, withTemporaryRootModelCatalog } from "./native-isolated-config.mjs";
+import { composeIsolatedConfig, hasLegacyGatewayConfigMarker, hasOnlyAddedForeignSkillTables, removeIsolatedConfig, withTemporaryRootModelCatalog } from "./native-isolated-config.mjs";
 import { runIsolatedConfigSmoke } from "./native-isolated-smoke.mjs";
 import { ensureGateway, gatewayHealth, gatewayPaths, prepareGatewayIdentity, readGatewayIdentity, readGatewayState, stopGateway } from "./native-gateway-manager.mjs";
 import { createWindowsTaskSchedulerAdapter, gatewayTaskPlan, registerOwnedGatewayTask, restoreGatewayTask, snapshotGatewayTask, statusOwnedGatewayTask, createOwnedGatewayTaskLauncher } from "./native-gateway-task.mjs";
@@ -581,10 +581,35 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
       if (current?.present !== expected?.present || (current?.present && current.value !== expected.value)) throw new Error(`environment changed since activation: ${key}`);
     }
   }
+  let filesForRollback = journal.files;
   if (journal.completed.files) {
-    for (const item of Object.values(journal.files.files)) {
+    const overrides = {};
+    for (const [name, item] of Object.entries(journal.files.files)) {
       const current = await regularOrAbsent(item.path, "managed file");
-      if (!current || !current.equals(Buffer.from(item.next, "utf8"))) throw new Error(`file changed since activation: ${item.path}`);
+      if (current && current.equals(Buffer.from(item.next, "utf8"))) continue;
+      if (name !== "config.toml" || !current) throw new Error(`file changed since activation: ${item.path}`);
+      const identityBytes = await regularOrAbsent(journal.gateway.identityFile, "gateway identity");
+      if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) {
+        throw new Error("isolated gateway identity changed after activation");
+      }
+      const identityPlan = JSON.parse(identityBytes.toString("utf8"));
+      const expectedBaseUrl = `http://127.0.0.1:${identityPlan.port}/${identityPlan.token}/v1`;
+      const expectedRolePath = path.join(journal.paths.codexHome, "agents", "native_deepseek.toml");
+      const currentConfig = current.toString("utf8");
+      if (!hasOnlyAddedForeignSkillTables(currentConfig, item.next, {
+        baseUrl: expectedBaseUrl,
+        agentConfigPath: expectedRolePath,
+      })) throw new Error(`file changed since activation: ${item.path}`);
+      const restoredConfig = Buffer.from(removeIsolatedConfig(currentConfig), "utf8");
+      overrides[name] = {
+        ...item,
+        next: currentConfig,
+        prior: { exists: true, bytes: restoredConfig },
+        uninstallPrior: { exists: true, bytes: restoredConfig },
+      };
+    }
+    if (Object.keys(overrides).length) {
+      filesForRollback = { ...journal.files, files: { ...journal.files.files, ...overrides } };
     }
   }
 
@@ -607,7 +632,7 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
     await (dependencies.stopGateway || stopGateway)({ paths }); journal.gateway.startedByTransaction = false; journal.completed.gateway = false; journal.gateway.cleanup = "stopped";
   } catch (error) { journal.gateway.cleanup = "failed"; errors.push(error); }
   if (journal.completed.environment) try { await rollbackEnvironment(journal.environmentSnapshot, envAdapter); journal.completed.environment = false; } catch (error) { journal.completed.environment = null; indeterminate.push("environment"); errors.push(error); }
-  if (journal.completed.files) try { await rollbackFiles(journal.files, { target: legacyMigration ? "uninstall" : "prior" }); journal.completed.files = false; } catch (error) { journal.completed.files = null; indeterminate.push("files"); errors.push(error); }
+  if (journal.completed.files) try { await rollbackFiles(filesForRollback, { target: legacyMigration ? "uninstall" : "prior" }); journal.completed.files = false; } catch (error) { journal.completed.files = null; indeterminate.push("files"); errors.push(error); }
   if (journal.completed.autostart) try {
     if (!retiredLegacyStartup) await restoreStartupChecked(journal.autostart, startup);
     journal.completed.autostart = false;

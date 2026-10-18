@@ -531,12 +531,27 @@ try {
   const activatedConfig = await readFile(configPath);
   const changedMainConfig = activatedConfig.toString("utf8").replace('model = "gpt-current"', 'model = "new-sol-model"');
   await writeFile(configPath, changedMainConfig);
+  const foreignSkills = [
+    "[[skills.config]]",
+    'path = "fixture-skill-one"',
+    "enabled = true",
+    "",
+    "[[skills.config]]",
+    'path = "fixture-skill-two"',
+    "enabled = false",
+  ].join("\n");
+  const configWithForeignSkills = changedMainConfig.toString("utf8").replace(
+    "# sol-luna-native-isolated end",
+    `${foreignSkills}\n# sol-luna-native-isolated end`,
+  );
+  await writeFile(configPath, configWithForeignSkills);
   const dispatch = await ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: success.taskAdapter }, {
     ensureGateway: success.common.ensureGateway,
     readGatewayIdentity,
     gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
   });
-  equal(dispatch.ready, true, "DeepSeek dispatch gate confirms configured files, owned task and healthy isolated gateway");
+  equal(dispatch.ready, true, "DeepSeek dispatch gate accepts foreign skill array tables in the owned marker");
+  equal((await readFile(configPath, "utf8")).includes(foreignSkills), true, "dispatch preserves foreign skill array table bytes");
   equal((await readFile(configPath, "utf8")).includes('model = "new-sol-model"'), true, "dispatch permits a later user-selected main model without freezing the parent catalog");
   success.environment.set("SOL_LUNA_NATIVE_INSTALL_JOURNAL", { present: true, value: "later-user-journal.json" });
   await rejects(() => ensureNativeDeepseekDispatch({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: success.taskAdapter }, {}), /environment changed.*SOL_LUNA_NATIVE_INSTALL_JOURNAL/i, "dispatch rejects journal environment drift");
@@ -566,12 +581,48 @@ try {
     ensureGateway: success.common.ensureGateway, readGatewayIdentity, gatewayHealth: async () => ({ reachable: true, deepseek_only: true, relay_allowed: false }),
   }), /task is missing, changed, or disabled/i, "dispatch gate fails closed without registering or falling back when task is missing");
   equal(success.ensureCalls.length, ensureBeforeMissingTask, "missing task is rejected before any direct gateway launch or health request");
-  await success.rollbackFixture();
-  equal(await readFile(path.join(success.codexHome, "config.toml"), "utf8"), 'model = "gpt-current"\n', "rollback restores original config bytes");
+  await writeFile(configPath, activatedConfig.toString("utf8").replace(
+    "# sol-luna-native-isolated end",
+    `${foreignSkills}\n# sol-luna-native-isolated end`,
+  ));
+  const foreignRollback = await success.rollbackFixture();
+  equal(foreignRollback.phase, "rolled_back", "rollback removes the owned isolated tables after a foreign skill-table addition");
+  const rolledBackConfig = await readFile(configPath, "utf8");
+  equal(rolledBackConfig.includes(foreignSkills), true, "rollback preserves foreign skill array tables");
+  equal(rolledBackConfig.includes('model = "gpt-current"'), true, "rollback restores the original root model alongside foreign tables");
+  equal(rolledBackConfig.includes("sol-luna-native-isolated begin"), false, "rollback removes the isolated marker");
   equal(success.environment.get("CODEX_CLI_PATH").present, false, "rollback restores original environment state");
   equal(success.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").present, false, "rollback restores original journal environment state");
   equal(success.startup.size, 0, "successful rollback does not restore the retired managed Startup VBS");
   equal(success.stopCalls.length, 1, "rollback stops only the gateway started by this transaction after identity health verification");
+
+  const absentConfigWithForeignSkill = await fixture("absent-config-with-foreign-skill");
+  await rm(path.join(absentConfigWithForeignSkill.codexHome, "config.toml"));
+  await prepare(absentConfigWithForeignSkill.common);
+  await absentConfigWithForeignSkill.activateFixture();
+  const absentActiveConfigPath = path.join(absentConfigWithForeignSkill.codexHome, "config.toml");
+  const absentForeignConfig = (await readFile(absentActiveConfigPath, "utf8")).replace(
+    "# sol-luna-native-isolated end",
+    '[[skills.config]]\npath = "fixture-only-survivor"\nenabled = true\n# sol-luna-native-isolated end',
+  );
+  await writeFile(absentActiveConfigPath, absentForeignConfig);
+  const absentConfigRollback = await absentConfigWithForeignSkill.rollbackFixture();
+  equal(absentConfigRollback.phase, "rolled_back", "rollback completes when an originally absent config gains a foreign skill table");
+  const preservedAbsentConfig = await readFile(absentActiveConfigPath, "utf8");
+  equal(preservedAbsentConfig.includes("fixture-only-survivor"), true, "rollback keeps a nonempty config created by a foreign skill table");
+  equal(preservedAbsentConfig.includes("sol-luna-native-isolated begin"), false, "rollback removes the isolated marker from an originally absent config");
+
+  const ownedDriftRollback = await fixture("owned-drift-with-foreign-skill");
+  await prepare(ownedDriftRollback.common);
+  await ownedDriftRollback.activateFixture();
+  const driftConfigPath = path.join(ownedDriftRollback.codexHome, "config.toml");
+  const driftConfigWithForeign = (await readFile(driftConfigPath, "utf8"))
+    .replace('wire_api = "responses"', 'wire_api = "chat_completions"')
+    .replace("# sol-luna-native-isolated end", '[[skills.config]]\npath = "fixture-skill"\nenabled = true\n# sol-luna-native-isolated end');
+  await writeFile(driftConfigPath, driftConfigWithForeign);
+  await rejects(() => ownedDriftRollback.rollbackFixture(), /file changed since activation/i, "rollback refuses owned provider drift even with a foreign skill table");
+  equal(await readFile(driftConfigPath, "utf8"), driftConfigWithForeign, "owned drift rollback refusal preserves the later config");
+  equal(ownedDriftRollback.stopCalls.length, 0, "owned drift is rejected before stopping the gateway");
 
   const oldEnvironmentJournal = await fixture("old-two-key-environment-journal");
   oldEnvironmentJournal.environment.set("SOL_LUNA_NATIVE_INSTALL_JOURNAL", { present: true, value: "user-owned-journal.json" });
@@ -603,6 +654,7 @@ try {
   equal(oldJournalKeyReads, 0, "rolling back an old two-key journal never reads the new journal environment key");
   equal(oldJournalKeyWrites, 0, "rolling back an old two-key journal never writes the new journal environment key");
   equal(oldEnvironmentJournal.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").value, "user-owned-journal.json", "old journal rollback preserves the unrelated user journal value");
+  equal(await readFile(path.join(oldEnvironmentJournal.codexHome, "config.toml"), "utf8"), 'model = "gpt-current"\n', "unchanged config rollback restores exact prior bytes");
 
   const changedAfterActivation = await fixture("later-edit");
   await prepare(changedAfterActivation.common);

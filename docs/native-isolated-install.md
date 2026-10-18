@@ -10,6 +10,10 @@ smoke 完成后，`prepare` 仅对路径校验通过的本次临时 fixture 删�
 
 `rollback` 先检查所有受管值仍等于本事务写入内容，再恢复文件、环境、Startup、任务和 launcher。它只会在网关由本事务启动且当前 PID、身份与健康检查仍匹配时停止网关；既有受管任务/网关会保留。用户后续修改会导致回滚拒绝覆盖。成功迁移时，journal 的 `autostart.retiredLegacy` 单独记录旧受管 Startup 是否已退役；因此即使 root config 已无旧 marker、但 manifest 证明存在旧 role/catalog 残留，成功 rollback 也不会重建旧 Startup。此标记不扩大 `files.legacyMigration`。激活失败发生在旧安装退役完成前，仍逐字恢复 prior Startup。旧 journal 未包含该标记时，rollback 仍按旧 `legacyMigration` 判断兼容行为。迁移事务还保留两种配置快照：激活失败时恢复原始字节；用户主动 rollback 时恢复经过 manifest 验证的 `prior_root` 干净配置并移除隔离配置。`prior_root` 若本来就是用户的 localhost 设置，则按原值保留。首次安装无 config 迁移时，config 文件仍逐字恢复 prior；已退役的受管 Startup 不恢复。缺少迁移卸载快照的旧 journal 会在更改状态前明确拒绝卸载。`status` 的 `configured=true`、`restartNeeded=true` 只表示配置已写入并需要重启；`runtimeObserved=false` 和 `desktopAccepted=false` 仍为真实桌面验收前的状态。需要桌面重启后单独验收，不能由 mock、配置 smoke 或 task health 推断 UI 接受。
 
+配置合并只识别精确的三个受管 TOML 表；marker 范围内后来加入的 `[[skills.config]]` 表会按原文、顺序及相邻空行/注释保留。dispatch 与回滚仍严格验证受管 provider、role 等字段，真正的受管字段漂移或 marker 外变更不会被当作可合并修改。主动 rollback 仅在受管表仍匹配且 marker 外内容未变时，保留后来新增的 skill 表并移除本插件配置；这不表示其他后续配置改动都可合并。
+
+本次已激活主机的 0.10.3 客户端升级不会重新注册或改指向当前受管 Task。该主机的当前 journal 仍指向 0.10.2 cache 中的 gateway 脚本；升级后须保留该旧 cache。对应 gateway 服务代码在 0.10.3 中未变，因此本次无需迁移 Task 或重新激活。已暂存的 runtime 文件和 Sol 的根配置连接也不变。
+
 所有命令均要求显式路径；以下值是占位符，不含凭据。主模型/provider/URL 应填写当前实际值，不要将包含凭据的 URL 写入 shell 历史、journal 或任务参数。`--plugin-root` 应是正式安装目录，不能指向工作区源码目录。
 
 ```powershell

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   composeIsolatedConfig,
+  hasOnlyAddedForeignSkillTables,
   isolatedAgentToml,
   removeIsolatedConfig,
   withTemporaryRootModelCatalog,
@@ -105,6 +106,111 @@ ok(removed.includes('added_after_install = "keep"'), "removal keeps later user r
 ok(removed.includes("[user.added]\nkey = 7"), "removal keeps later user table");
 ok(!removed.includes("sol-luna-native-isolated begin"), "removal deletes only isolated owned block");
 ok(!removed.includes("sol-luna-native-gateway begin"), "removal does not recreate removed legacy block");
+
+const foreignSkillTables = [
+  "[[skills.config]]",
+  'path = "fixture-alpha"',
+  "enabled = true",
+  "",
+  "[[skills.config]]",
+  'path = "fixture-beta"',
+  "enabled = false",
+].join("\n");
+const foreignBeforeMarkerEnd = first.replace(
+  "[model_providers.deepseek-native.capabilities]",
+  `${foreignSkillTables}\n[model_providers.deepseek-native.capabilities]`,
+).replace(
+  "[agents.native_deepseek]",
+  `[[skills.config]]\npath = "fixture-gamma"\nenabled = true\n\n[agents.native_deepseek]`,
+);
+const preservesForeignTablesInOrder = (value) => {
+  const positions = ["fixture-alpha", "fixture-beta", "fixture-gamma"].map((name) => value.indexOf(name));
+  return positions.every((position) => position >= 0)
+    && positions[0] < positions[1] && positions[1] < positions[2]
+    && (value.match(/\[\[skills\.config\]\]/g) || []).length === 3;
+};
+equal(
+  composeIsolatedConfig(foreignBeforeMarkerEnd, opts),
+  foreignBeforeMarkerEnd,
+  "gate comparison accepts foreign array tables inserted between owned tables",
+);
+equal(
+  hasOnlyAddedForeignSkillTables(foreignBeforeMarkerEnd, first, opts),
+  true,
+  "rollback classification recognizes only newly added foreign skill array tables",
+);
+equal(
+  hasOnlyAddedForeignSkillTables(foreignBeforeMarkerEnd.replace('model = "gpt-6.1-sol"', 'model = "changed-main"'), first, opts),
+  false,
+  "rollback classification rejects unrelated changes outside the marker",
+);
+equal(
+  hasOnlyAddedForeignSkillTables(foreignBeforeMarkerEnd.replace("[[skills.config]]", "[[other.config]]"), first, opts),
+  false,
+  "rollback classification does not broaden to other foreign array tables",
+);
+const triviaBeforeForeignTable = first.replace(
+  "[model_providers.deepseek-native.capabilities]",
+  '\n# application-added comment before foreign table\n[[skills.config]]\npath = "fixture-trivia"\nenabled = true\n\n[model_providers.deepseek-native.capabilities]',
+);
+equal(
+  composeIsolatedConfig(triviaBeforeForeignTable, opts),
+  triviaBeforeForeignTable,
+  "compose preserves blank-line and comment trivia immediately before a foreign table",
+);
+ok(
+  removeIsolatedConfig(triviaBeforeForeignTable).includes('\n# application-added comment before foreign table\n[[skills.config]]'),
+  "remove preserves comment trivia immediately before a foreign table",
+);
+const removedWithForeignTables = removeIsolatedConfig(foreignBeforeMarkerEnd);
+ok(
+  removedWithForeignTables.includes(foreignSkillTables)
+    && removedWithForeignTables.includes('path = "fixture-gamma"\nenabled = true')
+    && preservesForeignTablesInOrder(removedWithForeignTables),
+  "removing isolated tables preserves all foreign array tables byte-for-byte and in order",
+);
+for (const [label, before, after] of [
+  ["provider URL", `base_url = ${JSON.stringify(opts.baseUrl)}`, 'base_url = "http://127.0.0.1:9999/v1"'],
+  ["agent role path", `config_file = ${JSON.stringify(opts.agentConfigPath)}`, 'config_file = "fixture-other-agent.toml"'],
+  ["request retries", "request_max_retries = 0", "request_max_retries = 1"],
+  ["stream retries", "stream_max_retries = 0", "stream_max_retries = 1"],
+  ["compaction capability", 'remote_compaction = "unsupported"', 'remote_compaction = "enabled"'],
+]) {
+  const drift = foreignBeforeMarkerEnd.replace(before, after);
+  equal(
+    hasOnlyAddedForeignSkillTables(drift, first, opts),
+    false,
+    `rollback classification rejects owned ${label} drift`,
+  );
+  const recomposed = composeIsolatedConfig(drift, opts);
+  ok(recomposed !== drift, `gate comparison rejects owned ${label} drift`);
+  ok(preservesForeignTablesInOrder(recomposed), `owned ${label} repair preserves foreign tables in order`);
+}
+const fakeHeadersInString = foreignBeforeMarkerEnd.replace(
+  'path = "fixture-alpha"',
+  'note = """\n[[skills.config]]\npath = "fake"\n"""\npath = "fixture-alpha"',
+);
+equal(
+  composeIsolatedConfig(fakeHeadersInString, opts),
+  fakeHeadersInString,
+  "table-like text inside a string is not treated as a foreign array table",
+);
+for (const malformedOwnedHeader of [
+  "[model_providers.deepseek-native.extra]",
+  "[[model_providers.deepseek-native]]",
+  "[agents.native_deepseek.extra]",
+  "[[agents.native_deepseek]]",
+]) {
+  const malformed = foreignBeforeMarkerEnd.replace(
+    "# sol-luna-native-isolated end",
+    `${malformedOwnedHeader}\nfixture_key = true\n# sol-luna-native-isolated end`,
+  );
+  throws(
+    () => composeIsolatedConfig(malformed, opts),
+    /invalid.*isolated|isolated.*invalid/i,
+    `malformed owned namespace header ${malformedOwnedHeader} is rejected`,
+  );
+}
 
 for (const conflict of [
   `${fresh}\n[model_providers.deepseek-native]\nname = "user"\n`,
