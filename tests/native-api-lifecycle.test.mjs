@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -100,7 +100,7 @@ async function startHealthServer(port, flags) {
   return server;
 }
 
-const tempRoot = await mkdtemp(path.join(os.tmpdir(), "native-api-lifecycle-"));
+const tempRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), "native-api-lifecycle-")));
 try {
   const servicePaths = {
     dir: path.join(tempRoot, "gateway"),
@@ -348,6 +348,7 @@ try {
 
   const sourceRoot = path.join(tempRoot, "source-root");
   await mkdir(sourceRoot, { recursive: true });
+  equal(await realpath(sourceRoot), path.resolve(sourceRoot), "fixture root is canonical before source staging");
   const sourceA = await stageGatewaySource({
     pluginRoot: repoRoot,
     runtimeRoot: sourceRoot,
