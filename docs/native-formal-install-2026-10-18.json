@@ -1,0 +1,50 @@
+{
+  "schema": "native-formal-install/v1",
+  "scope": "single_host_formal_installation_record",
+  "plugin_version": "0.10.2",
+  "source_commit": "ad72ed11f6be9c97bc58bb7fba360ad72f1b5029",
+  "prepare": {
+    "exit_code": 0,
+    "smoke_checks_passed": 9,
+    "cleanup_succeeded": true,
+    "runtime_hashes_verified": 7,
+    "formal_config_unchanged": true
+  },
+  "activation": {
+    "exit_code": 0,
+    "status_exit_code": 0,
+    "readiness_exit_code": 0,
+    "task_exact_spec_running": true,
+    "deepseek_only": true,
+    "relay_allowed": false,
+    "managed_environment_names": [
+      "CODEX_CLI_PATH",
+      "SOL_LUNA_NATIVE_PLAINTEXT_V2",
+      "SOL_LUNA_NATIVE_INSTALL_JOURNAL"
+    ],
+    "managed_environment_matches_plan": true,
+    "legacy_managed_startup_retired": true,
+    "root_fields_unchanged": {
+      "model": "gpt-6.1-sol",
+      "provider_absent": true,
+      "root_base_url_absent": true,
+      "catalog_absent": true
+    }
+  },
+  "runtime_status": {
+    "runtime_observed": false,
+    "desktop_accepted": false,
+    "restart_needed": true
+  },
+  "model_api_request_made": false,
+  "receipt_sha256": {
+    "prepare": "689e82e5f7455ced912ad77eca18bc2f46f93f6d9803119b148ccd0dd1253345",
+    "activate_status_readiness": "537c0e348f43ac5ca622c875cfd8346382a92cd43b4d925da5be604e2e36b61c"
+  },
+  "limitations": [
+    "This records installation on one host only; other hosts require their own verification.",
+    "Desktop acceptance remains pending and requires a full Codex restart followed by separate verification.",
+    "Task failure behavior, multi-chat behavior, and notification delivery were not accepted by this record.",
+    "Earlier private file-followup, cold-start, and upstream-401 diagnostics are separate and do not establish Task or desktop acceptance."
+  ]
+}

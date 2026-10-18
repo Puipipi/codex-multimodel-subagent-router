@@ -126,7 +126,7 @@ The formal native DeepSeek path uses the patched, versioned CLI and the `native_
 
 The formal gateway uses `--deepseek-only`: it rejects GPT/unknown models and encrypted collaboration input before any upstream call, and its relay cap is forced to zero. Dispatch accepts only a health response confirming `deepseek_only=true`, `relay_allowed=false`, and a Running owned Task. Legacy direct gateway mode retains its existing compatibility behavior.
 
-The isolated installer runs an app-server smoke against a temporary Codex home before activation. Its local and mocked checks have passed, but no real isolated CLI installation has been performed and desktop acceptance remains pending. `activate` reports a configured state and restart requirement; neither status nor a successful smoke proves that the desktop launched or accepted the patched CLI.
+The isolated installer runs an app-server smoke against a temporary Codex home before activation. A formal installation passed on one host; see the [host-specific installation record](docs/native-formal-install-2026-10-18.md). Other hosts require local verification, and desktop acceptance remains pending. `activate` reports a configured state and restart requirement; neither status nor a successful smoke proves that the desktop launched or accepted the patched CLI.
 
 The formal gateway lifecycle uses an owned current-user Task Scheduler task, with a hidden synchronous launcher; `native-agent.mjs` checks the owned task and gateway health before each DeepSeek dispatch. A private Windows PowerShell 7 probe passed against a self-owned Job teardown and mock loopback service: the detached helper/gateway died with the Job, while the Task Scheduler gateway survived and remained hidden. This did not close a real DSH tree or test the installed gateway or desktop child UI. See the [lifecycle test receipt](docs/native-gateway-lifecycle-2026-10-18.md). `native-autostart.mjs` remains an optional legacy Startup launcher and is not the formal lifecycle. The native route uses no DSH agent/session/workspace; DSH remains an explicit legacy workflow.
 
@@ -134,7 +134,7 @@ The older `native-install.mjs` shared-root gateway, global catalog, and transpar
 
 The formal native child call uses `spawn_agent` with `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the isolated role selects its configured model. If the role is unavailable, stop and report the setup failure. Do not fall back to the shared-root provider, an explicit model override, or another executor. Native writer coordination reserves the workspace before spawn, binds the real child, and releases explicitly; it is not tied to a short-lived CLI PID.
 
-The evidence in `docs/native-deepseek-acceptance-2026-10-17.md` is historical and covers the earlier shared-provider contract. Isolated-role end-to-end and desktop acceptance remain pending.
+The evidence in `docs/native-deepseek-acceptance-2026-10-17.md` is historical and covers the earlier shared-provider contract. The host-specific installation record does not establish isolated-role end-to-end or desktop acceptance on other hosts; desktop acceptance remains pending.
 
 The legacy DSH MCP/trace path remains explicit and is never an automatic fallback from native DeepSeek.
 
@@ -193,7 +193,7 @@ After this initial plugin installation or a plugin update, reload plugins or res
 
 ### Isolated native DeepSeek setup
 
-Only perform setup when explicitly requested. Follow [the isolated installer guide](docs/native-isolated-install.md) and its staged `prepare` → `status` → `activate` flow. The legacy `native-install.mjs` command is not the formal setup entrypoint. Real installation and desktop acceptance are still pending; do not describe a prepared or configured state as desktop acceptance.
+Only perform setup when explicitly requested. Follow [the isolated installer guide](docs/native-isolated-install.md) and its staged `prepare` → `status` → `activate` flow. The legacy `native-install.mjs` command is not the formal setup entrypoint. One host-specific installation is recorded in [the dated install record](docs/native-formal-install-2026-10-18.md); other hosts require local verification, and desktop acceptance remains pending. Do not describe a prepared or configured state as desktop acceptance.
 
 The installer manages three user environment values, including `SOL_LUNA_NATIVE_INSTALL_JOURNAL`, which lets future DeepSeek chats find the active journal without an explicit CLI flag. Fully exit and restart Codex after activation so new chats inherit the updated environment; a running app does not refresh it. Generic runtime environment plans continue to manage only the original two keys, and older two-key journals remain supported.
 

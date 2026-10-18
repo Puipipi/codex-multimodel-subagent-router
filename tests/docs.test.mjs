@@ -82,7 +82,7 @@ assert.match(skill, /does not create native Codex child sessions/);
 for (const command of ['prepare', 'activate', 'rollback', 'status']) assert.match(skill, new RegExp(`\\b${command}\\b`), `SKILL.md must list installer command ${command}`);
 assert.match(skill, /ordinary task routing.*never run them/i, 'SKILL.md must keep ordinary routing separate from setup');
 assert.match(skill, /explicitly asks to set up or activate.*authorizes.*without another approval prompt/i, 'SKILL.md must avoid redundant approval for an explicitly requested setup');
-assert.match(skill, /actual isolated CLI installation has not been run/i, 'SKILL.md must not claim the source installer has run');
+assert.match(skill, /native-formal-install-2026-10-18\.md.*other hosts require local verification/i, 'SKILL.md must link the host-specific install record and require local verification elsewhere');
 assert.match(skill, /desktop acceptance remains pending|desktop acceptance.*still pending/i, 'SKILL.md must distinguish configured source from desktop acceptance');
 assert.doesNotMatch(skill, /ACL file lock|blocks the intended UI check/i, 'SKILL.md must not preserve the obsolete UI blocker claim');
 assert.doesNotMatch(skill, /node \.\\scripts\\native-install\.mjs install/i, 'SKILL.md must not present the old shared-root installer as the setup path');
@@ -111,7 +111,8 @@ assert.match(nativeInstaller, /--expected-root-base-url null/);
 assert.match(nativeInstaller, /prepare[\s\S]*activate[\s\S]*desktop/i);
 assert.match(nativeInstaller, /configured=true.*restartNeeded=true/);
 assert.match(nativeInstaller, /runtimeObserved=false.*desktopAccepted=false/);
-assert.match(nativeInstaller, /尚未在真实用户配置或环境上执行/, 'installer documentation must state that real installation has not run');
+assert.match(nativeInstaller, /native-formal-install-2026-10-18\.md/);
+assert.match(nativeInstaller, /其他主机须独立核验.*不等于桌面接受验收/, 'installer guide must require other-host verification and keep desktop acceptance separate');
 assert.match(nativeAcceptance, /Historical acceptance record for the earlier shared-provider route/i, 'old acceptance evidence must be labeled historical');
 assert.doesNotMatch(nativeAcceptance, /ACL file lock|blocked the intended UI check/i, 'acceptance record must not claim the obsolete ACL blocker');
 assert.doesNotMatch(skill, /at most one shell(?:\/exec)? attempt/i,

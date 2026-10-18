@@ -1,6 +1,6 @@
 # 隔离 CLI 安装编排
 
-`native-isolated-install.mjs` 提供 `prepare`、`activate`、`rollback`、`status` 源码入口，并由 mock 测试覆盖。它将已验证的 CLI、child-only 配置、三项受管环境变量、独立网关目录、Task Scheduler 任务和旧受管 Startup VBS 作为一个可审计事务编排；本仓库尚未在真实用户环境或桌面会话中运行该安装。第三项 `SOL_LUNA_NATIVE_INSTALL_JOURNAL` 保存本事务 journal 的绝对路径，供之后新建的 DeepSeek child 使用。
+`native-isolated-install.mjs` 提供 `prepare`、`activate`、`rollback`、`status` 源码入口，并由 mock 测试覆盖。它将已验证的 CLI、child-only 配置、三项受管环境变量、独立网关目录、Task Scheduler 任务和旧受管 Startup VBS 作为一个可审计事务编排。一次正式安装已在单一主机通过，详见[主机安装记录](native-formal-install-2026-10-18.md)；其他主机仍须本地核验，桌面验收仍待完成。第三项 `SOL_LUNA_NATIVE_INSTALL_JOURNAL` 保存本事务 journal 的绝对路径，供之后新建的 DeepSeek child 使用。
 
 `prepare` 要求显式路径、当前主模型/provider（provider 可为 `null`）和 root URL 预期（可为 `null`），并要求 `--gateway-script` 或 `--plugin-root` 指向正式安装位置。若旧 role/catalog 残留需纳入迁移，必须显式传入 `--legacy-manifest-path` 指向经验证的旧安装 manifest；工具不会自动发现或认领未知文件。它只准备私有网关身份，不启动服务；随后在临时 Codex home 上运行只读 app-server smoke。临时配置复用完整模型缓存并将 root catalog 指向临时缓存，正式配置仍保持用户主模型/provider/catalog。若迁移旧共享配置，smoke fixture 使用 legacy manifest 恢复旧 root 值。只有 smoke 返回 `status=passed` 才会写入 journal。
 
@@ -47,4 +47,4 @@ node .\scripts\native-agent.mjs --executor deepseek --json
 node .\scripts\native-isolated-install.mjs rollback --journal-path "<private-journal-path>"
 ```
 
-journal 使用 base64 保存原始 Buffer 快照；Windows 文件访问继承父目录 ACL，本模块不更改 ACL。准备/配置和桌面生效是不同阶段；尚未在真实用户配置或环境上执行安装，也未完成桌面接受验收。
+journal 使用 base64 保存原始 Buffer 快照；Windows 文件访问继承父目录 ACL，本模块不更改 ACL。准备/配置和桌面生效是不同阶段；其他主机须独立核验，且任何已配置状态都不等于桌面接受验收。
