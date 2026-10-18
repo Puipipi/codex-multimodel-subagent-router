@@ -11,11 +11,16 @@ import {fileURLToPath} from 'node:url';
 import {runClient} from './dsh-mcp-client.mjs';
 import {createTraceService} from './plugin-trace.mjs';
 import {
+  ROUTER_SETTINGS_TOOL_NAMES,
+  ROUTER_SETTINGS_TOOLS,
+  createRouterSettingsService,
+} from './router-settings-mcp.mjs';
+import {
   OwnershipStore, WorkspaceLeases, TERMINAL_STATUSES, canonicalWorkspace, hashThread, normalizeWorkspace, resolveStateDir, workspaceKey,
 } from './plugin-state.mjs';
 
 const VERSION = '0.8.1';
-const PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
+const PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25']);
 const PASSIVE_STATUSES = new Set([...TERMINAL_STATUSES]);
 const LIST_STATUSES = new Set(['starting', 'running', 'interrupting', 'idle', 'completed', 'interrupted', 'error', 'context_exhausted', 'closed']);
 const PERMISSIONS = new Set(['read-only', 'workspace-write', 'danger-full-access']);
@@ -31,7 +36,7 @@ const boolean = description => ({type: 'boolean', description});
 const integer = (description, minimum, maximum) => ({type: 'integer', minimum, maximum, description});
 const agentId = string('DSH agent id returned by dsh_start or dsh_followup.');
 
-export const TOOLS = [
+const DSH_TOOLS = [
   {
     name: 'dsh_start',
     description: 'Start an independent DSH 0.7 agent asynchronously. The trusted Codex request _meta.threadId becomes the sole owner of the returned agent id. Write-capable starts hold a same-workspace plugin-writer lease until the agent reaches a terminal state. Requires an absolute cwd. After start, retain the agent id and use dsh_wait; never start a duplicate because a wait timed out.',
@@ -146,6 +151,7 @@ export const TOOLS = [
   },
 ];
 
+export const TOOLS = [...DSH_TOOLS, ...ROUTER_SETTINGS_TOOLS];
 const TOOL_BY_NAME = new Map(TOOLS.map(tool => [tool.name, tool]));
 
 export function sanitizeError(message) {
@@ -277,6 +283,10 @@ function errorResult(message) {
   return {isError: true, content: [{type: 'text', text: sanitizeError(message)}]};
 }
 
+function settingsToolResult(payload, text) {
+  return {content: text ? [{type: 'text', text}] : [], structuredContent: payload};
+}
+
 function jsonRpcError(id, code, message) {
   return {jsonrpc: '2.0', id: id ?? null, error: {code, message: sanitizeError(message)}};
 }
@@ -288,11 +298,13 @@ export function createPluginMcp({
   now = Date.now,
   ownership,
   leases,
+  settingsPath,
 } = {}) {
   const resolvedStateDir = resolveStateDir(stateDir);
   const ownershipStore = ownership ?? new OwnershipStore({stateDir: resolvedStateDir, now});
   const leaseStore = leases ?? new WorkspaceLeases({stateDir: resolvedStateDir, now});
   const traceService = traceOverride ?? createTraceService({now});
+  const routerSettings = createRouterSettingsService({settingsPath});
 
   async function backend(action, args, threadId) {
     const response = await run({action, args, meta: {threadId}});
@@ -583,23 +595,44 @@ export function createPluginMcp({
       return {
         jsonrpc: '2.0', id,
         result: {
-          protocolVersion: PROTOCOL_VERSIONS.has(requested) ? requested : '2025-06-18',
-          capabilities: {tools: {listChanged: false}},
+          protocolVersion: PROTOCOL_VERSIONS.has(requested) ? requested : '2025-11-25',
+          capabilities: {
+            tools: {listChanged: false},
+            resources: {subscribe: false, listChanged: false},
+            experimental: {
+              'openai/settings': {
+                readTool: 'router_settings_read',
+                updateTool: 'router_settings_update',
+              },
+            },
+          },
           serverInfo: {name: 'sol-luna-deepseek-router', version: VERSION, title: 'Sol Luna DeepSeek Router'},
-          instructions: 'Every tools/call must carry the trusted Codex request _meta.threadId; this server refuses to act without it. One chat owns each DSH agent and dsh_list is filtered to that chat. Retain agent ids and use dsh_wait; do not duplicate a start after a timeout. dsh_trace returns a read-only loopback URL with a short-lived access ticket, never a credential. External DSH agents are not native Codex children; the trace is the truthful external event view.',
+          instructions: 'Every DSH tools/call must carry the trusted Codex request _meta.threadId; this server refuses to act without it. Router settings tools are direct, app-visible configuration calls and do not require a model turn. One chat owns each DSH agent and dsh_list is filtered to that chat. Retain agent ids and use dsh_wait; do not duplicate a start after a timeout. dsh_trace returns a read-only loopback URL with a short-lived access ticket, never a credential. External DSH agents are not native Codex children; the trace is the truthful external event view. The settings panel writes only router JSON; installation, full restart, and verification remain separate and unclaimed.',
         },
       };
     }
     if (method === 'notifications/initialized' || method === 'notifications/cancelled') return null;
     if (method === 'ping') return {jsonrpc: '2.0', id, result: {}};
     if (method === 'tools/list') return {jsonrpc: '2.0', id, result: {tools: TOOLS}};
+    if (method === 'resources/list') return {jsonrpc: '2.0', id, result: {resources: routerSettings.listResources()}};
+    if (method === 'resources/read') {
+      try {
+        return {jsonrpc: '2.0', id, result: {contents: await routerSettings.readResource(params?.uri)}};
+      } catch (error) {
+        return jsonRpcError(id, -32002, error.message);
+      }
+    }
     if (method !== 'tools/call') return method?.startsWith('notifications/') ? null : jsonRpcError(id, -32601, `Unsupported method: ${method}`);
     try {
-      const threadId = trustedThreadId(params);
       if (typeof params.name !== 'string' || params.name.trim() === '') throw new Error('tools/call requires a tool name.');
       const tool = TOOL_BY_NAME.get(params.name);
       if (!tool) throw new Error(`Unknown tool: ${params.name}`);
       const args = params.arguments ?? {};
+      if (ROUTER_SETTINGS_TOOL_NAMES.has(tool.name)) {
+        const {payload, text} = await routerSettings.callTool(tool.name, args);
+        return {jsonrpc: '2.0', id, result: settingsToolResult(payload, text)};
+      }
+      const threadId = trustedThreadId(params);
       validateArguments(tool, args);
       const {payload, text} = await dispatch(tool.name, args, threadId);
       return {jsonrpc: '2.0', id, result: toolResult(payload, text)};
@@ -612,7 +645,15 @@ export function createPluginMcp({
     await traceService.close();
   }
 
-  return {handle, close, ownership: ownershipStore, leases: leaseStore, trace: traceService, stateDir: resolvedStateDir};
+  return {
+    handle,
+    close,
+    ownership: ownershipStore,
+    leases: leaseStore,
+    trace: traceService,
+    stateDir: resolvedStateDir,
+    routerSettings,
+  };
 }
 
 async function main() {
