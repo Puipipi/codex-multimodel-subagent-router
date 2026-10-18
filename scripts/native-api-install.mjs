@@ -320,10 +320,12 @@ async function canonicalDefaultTaskSettingsPath({ apiDir, settingsPath, settings
     throw new Error("default API router settings alias could not be verified against its canonical file");
   }
   if (!sameAbsolutePath(nominalRealPath, canonicalRealPath)
-      || !sameAbsolutePath(canonicalRealPath, canonicalPath)
-      || !nominalFile.isFile() || !canonicalFile.isFile()
+      || !sameAbsolutePath(canonicalRealPath, canonicalPath)) {
+    throw new Error("default API router settings alias does not identify the canonical settings file (native realpath mismatch)");
+  }
+  if (!nominalFile.isFile() || !canonicalFile.isFile()
       || nominalFile.dev !== canonicalFile.dev || nominalFile.ino === 0n || nominalFile.ino !== canonicalFile.ino) {
-    throw new Error("default API router settings alias does not identify the canonical settings file");
+    throw new Error("default API router settings alias does not identify the canonical settings file (file identity mismatch)");
   }
   const readSnapshot = dependencies.readRouterSettingsSnapshot || readRouterSettingsSnapshot;
   const canonicalSnapshot = await readSnapshot(canonicalPath);
