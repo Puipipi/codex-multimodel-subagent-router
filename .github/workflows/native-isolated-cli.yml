@@ -138,6 +138,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run native API profile tests
+        id: native-api-profile-tests
         shell: pwsh
         working-directory: codex-rs
         run: |
@@ -145,6 +146,8 @@ jobs:
           $testExit = $LASTEXITCODE
           $outputText = $output | Out-String
           Write-Output $outputText
+          $diagnosticPath = Join-Path $env:RUNNER_TEMP "native-api-tests-${env:GITHUB_RUN_ID}.log"
+          [System.IO.File]::WriteAllText($diagnosticPath, $outputText, [System.Text.UTF8Encoding]::new($false))
           if ($outputText -notmatch '(?m)^running (\d+) tests?\r?$') {
             throw 'Expected the native API profile tests to report a test count.'
           }
@@ -153,6 +156,15 @@ jobs:
             throw "Expected 8 native API profile tests, ran $count."
           }
           if ($testExit -ne 0) { exit $testExit }
+
+      - name: Upload native API test diagnostics
+        if: ${{ steps.native-api-profile-tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-api-tests-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-api-tests-${{ github.run_id }}.log
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run bounded retry role regression
         shell: pwsh
