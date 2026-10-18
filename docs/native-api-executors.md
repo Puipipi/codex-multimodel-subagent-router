@@ -172,12 +172,21 @@ prompts, logs, or public receipts. Existing account/manual-key precedence in
 the DeepSeek path is unchanged, and no third-party probe is performed.
 
 For official DeepSeek API profiles (account or manual env/file credentials),
-reasoning is limited to the known `none/low/high/max` levels. The API adapter
-maps a requested `xhigh` to `high` and preserves a valid `max`; it does not
-infer an `off` wire value for `none`, because that mapping needs provider
-evidence. Other API profiles retain their declared effort levels. The
+reasoning is limited to the documented `none/low/high/max` levels. The
+[official Responses API](https://api-docs.deepseek.com/api/create-response/)
+and [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)
+list these effort values, and the
+[thinking-mode guide](https://api-docs.deepseek.com/guides/thinking_mode/)
+states that `none` disables thinking while `xhigh` maps to `high` and `max` is
+preserved. The API adapter therefore maps a requested `xhigh` to `high`,
+preserves a valid `max`, and passes `none` through without inventing an
+`off` value. Other API profiles retain their declared effort levels. The
 historical DeepSeek gateway effort folding is a separate path and is not reused
 for generic roles.
+
+These are documented wire rules. They do not prove that a real generic API
+role, account credential, gateway, and model endpoint have completed
+end-to-end acceptance.
 
 Chat Completions profiles are adapted to a stateless Chat request. Codex's
 built-in web search is not representable by that adapter; the gateway reports
