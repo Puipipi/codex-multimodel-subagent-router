@@ -276,17 +276,18 @@ fixture disables web search explicitly.
 ## Verification and current limits
 
 The current runtime approval hash is
-`6dc2ded0fc9c17609fc31ab3266a81ddbfe1ed69b0d7e450d48c1ad715b154e5`. Runtime
+`fce9b9cc3de46df547a7403c9e71a4ac07f3c81eee47742907d68496ff63e18c`. Runtime
 manifests built with the older `7a5c...` patch (including the installed 6ec
 binary) are not accepted by the API dispatch gate. The old binary may still be
 used as an adapter-level CLI smoke target, but it is not evidence that a new
 native API role passed end-to-end.
 
-The final patch is 108037 bytes. Its upstream build is recorded in GitHub
-Actions run `39132413744` at head
-`16a00b88c3fd2d511243f3f71bbdfffea7120232`; this is build evidence, not a
-local installation, restart, or desktop API-role acceptance. No new runtime
-was installed in this worktree.
+The final patch is 108080 bytes. The first build run `39132413744` failed on a
+test-only missing import, and its cache was saved. The corrected run
+`39134187187` at head `36d9f11ef3bbdc137215647c4ce4259b5646e558` was still in
+progress when this checkpoint was written; it is not claimed GREEN until the
+run completes. This is build evidence, not a local installation, restart, or
+desktop API-role acceptance. No new runtime was installed in this worktree.
 
 Mocked/free tests cover artifacts, install/rollback, Task namespace, health,
 gate failures, source-bundle stability, immutable state bindings, and CLI
