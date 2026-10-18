@@ -1,6 +1,10 @@
-# Codex plugin: Sol Luna Native + Legacy DSH
+# Sol 主控 · 多模型峰谷子代理
+
+Canonical skill: `$sol-luna-deepseek-router`.
 
 This repository contains the canonical standalone routing skill and an optional Codex plugin. The formal native DeepSeek path uses the patched, versioned CLI with an isolated `native_deepseek` role, dedicated `deepseek-native` provider, and child-only catalog; Sol and Luna retain their normal provider/catalog. The published `dsh-subagent-mcp@0.7.0` bridge remains explicit legacy compatibility. The older shared-root gateway, global catalog, and GPT relay are historical compatibility only, not the formal isolated setup path.
+
+The 0.11.0 candidate adds user-configured OpenAI-compatible API child profiles, immutable profile IDs, official DeepSeek account or manual env/file credential references, fixed or explicit peak/valley API selection, and a settings panel with explicit Apply. Existing children keep their original profile; saving JSON is not installation. First-version API children disable Codex built-in web search for both Responses and Chat Completions. The plugin package version is independent of the MCP server protocol version, which remains `0.8.1`. This candidate does not claim a real generic API runtime installation or desktop UI acceptance.
 
 The formal gateway lifecycle is an owned current-user Task Scheduler task started and health-checked at DeepSeek dispatch. A private Windows PowerShell 7 probe passed for a self-owned Job teardown with a mock loopback service: the direct helper/gateway died with the Job, while the scheduled gateway survived and remained hidden. This did not close a real DSH tree or validate the installed gateway or desktop child UI; see the [lifecycle test receipt](docs/native-gateway-lifecycle-2026-10-18.md). The native route does not create DSH sessions, agents, or workspaces. `native-autostart.mjs` is retained only as an optional legacy Startup launcher.
 

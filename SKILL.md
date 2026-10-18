@@ -1,11 +1,11 @@
 ---
 name: sol-luna-deepseek-router
-description: Use when Sol keeps the main conversation while delegating repository coding or file work to native Luna or an isolated native DeepSeek child through the peak/valley schedule.
+description: Use when Sol keeps the main conversation while delegating repository coding or file work to native Luna, an isolated native DeepSeek child, or a user-configured OpenAI-compatible API profile under the peak/valley schedule.
 metadata:
-  short-description: Sol 主控 · 原生 Luna/DeepSeek 峰谷分工
+  short-description: Sol 主控 · 多模型峰谷子代理
 ---
 
-# Sol 主控 · 原生 Luna/DeepSeek 峰谷分工
+# Sol 主控 · 多模型峰谷子代理
 
 Sol remains the user-facing lead and owns the conversation context. Handle ordinary Q&A directly. Delegate project search, edits, debugging, and verification by the deterministic route below unless the user asks Sol to work directly. The main model, main provider, and current chat are never changed by this skill.
 
@@ -106,7 +106,7 @@ The historical native evidence is recorded in `docs/native-deepseek-acceptance-2
 
 The generic OpenAI-compatible API executor backend is described in `docs/native-api-executors.md`. The panel source and this product guidance are integrated; desktop acceptance and final runtime installation remain separate. The installed 0.10.5/6ec runtime predates the new API role patch; do not describe a generic API profile as ready until a matching runtime, restart, and real probe have separate evidence.
 
-默认路径仍是高峰 Luna、低谷 DeepSeek。用户显式选择的 API 配置使用 fixed 模式且不判断时段；只有显式 scheduled 才在既有的 DeepSeek 峰谷日历上使用两个 API 选择器。一次性/粘性显式选择优先；选中的执行器失败时明确报告，不静默回退到 Luna、DeepSeek、另一个 API 或另一个账号。DSH 账号或本地 refs 的既有解析规则保留，失败不会试探其他账号或 provider。保存 JSON 只保存配置；“应用 API 配置”仍需兼容且已安装的 runtime，首次新增 role 后要完整重启 Codex。已有 child 继续使用其不可变 profile。Chat Completions 不能使用 Codex 内建 web_search，适配器也不声称强制 provider grammar。状态里的本地网关/凭据可用不等于认证或模型调用通过；旧 6ec runtime 为 `runtimeCompatible:false`，generic API 的真实 role 验收仍待最终 runtime。
+默认路径仍是高峰 Luna、低谷 DeepSeek。用户显式选择的 API 配置使用 fixed 模式且不判断时段；只有显式 scheduled 才在既有的 DeepSeek 峰谷日历上使用两个 API 选择器。一次性/粘性显式选择优先；选中的执行器失败时明确报告，不静默回退到 Luna、DeepSeek、另一个 API 或另一个账号。DSH 账号或本地 refs 的既有解析规则保留，失败不会试探其他账号或 provider。保存 JSON 只保存配置；“应用 API 配置”仍需兼容且已安装的 runtime，首次新增 role 后要完整重启 Codex。已有 child 继续使用其不可变 profile。首版所有 API child（Responses 与 Chat Completions）都禁用 Codex 内建 web_search，适配器也不声称强制 provider grammar。状态里的本地网关/凭据可用不等于认证或模型调用通过；旧 6ec runtime 为 `runtimeCompatible:false`，generic API 的真实 role 验收仍待最终 runtime。
 
 官方 DeepSeek API profile（自动账号或手工 env/file）使用官方文档列出的 `none/low/high/max`；官方说明 `none` 会关闭 thinking。`xhigh` 在 API adapter 局部规范为 `high`，有效 `max` 保留；`none` 原样传递，不另造 `off`。非 DeepSeek API 保持其声明的档位，历史 DS 路由行为不变。这里只是官方 wire 规则依据，不代表真实 generic API role 已完成端到端验收。
 

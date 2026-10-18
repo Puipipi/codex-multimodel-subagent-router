@@ -1,8 +1,12 @@
-# Sol 主控 · 原生 Luna/DeepSeek 峰谷分工
+# Sol 主控 · 多模型峰谷子代理
+
+Canonical skill: `$sol-luna-deepseek-router`.
 
 This repository contains one routing skill and an optional Codex plugin. Sol stays in charge of the current conversation, then routes repository file search and reading, code or document edits, debugging, and tests to native Luna during DeepSeek's official weekday peak windows or to a native DeepSeek child during valley hours. A deterministic Node.js helper evaluates the schedule; Sol interprets user intent and does not send ordinary Q&A through the router. The formal native DeepSeek route uses the isolated `native_deepseek` child role, its own `deepseek-native` provider, and a child-only model catalog. Sol and native Luna continue using their normal provider and live model catalog. DSH remains explicit legacy compatibility. Sol stays responsible for decisions and review. Users can explicitly ask Sol to work directly.
 
 The standalone root `SKILL.md` is the canonical routing policy. The optional plugin adds the native gateway helpers, a guarded legacy DSH MCP wrapper, real DSH event access, and local lifecycle hooks; it does not add a second scheduler, a second DeepSeek client, another agent loop, or any bundled skill. Install and enable exactly one routing skill: the root standalone scheduler.
+
+The optional API panel adds user-configured OpenAI-compatible child profiles. Profiles are immutable; editing creates a new profile ID while existing children keep their original binding. Credentials may use the official DeepSeek account automatically or manual environment/file references, with no fallback to another account or provider. A single API profile is fixed and does not consult the clock; an explicit scheduled plan can assign separate API/Luna/DeepSeek choices to peak and valley. Saving JSON is separate from the explicit Apply action, and a newly applied role requires a full Codex restart. Version 0.11.0 is a candidate: generic API runtime installation and desktop UI acceptance remain pending. First-version API children disable Codex built-in web search.
 
 ## Schedule
 
@@ -222,7 +226,7 @@ The generic OpenAI-compatible API executor backend is documented in [docs/native
 
 The default remains peak Luna / valley DeepSeek. A user-selected API profile is fixed and does not consult the clock; an explicit scheduled plan may use API peak and DeepSeek valley or two API profiles. One-time and sticky selections take precedence, and a failed selected executor is reported without falling back to Luna, DeepSeek, another API, or another DeepSeek account. Local credential availability is not authentication proof.
 
-Saving an API profile only writes router JSON. A compatible, already-staged runtime must be present before the explicit Apply action can install the owned role/provider/catalog/Task transaction; a newly applied role requires a full Codex restart. Existing children keep their original immutable profile. Chat Completions profiles cannot use Codex's built-in web search, and the adapter does not claim to enforce a provider grammar. The installed 6ec runtime reports `runtimeCompatible:false`; generic API readiness awaits the final runtime and a real role acceptance run.
+Saving an API profile only writes router JSON. A compatible, already-staged runtime must be present before the explicit Apply action can install the owned role/provider/catalog/Task transaction; a newly applied role requires a full Codex restart. Existing children keep their original immutable profile. First-version API children disable Codex's built-in web search for both Responses and Chat Completions, and the adapter does not claim to enforce a provider grammar. The installed 6ec runtime reports `runtimeCompatible:false`; generic API readiness awaits the final runtime and a real role acceptance run.
 
 Official DeepSeek API profiles (account or manual env/file credentials) use the documented `none/low/high/max` reasoning levels; the official API docs state that `none` disables thinking. `xhigh` is normalized to `high` in the API adapter and a valid `max` is preserved. The adapter passes `none` through and does not invent a separate `off` value; non-DeepSeek profiles keep their declared efforts. Historical DeepSeek routing behavior is unchanged. This is wire-rule evidence, not a claim that a real generic API role has completed end-to-end acceptance.
 

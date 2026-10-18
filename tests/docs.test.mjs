@@ -25,7 +25,13 @@ assert.doesNotMatch(marketplace.plugins[0].source.path, /^(?:[A-Za-z]:[\\/]|\\\\
 assert.equal(marketplace.plugins[0].policy.installation, 'AVAILABLE', 'the marketplace installation policy is explicit');
 assert.equal(marketplace.plugins[0].policy.authentication, 'ON_INSTALL', 'the marketplace auth policy is explicit');
 assert.equal(marketplace.plugins[0].category, 'Developer Tools', 'the marketplace category is explicit');
-assert.equal(pluginManifest.version, '0.10.5', 'the plugin manifest is prepared for the bounded retry candidate');
+assert.equal(pluginManifest.version, '0.11.0', 'the plugin manifest is the 0.11.0 candidate');
+assert.match(readme, /^# Sol 主控 · 多模型峰谷子代理$/m, 'README uses the unified display name');
+assert.match(skill, /^# Sol 主控 · 多模型峰谷子代理$/m, 'SKILL.md uses the unified display name');
+assert.match(pluginDoc, /^# Sol 主控 · 多模型峰谷子代理$/m, 'PLUGIN.md uses the unified display name');
+assert.match(readme, /\$sol-luna-deepseek-router/, 'README names the canonical skill');
+assert.match(skill, /\$sol-luna-deepseek-router|name: sol-luna-deepseek-router/, 'SKILL.md keeps the canonical skill name');
+assert.match(pluginDoc, /\$sol-luna-deepseek-router/, 'PLUGIN.md names the canonical skill');
 assert.match(nativePluginCandidate, /0\.10\.5/);
 assert.match(nativePluginCandidate, /bounded.*retry/i);
 assert.match(nativePluginCandidate, /GREEN/i, 'the candidate note must keep runtime build status explicit');

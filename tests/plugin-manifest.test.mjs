@@ -9,12 +9,20 @@ const doesNotMatch = (value, pattern, message) => { assert.doesNotMatch(value, p
 
 const read = name => readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
 const manifest = JSON.parse(read('.codex-plugin/plugin.json'));
+const marketplace = JSON.parse(read('.agents/plugins/marketplace.json'));
 const mcp = JSON.parse(read('.mcp.json'));
 const pluginDoc = read('PLUGIN.md');
+const openaiYaml = read('agents/openai.yaml');
 const wrapper = read('scripts/plugin-mcp.mjs');
 
 equal(manifest.name, 'sol-luna-deepseek-router', 'the manifest name matches the plugin folder');
+equal(marketplace.interface.displayName, 'Sol 主控 · 多模型峰谷子代理', 'the marketplace display name is unified');
+equal(marketplace.name, 'sol-luna', 'the marketplace registry name is stable');
+match(openaiYaml, /display_name: "Sol 主控 · 多模型峰谷子代理"/, 'the skill UI display name is unified');
+match(openaiYaml, /default_prompt: "[^"]*\$sol-luna-deepseek-router/, 'the skill default prompt names the canonical skill');
+match(openaiYaml, /policy:\s*\n\s*allow_implicit_invocation: true/, 'the existing skill invocation policy is preserved');
 match(manifest.version, /^\d+\.\d+\.\d+$/, 'the manifest uses strict semver');
+equal(manifest.version, '0.11.0', 'the plugin manifest is the 0.11.0 candidate');
 ok(manifest.description.length > 20, 'the manifest describes the plugin');
 equal(manifest.author.name, 'Puipipi', 'the manifest names the author');
 match(manifest.repository, /^https:\/\//, 'the repository is an https URL');
@@ -23,10 +31,16 @@ equal(manifest.mcpServers, './.mcp.json', 'the manifest points at the MCP compan
 ok(!Object.hasOwn(manifest, 'skills'), 'the plugin does not declare a second scheduling skill');
 ok(!existsSync(new URL('../skills/', import.meta.url)), 'the duplicate bundled skills directory is absent');
 ok(existsSync(new URL('../SKILL.md', import.meta.url)), 'the root canonical standalone skill remains');
-equal(manifest.interface.displayName, 'Sol 主控 · 原生 Luna/DeepSeek 峰谷分工', 'the display name is present');
-ok(manifest.interface.shortDescription.length > 10, 'the short description is present');
+equal(manifest.interface.displayName, 'Sol 主控 · 多模型峰谷子代理', 'the display name is unified');
+ok(manifest.interface.shortDescription.length >= 25 && manifest.interface.shortDescription.length <= 64,
+  'the short description is within the UI limit');
 ok(manifest.interface.longDescription.length > 50, 'the long description is present');
 match(manifest.interface.longDescription, /native_deepseek.*provider.*catalog/i, 'the manifest describes the isolated DeepSeek role');
+match(manifest.interface.longDescription, /API profiles are immutable/i, 'the manifest describes immutable API profiles');
+match(manifest.interface.longDescription, /DeepSeek account|manual env\/file/i, 'the manifest describes account and manual credential references');
+match(manifest.interface.longDescription, /fixed|peak.*valley/i, 'the manifest describes fixed and scheduled API selection');
+match(manifest.interface.longDescription, /explicit Apply|API panel/i, 'the manifest describes the explicit API panel Apply state');
+match(manifest.interface.longDescription, /web search.*disabled|disable.*web search/i, 'the manifest states the first-version web search limitation');
 doesNotMatch(manifest.interface.longDescription, /shared `openai` provider|transparently relays GPT traffic/i, 'the manifest does not describe shared-root GPT relay as the formal route');
 doesNotMatch(manifest.interface.defaultPrompt.join(' '), /Start the native DeepSeek gateway/i, 'default prompts do not start the old gateway');
 equal(manifest.interface.developerName, 'Puipipi', 'the developer name is present');
