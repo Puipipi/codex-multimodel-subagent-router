@@ -1,5 +1,9 @@
 # 隔离 CLI 安装编排
 
+## 0.10.5 bounded retry 候选
+
+0.10.5 候选为专用 `native_deepseek` 子代理在角色配置中关闭 `unbounded_connection_retries`，保留 Sol/root 与其他角色的默认行为。配置与回滚 fixture 已覆盖复用既有 gateway/Task 时的 role 更新和字节恢复。该候选的 patched CLI 尚未通过 GREEN 构建，不能视为可发布或可安装版本；0.10.4 的安装和桌面验收记录仍只描述当时已安装版本。
+
 ## 0.10.4 发布说明
 
 0.10.4 将 gateway 五脚本绑定到 `native-isolated` 下的内容寻址 bundle，使受管 Task 的后续启动不依赖会被插件刷新清理的 cache；停止网关时按已验证的 PID/身份确认进程退出，不能仅凭 `Stop-ScheduledTask` 成功推断 Node 已结束。配置回滚会先验证受管 provider、role 三表及 gateway identity 仍与本事务一致，并拒绝会使 root provider 或 root URL 依赖该隔离 provider 的配置；通过后只移除本插件受管表，保留当前其他配置原文。受管字段漂移仍会拒绝回滚。此版本说明源码行为与回滚边界，不代表正式 Task 故障验收或桌面/UI 验收已通过；这些仍待单独验证。

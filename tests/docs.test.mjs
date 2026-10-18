@@ -6,6 +6,7 @@ const readme = read('README.md');
 const skill = read('SKILL.md');
 const pluginDoc = read('PLUGIN.md');
 const pluginManifest = JSON.parse(read('.codex-plugin/plugin.json'));
+const nativePluginCandidate = read('docs/native-plugin-candidate-0.10.5-2026-10-18.md');
 const nativeBuild = read('docs/native-isolated-cli-build.md');
 const nativeInstaller = read('docs/native-isolated-install.md');
 const nativeLifecycleText = read('docs/native-gateway-lifecycle-2026-10-18.json');
@@ -24,6 +25,10 @@ assert.doesNotMatch(marketplace.plugins[0].source.path, /^(?:[A-Za-z]:[\\/]|\\\\
 assert.equal(marketplace.plugins[0].policy.installation, 'AVAILABLE', 'the marketplace installation policy is explicit');
 assert.equal(marketplace.plugins[0].policy.authentication, 'ON_INSTALL', 'the marketplace auth policy is explicit');
 assert.equal(marketplace.plugins[0].category, 'Developer Tools', 'the marketplace category is explicit');
+assert.equal(pluginManifest.version, '0.10.5', 'the plugin manifest is prepared for the bounded retry candidate');
+assert.match(nativePluginCandidate, /0\.10\.5/);
+assert.match(nativePluginCandidate, /bounded.*retry/i);
+assert.match(nativePluginCandidate, /GREEN/i, 'the candidate note must keep runtime build status explicit');
 
 const hookCommand = 'node "${PLUGIN_ROOT}/scripts/route-hook.mjs"';
 assert.equal(hooks.hooks.UserPromptSubmit[0].hooks[0].command, hookCommand, 'UserPromptSubmit must use the quoted plugin root');
