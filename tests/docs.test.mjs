@@ -88,13 +88,13 @@ for (const command of ['prepare', 'activate', 'rollback', 'status']) assert.matc
 assert.match(skill, /ordinary task routing.*never run them/i, 'SKILL.md must keep ordinary routing separate from setup');
 assert.match(skill, /explicitly asks to set up or activate.*authorizes.*without another approval prompt/i, 'SKILL.md must avoid redundant approval for an explicitly requested setup');
 assert.match(skill, /native-formal-install-2026-10-18\.md.*other hosts require local verification/i, 'SKILL.md must link the host-specific install record and require local verification elsewhere');
-assert.match(skill, /desktop acceptance remains pending|desktop acceptance.*still pending/i, 'SKILL.md must distinguish configured source from desktop acceptance');
+assert.match(skill, /host-specific desktop evidence is in.*desktop acceptance record/i, 'SKILL.md must link tested host-specific desktop evidence');
 assert.doesNotMatch(skill, /ACL file lock|blocks the intended UI check/i, 'SKILL.md must not preserve the obsolete UI blocker claim');
 assert.doesNotMatch(skill, /node \.\\scripts\\native-install\.mjs install/i, 'SKILL.md must not present the old shared-root installer as the setup path');
 assert.match(readme, /formal native DeepSeek route.*native_deepseek.*provider/i, 'README must present the isolated role/provider as the formal route');
 assert.match(readme, /native Luna.*normal provider.*live model catalog/i, 'README must state that Sol and Luna keep their normal provider/catalog');
 assert.match(readme, /docs\/native-isolated-install\.md/, 'README must link the isolated installer guide');
-assert.match(readme, /desktop acceptance remains pending/i, 'README must distinguish prepared/configured state from desktop acceptance');
+assert.match(readme, /dated desktop record lists host-specific observed behavior/i, 'README must point to dated desktop observations');
 assert.doesNotMatch(readme, /formal DeepSeek path uses a shared `openai` provider/i, 'README must not present the shared-root path as formal');
 assert.doesNotMatch(readme, /Native gateway \(current path\)|Do not pass `agent_type`|ACL file lock.*blocks the intended UI check/i, 'README must not retain obsolete native route or UI blocker claims');
 assert.match(pluginDoc, /formal native DeepSeek path.*isolated.*native_deepseek/i, 'PLUGIN.md must describe the isolated route as formal');
