@@ -84,11 +84,24 @@
     "notification_channel": "real_pre_tool_use_developer_context",
     "acceptance_record": "native-live-route-hook-acceptance-2026-10-18.md"
   },
+  "real_multichat_acceptance": {
+    "acceptance_record": "native-real-multichat-acceptance-2026-10-18.md",
+    "distinct_human_parent_chats": 2,
+    "native_luna_children": 2,
+    "same_workspace_competing_writer_denied": true,
+    "different_workspace_leases_coexisted": true,
+    "concurrent_model_or_file_write_overlap_measured": false,
+    "cross_parent_child_visibility_denied": true,
+    "cross_parent_finish_denied": true,
+    "each_child_file_write_verified": true,
+    "deepseek_child_dispatched": false,
+    "dsh_session_used": false
+  },
+  "sol_usage_window_record": "native-desktop-usage-window-2026-10-18.md",
   "pending_acceptance": [
     "new_child_entry_discovery",
     "historical_message_clickability",
-    "full_cold_start_recovery",
-    "multi_chat_desktop_isolation"
+    "full_cold_start_recovery"
   ],
   "desktop_acceptance": false
 }

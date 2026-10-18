@@ -10,4 +10,8 @@ rollout 记录的模型是 `deepseek/deepseek-flash`，fork 策略为 `none`。r
 
 hooks 通知通道另有一次真实主会话验收，见[实时路由通知记录](native-live-route-hook-acceptance-2026-10-18.md)。该观察只覆盖当前主聊天收到的四条真实通知，不证明多聊天隔离或完整桌面验收。
 
-仍待验收：新建子代理入口的及时发现、全部历史记录可点击、完整冷启动恢复及多主聊天隔离。整体目标未完成。本记录不证明故障矩阵已通过，也不将此前观察过的面板更新问题描述为已修复。
+两个真实主聊天之间的原生 Luna workspace lease 与 child ownership 验收见[多聊天验收记录](native-real-multichat-acceptance-2026-10-18.md)。它证明不同 workspace 的租约可共存及跨 parent 隔离；没有测量并行模型请求或文件写入的墙钟重叠，也不覆盖 DeepSeek 双聊天执行。
+
+Sol 主会话在另一指定 rollout 时间窗的 usage 事件统计见[用量窗口记录](native-desktop-usage-window-2026-10-18.md)，与 DeepSeek gateway 统计分开。
+
+仍待验收：新建子代理入口的及时发现、全部历史记录可点击及完整冷启动恢复。整体目标未完成。本记录不证明故障矩阵已通过，也不将此前观察过的面板更新问题描述为已修复。

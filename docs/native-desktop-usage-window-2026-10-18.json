@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "status": "audited_window",
+  "scope": "one_parent_sol_rollout_usage_event_interval",
+  "model": "gpt-6.1-sol",
+  "window_start": "2026-10-18T08:06:37.000Z",
+  "window_end": "2026-10-18T08:07:46.999Z",
+  "usage_events": 14,
+  "unique_total_token_usage_snapshots": 13,
+  "duplicate_snapshots": 1,
+  "duplicate_snapshot_counters_match": true,
+  "sum_of_unique_snapshots_last_token_usage": {
+    "input_tokens": 830765,
+    "cached_input_tokens": 816640,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 1990,
+    "reasoning_output_tokens": 405,
+    "total_tokens": 832755
+  },
+  "first_to_last_total_counter_delta": {
+    "input_tokens": 771929,
+    "cached_input_tokens": 758656,
+    "output_tokens": 1652,
+    "reasoning_output_tokens": 405,
+    "total_tokens": 773581,
+    "pre_first_event_baseline_available": false
+  },
+  "exact_single_task_usage": false,
+  "whole_goal_usage": false,
+  "codex_quota_percentage": null,
+  "deepseek_gateway_usage_included": false
+}

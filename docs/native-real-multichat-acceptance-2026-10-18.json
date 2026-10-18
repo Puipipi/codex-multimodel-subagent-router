@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "status": "partial",
+  "scope": "two_real_parent_chats_native_luna_ownership_and_workspace_leases",
+  "overall_goal_complete": false,
+  "participants": {
+    "real_parent_chat_count": 2,
+    "anonymized_labels": ["A", "B"],
+    "child_count": 2,
+    "child_executor": "native_luna",
+    "child_model": "gpt-6-luna",
+    "fork_turns": "none",
+    "deepseek_child_dispatched": false,
+    "dsh_session_used": false
+  },
+  "workspace_lease_observations": {
+    "same_workspace_competition_attempted": true,
+    "second_parent_same_workspace_reserve_exit_code": 1,
+    "same_workspace_rejection": "workspace_already_reserved",
+    "first_parent_lease_remained_active": true,
+    "separate_workspace_second_parent_reserve_bind_exit_code": 0,
+    "both_separate_workspace_leases_observed_active": true,
+    "model_request_or_file_write_wall_clock_overlap_measured": false,
+    "both_leases_finished_and_released": true
+  },
+  "ownership_observations": {
+    "each_parent_saw_own_child": true,
+    "foreign_child_hidden_from_each_parent": true,
+    "foreign_finish_rejected_by_native_cli": true,
+    "native_cli_foreign_finish_exit_code": 1,
+    "wrapper_exit_code_is_not_used_as_rejection_result": true,
+    "foreign_finish_attempt_left_owner_task_record_and_lease_unchanged": true,
+    "foreign_finish_attempt_owner_task_record_status": "running",
+    "foreign_finish_attempt_owner_lease_active": true,
+    "foreign_finish_attempt_owner_child_execution_completed": true,
+    "each_team_list_filtered_to_own_children": true,
+    "archived_test_parent_has_no_active_child": true
+  },
+  "session_route_isolation": {
+    "parent_A": {
+      "source": "session_override",
+      "executor": "luna"
+    },
+    "parent_B": {
+      "source": "schedule",
+      "phase": "valley",
+      "executor": "deepseek",
+      "route_read_only": true,
+      "deepseek_child_dispatched": false,
+      "model_changed": false
+    },
+    "session_preferences_isolated": true
+  },
+  "file_write_observations": [
+    {
+      "parent_label": "A",
+      "utf8_no_bom": true,
+      "line_feed_terminated": true,
+      "bytes": 40,
+      "parent_exact_readback": true,
+      "sha256": "965bd86e96e06e32c9d687c06debbb1adebb129bdf8a37a893451fa7bf66a10b"
+    },
+    {
+      "parent_label": "B",
+      "utf8_no_bom": true,
+      "line_feed_terminated": true,
+      "bytes": 40,
+      "parent_exact_readback": true,
+      "sha256": "23fa616d545575d14725e10227203586db2ad5d7b3cbd0a93c09c393e16b1a6f"
+    }
+  ],
+  "evidence_correction": {
+    "initial_child_self_description_used_as_identity_proof": false,
+    "verified_identity_source": "parent_native_subagent_activity_child_thread_association",
+    "single_original_child_continued_without_replacement_spawn": true,
+    "platform_bug_claimed_fixed": false
+  },
+  "pending_acceptance": [
+    "full_cold_start_recovery",
+    "historical_message_clickability",
+    "failure_state_ui",
+    "public_internet_disconnect"
+  ],
+  "probe_not_observed": [
+    "deepseek_children_across_two_real_parent_chats",
+    "overlapping_model_or_file_writes"
+  ]
+}
