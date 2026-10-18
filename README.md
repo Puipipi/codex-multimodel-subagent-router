@@ -6,7 +6,7 @@ This repository contains one routing skill and an optional Codex plugin. Sol sta
 
 The standalone root `SKILL.md` is the canonical routing policy. The optional plugin adds the native gateway helpers, a guarded legacy DSH MCP wrapper, real DSH event access, and local lifecycle hooks; it does not add a second scheduler, a second DeepSeek client, another agent loop, or any bundled skill. Install and enable exactly one routing skill: the root standalone scheduler.
 
-The optional API panel adds user-configured OpenAI-compatible child profiles. Profiles are immutable; editing creates a new profile ID while existing children keep their original binding. Credentials may use the official DeepSeek account automatically or manual environment/file references, with no fallback to another account or provider. A single API profile is fixed and does not consult the clock; an explicit scheduled plan can assign separate API/Luna/DeepSeek choices to peak and valley. Saving JSON is separate from the explicit Apply action, and a newly applied role requires a full Codex restart. Version 0.11.0 is a candidate: generic API runtime installation and desktop UI acceptance remain pending. First-version API children disable Codex built-in web search.
+The optional API panel adds user-configured OpenAI-compatible child profiles. Profiles are immutable; editing creates a new profile ID while existing children keep their original binding. Credentials may use the official DeepSeek account automatically or manual environment/file references, with no fallback to another account or provider. A single API profile is fixed and does not consult the clock; an explicit scheduled plan can assign separate API/Luna/DeepSeek choices to peak and valley. Saving JSON is separate from the explicit Apply action, and a newly applied role requires a full Codex restart. Version 0.11.1 fixes the Windows MSIX default API-root and settings-file binding; formal Apply and desktop UI acceptance remain pending. First-version API children disable Codex built-in web search.
 
 ## Schedule
 
@@ -172,6 +172,7 @@ node .\tests\native-api-artifacts.test.mjs
 node .\tests\native-api-install.test.mjs
 node .\tests\native-api-lifecycle.test.mjs
 node .\tests\native-api-origin.test.mjs
+node .\tests\native-api-manager.test.mjs
 node .\tests\native-install.test.mjs
 node .\tests\native-manager.test.mjs
 node .\tests\native-autostart.test.mjs

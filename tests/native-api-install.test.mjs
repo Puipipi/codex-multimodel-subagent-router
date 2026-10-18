@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { realpathSync, statSync } from "node:fs";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApiProfile, readRouterSettingsSnapshot, saveRouterSettings } from "../scripts/native-api-settings.mjs";
+import { createApiProfile, defaultRouterSettingsPath, readRouterSettingsSnapshot, saveRouterSettings } from "../scripts/native-api-settings.mjs";
 import {
   activate,
   inspectNativeApiDispatchState,
@@ -113,7 +114,118 @@ try {
   assert.match(preparedJournal.gateway.taskPlan.launcher.content, /--settings/);
   assert.match(preparedJournal.gateway.taskPlan.launcher.content, new RegExp(paths.settings.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   checks += 1;
+  equal(preparedJournal.paths.settingsPath, paths.settings, "custom API settings path stays unchanged in the journal");
   equal((await readFile(path.join(codexHome, "config.toml"), "utf8")), priorConfig, "prepare does not change config");
+  if (process.platform === "win32") {
+    const msixLocal = path.join(root, "AppData", "Local");
+    const canonicalApiDir = path.join(msixLocal, "Packages", "OpenAI.Codex_2p2nqsd0c76g0", "LocalCache", "Local", "sol-luna-deepseek-router", "native-api");
+    const nominalApiDir = path.join(msixLocal, "sol-luna-deepseek-router", "native-api");
+    const canonicalSettingsPath = path.join(canonicalApiDir, "router.json");
+    const nominalSettingsPath = defaultRouterSettingsPath({ LOCALAPPDATA: msixLocal });
+    const msixSettings = { ...settings, profiles: { [profileA.profileId]: profileA }, fixedExecutor: profileA.profileId };
+    await mkdir(canonicalApiDir, { recursive: true });
+    await mkdir(path.dirname(nominalApiDir), { recursive: true });
+    await symlink(canonicalApiDir, nominalApiDir, "junction");
+    await saveRouterSettings(nominalSettingsPath, msixSettings);
+    const revisionBefore = await readRouterSettingsSnapshot(canonicalSettingsPath);
+    const msixJournalPath = nativeApiPaths(canonicalApiDir).journal(profileA.profileId);
+    await prepare({
+      profileId: profileA.profileId,
+      settingsPath: nominalSettingsPath,
+      apiDir: canonicalApiDir,
+      codexHome: path.join(root, "msix-codex-home"),
+      versionDir: path.join(root, "runtime"),
+      journalPath: msixJournalPath,
+      gatewayScriptPath: gatewayScript,
+    }, {
+      ...dependencies,
+      taskAdapter: fakeTaskAdapter(),
+      env: { LOCALAPPDATA: msixLocal },
+      defaultNativeApiDir: () => canonicalApiDir,
+    });
+    const msixJournal = JSON.parse(await readFile(msixJournalPath, "utf8"));
+    equal(msixJournal.paths.settingsPath, canonicalSettingsPath,
+      "a confirmed default MSIX alias binds the canonical settings path in the journal");
+    ok(msixJournal.gateway.taskPlan.launcher.content.includes(canonicalSettingsPath),
+      "the API Task launcher uses the canonical settings path");
+    equal(msixJournal.gateway.taskPlan.launcher.content.includes(nominalSettingsPath), false,
+      "the API Task launcher does not retain the nominal alias path");
+    equal((await readRouterSettingsSnapshot(nominalSettingsPath)).sha256, revisionBefore.sha256,
+      "binding the canonical Task settings path leaves the shared settings revision unchanged");
+
+    async function rejectUnverifiedBinding(label, overrides, expectedError) {
+      const fixtureRoot = path.join(root, `msix-negative-${label}`);
+      const fixtureLocal = path.join(fixtureRoot, "AppData", "Local");
+      const fixtureCanonicalApiDir = path.join(fixtureLocal, "Packages", "OpenAI.Codex_2p2nqsd0c76g0", "LocalCache", "Local", "sol-luna-deepseek-router", "native-api");
+      const fixtureNominalApiDir = path.join(fixtureLocal, "sol-luna-deepseek-router", "native-api");
+      const fixtureNominalSettings = defaultRouterSettingsPath({ LOCALAPPDATA: fixtureLocal });
+      const fixtureCanonicalSettings = path.join(fixtureCanonicalApiDir, "router.json");
+      const fixtureSettings = { ...settings, profiles: { [profileA.profileId]: profileA }, fixedExecutor: profileA.profileId };
+      await mkdir(fixtureCanonicalApiDir, { recursive: true });
+      await mkdir(path.dirname(fixtureNominalApiDir), { recursive: true });
+      await symlink(fixtureCanonicalApiDir, fixtureNominalApiDir, "junction");
+      await saveRouterSettings(fixtureNominalSettings, fixtureSettings);
+
+      const fixturePaths = nativeApiPaths(fixtureCanonicalApiDir);
+      const fixtureCodexHome = path.join(fixtureRoot, "codex-home");
+      const fixtureJournal = fixturePaths.journal(profileA.profileId);
+      let identityWrites = 0;
+      const fixtureTasks = fakeTaskAdapter();
+      const taskAdapter = {
+        ...fixtureTasks,
+        async status(...args) { return fixtureTasks.status(...args); },
+      };
+      await rejects(() => prepare({
+        profileId: profileA.profileId,
+        settingsPath: fixtureNominalSettings,
+        apiDir: fixtureCanonicalApiDir,
+        codexHome: fixtureCodexHome,
+        versionDir: path.join(root, "runtime"),
+        journalPath: fixtureJournal,
+        gatewayScriptPath: gatewayScript,
+      }, {
+        ...dependencies,
+        env: { LOCALAPPDATA: fixtureLocal },
+        defaultNativeApiDir: () => fixtureCanonicalApiDir,
+        taskAdapter,
+        prepareGatewayIdentity: async (...args) => {
+          identityWrites += 1;
+          return dependencies.prepareGatewayIdentity(...args);
+        },
+        ...overrides({ fixtureNominalSettings, fixtureCanonicalSettings }),
+      }), expectedError, `${label}: unverified default settings binding is rejected`);
+      equal(identityWrites, 0, `${label}: rejection happens before identity creation`);
+      equal(fixtureTasks.registers, 0, `${label}: rejection happens before Task registration`);
+      await rejectMissing(fixtureJournal, `${label}: rejection happens before journal creation`);
+      await rejectMissing(fixturePaths.service.identity, `${label}: rejection happens before service identity creation`);
+      await rejectMissing(path.join(fixturePaths.service.dir, "api-task.vbs"),
+        `${label}: rejection happens before Task launcher creation`);
+      await rejectMissing(fixturePaths.registry, `${label}: rejection happens before registry creation`);
+      await rejectMissing(path.join(fixtureCodexHome, "agents", `native_api_${profileA.profileId}.toml`),
+        `${label}: rejection happens before role creation`);
+    }
+
+    await rejectUnverifiedBinding("realpath-mismatch", ({ fixtureNominalSettings }) => ({
+      realpathSync: (file) => file === fixtureNominalSettings
+        ? path.join(root, "unrelated-router.json")
+        : realpathSync.native(file),
+    }), /does not identify the canonical settings file/);
+
+    await rejectUnverifiedBinding("file-id-mismatch", ({ fixtureNominalSettings }) => ({
+      statSync: (file, options) => {
+        const info = statSync(file, options);
+        if (file !== fixtureNominalSettings) return info;
+        return { isFile: () => info.isFile(), dev: info.dev, ino: info.ino + 1n };
+      },
+    }), /does not identify the canonical settings file/);
+
+    await rejectUnverifiedBinding("revision-mismatch", ({ fixtureCanonicalSettings }) => ({
+      readRouterSettingsSnapshot: async (file) => {
+        const snapshot = await readRouterSettingsSnapshot(file);
+        return file === fixtureCanonicalSettings ? { ...snapshot, sha256: "0".repeat(64) } : snapshot;
+      },
+    }), /revision changed while binding the canonical file/);
+  }
   await rejects(() => prepare({
     profileId: profileA.profileId,
     settingsPath: paths.settings,

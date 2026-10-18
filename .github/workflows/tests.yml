@@ -76,6 +76,7 @@ jobs:
             'native-api-routing',
             'native-api-protocol',
             'native-api-install',
+            'native-api-manager',
             'native-api-lifecycle',
             'native-api-origin',
             'normalize-cargo-workspace-lock'

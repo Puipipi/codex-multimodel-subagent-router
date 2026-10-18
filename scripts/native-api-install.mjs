@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -34,7 +35,7 @@ import {
 } from "./native-gateway-task.mjs";
 import { gatewaySourceEntry, stageGatewaySource, verifyGatewaySource } from "./native-gateway-source.mjs";
 import { verifyRuntimeVersion } from "./native-runtime.mjs";
-import { readRouterSettingsSnapshot, resolveApiCredential, validateRouterSettings } from "./native-api-settings.mjs";
+import { defaultRouterSettingsPath, readRouterSettingsSnapshot, resolveApiCredential, validateRouterSettings } from "./native-api-settings.mjs";
 import { withFileLock } from "./plugin-state.mjs";
 
 const JOURNAL_VERSION = 1;
@@ -290,6 +291,48 @@ function isOwnedLauncher(bytes, marker) {
   return bytes.toString("utf16le", 2).startsWith(`' ${marker}\r\n`);
 }
 
+function sameAbsolutePath(left, right) {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+async function canonicalDefaultTaskSettingsPath({ apiDir, settingsPath, settingsSnapshot, dependencies }) {
+  const env = dependencies.env || process.env;
+  const getDefaultApiDir = dependencies.defaultNativeApiDir || defaultNativeApiDir;
+  const getDefaultSettingsPath = dependencies.defaultRouterSettingsPath || defaultRouterSettingsPath;
+  if (!sameAbsolutePath(apiDir, getDefaultApiDir(env))
+      || !sameAbsolutePath(settingsPath, getDefaultSettingsPath(env))) return settingsPath;
+
+  const canonicalPath = path.join(apiDir, "router.json");
+  const resolveNative = dependencies.realpathSync || realpathSync.native;
+  const statNative = dependencies.statSync || statSync;
+  let nominalRealPath;
+  let canonicalRealPath;
+  let nominalFile;
+  let canonicalFile;
+  try {
+    nominalRealPath = resolveNative(settingsPath);
+    canonicalRealPath = resolveNative(canonicalPath);
+    nominalFile = statNative(settingsPath, { bigint: true });
+    canonicalFile = statNative(canonicalPath, { bigint: true });
+  } catch {
+    throw new Error("default API router settings alias could not be verified against its canonical file");
+  }
+  if (!sameAbsolutePath(nominalRealPath, canonicalRealPath)
+      || !sameAbsolutePath(canonicalRealPath, canonicalPath)
+      || !nominalFile.isFile() || !canonicalFile.isFile()
+      || nominalFile.dev !== canonicalFile.dev || nominalFile.ino === 0n || nominalFile.ino !== canonicalFile.ino) {
+    throw new Error("default API router settings alias does not identify the canonical settings file");
+  }
+  const readSnapshot = dependencies.readRouterSettingsSnapshot || readRouterSettingsSnapshot;
+  const canonicalSnapshot = await readSnapshot(canonicalPath);
+  if (!settingsSnapshot.sha256 || canonicalSnapshot.sha256 !== settingsSnapshot.sha256) {
+    throw new Error("default API router settings revision changed while binding the canonical file");
+  }
+  return canonicalPath;
+}
+
 async function restoreLauncherIfNext(launcher) {
   const current = await readRegularOrAbsent(launcher.path, "native API task launcher");
   if (!sameBytes(current, launcher.next)) throw new Error("native API task launcher changed after activation; preserving the later change");
@@ -312,12 +355,20 @@ export async function prepare(options = {}, dependencies = {}) {
   const gatewayScriptPath = options.gatewayScriptPath ? assertAbsolute("gatewayScriptPath", options.gatewayScriptPath) : undefined;
   if (Boolean(pluginRoot) === Boolean(gatewayScriptPath)) throw new Error("provide exactly one of pluginRoot or gatewayScriptPath explicitly");
 
-  const { settings } = await readRouterSettingsSnapshot(settingsPath);
+  const readSnapshot = dependencies.readRouterSettingsSnapshot || readRouterSettingsSnapshot;
+  const settingsSnapshot = await readSnapshot(settingsPath);
+  const { settings } = settingsSnapshot;
   const profileId = options.profileId;
   const profile = settings.profiles[profileId];
   if (!profile) throw new Error("the requested API profile is not present in router settings");
   if (profile.profileId !== profileId) throw new Error("the requested API profile id does not match its definition");
   if (dependencies.requireCredential !== false) await checkCredential(profile);
+  const taskSettingsPath = await canonicalDefaultTaskSettingsPath({
+    apiDir,
+    settingsPath,
+    settingsSnapshot,
+    dependencies,
+  });
 
   await verifyRuntime(versionDir);
   await mkdir(paths.root, { recursive: true, mode: 0o700 });
@@ -374,7 +425,7 @@ export async function prepare(options = {}, dependencies = {}) {
   const nextIds = [...existingIds, profileId];
   const nextConfig = composeApiConfig(priorConfig, { profileIds: nextIds, gatewayBaseUrl });
   const nextRegistry = registryNext(registrySnapshot.value, profileId, artifacts);
-  const taskPlan = gatewayTaskPlan({ paths: paths.service, gatewayScriptPath: gatewayScript, service: "api", settingsPath });
+  const taskPlan = gatewayTaskPlan({ paths: paths.service, gatewayScriptPath: gatewayScript, service: "api", settingsPath: taskSettingsPath });
   const taskSnapshot = await snapshotGatewayTask(taskPlan, tasks);
   const launcherNext = apiTaskLauncherBytes(taskPlan);
   const launcherCurrent = await readRegularOrAbsent(taskPlan.launcher.path, "native API task launcher");
@@ -399,7 +450,7 @@ export async function prepare(options = {}, dependencies = {}) {
       apiDir,
       codexHome,
       versionDir,
-      settingsPath,
+      settingsPath: taskSettingsPath,
       journalPath,
       gatewayDir: paths.service.dir,
       gatewayScript,

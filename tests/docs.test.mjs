@@ -25,7 +25,7 @@ assert.doesNotMatch(marketplace.plugins[0].source.path, /^(?:[A-Za-z]:[\\/]|\\\\
 assert.equal(marketplace.plugins[0].policy.installation, 'AVAILABLE', 'the marketplace installation policy is explicit');
 assert.equal(marketplace.plugins[0].policy.authentication, 'ON_INSTALL', 'the marketplace auth policy is explicit');
 assert.equal(marketplace.plugins[0].category, 'Developer Tools', 'the marketplace category is explicit');
-assert.equal(pluginManifest.version, '0.11.0', 'the plugin manifest is the 0.11.0 candidate');
+assert.equal(pluginManifest.version, '0.11.1', 'the plugin manifest is the 0.11.1 candidate');
 assert.match(readme, /^# Sol 主控 · 多模型峰谷子代理$/m, 'README uses the unified display name');
 assert.match(skill, /^# Sol 主控 · 多模型峰谷子代理$/m, 'SKILL.md uses the unified display name');
 assert.match(pluginDoc, /^# Sol 主控 · 多模型峰谷子代理$/m, 'PLUGIN.md uses the unified display name');
@@ -143,7 +143,7 @@ const testScripts = [
   'plugin-router-settings.test.mjs', 'plugin-mcp-env.test.mjs',
   'native-api-settings.test.mjs', 'native-api-routing.test.mjs', 'native-api-protocol.test.mjs',
   'native-api-artifacts.test.mjs', 'native-api-install.test.mjs', 'native-api-lifecycle.test.mjs',
-  'native-api-origin.test.mjs',
+  'native-api-origin.test.mjs', 'native-api-manager.test.mjs',
   'patch-backend-windows.test.mjs',
 ];
 for (const script of testScripts) assert.match(readme, new RegExp(script.replaceAll('.', '\\.')), `README must list ${script}`);

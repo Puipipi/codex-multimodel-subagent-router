@@ -70,6 +70,10 @@ For native subagents, `task_name` must use only lowercase ASCII letters,
 digits, and underscores. Do not use hyphens in `task_name`; profile IDs,
 models, and aliases are separate fields and may retain their own valid syntax.
 
+For a follow-up to the same child, reuse its original workspace and task nonce;
+do not create a new nonce or reassign the child. This applies to native Luna
+and DeepSeek and does not change their model-selection policies.
+
 ## Shared native writer and child-message contract
 
 This contract applies equally to native Luna and native DeepSeek write tasks. Reserve before `spawn_agent`, bind the real child immediately after spawn, and release only at explicit finish/terminal. Ownership comes from trusted `CODEX_THREAD_ID`; `--parent` is rejected as a forgery path.

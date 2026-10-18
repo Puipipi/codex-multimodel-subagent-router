@@ -1,4 +1,5 @@
 import os from "node:os";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -17,9 +18,49 @@ import {
   statusOwnedGatewayTask,
 } from "./native-gateway-task.mjs";
 
-export function defaultNativeApiDir(env = process.env) {
-  const base = env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-  return path.join(base, "sol-luna-deepseek-router", "native-api");
+const CODEX_PACKAGE_FAMILY = "OpenAI.Codex_2p2nqsd0c76g0";
+const normalizedPath = (value, platform) => platform === "win32" ? value.toLowerCase() : value;
+
+function regularDirectoryTree(target, pathApi, fsApi) {
+  const root = pathApi.parse(target).root;
+  const relative = pathApi.relative(root, target);
+  let current = root;
+  for (const segment of relative.split(pathApi.sep).filter(Boolean)) {
+    current = pathApi.join(current, segment);
+    let info;
+    try { info = fsApi.lstatSync(current); } catch { return false; }
+    if (!info.isDirectory() || info.isSymbolicLink()) return false;
+  }
+  return true;
+}
+
+export function defaultNativeApiDir(env = process.env, dependencies = {}) {
+  const platform = dependencies.platform || process.platform;
+  const pathApi = dependencies.pathApi || path;
+  const fsApi = dependencies.fsApi || { lstatSync, realpathSync: realpathSync.native };
+  const base = env.LOCALAPPDATA || pathApi.join(os.homedir(), "AppData", "Local");
+  const nominal = pathApi.join(base, "sol-luna-deepseek-router", "native-api");
+  if (platform !== "win32") return nominal;
+
+  // Windows MSIX apps can expose the user's LocalAppData name as an alias for
+  // the package's private LocalCache\\Local directory. Normalize only the
+  // exact Codex package layout, and only when both directory trees are regular.
+  try {
+    const packageLocal = pathApi.join(base, "Packages", CODEX_PACKAGE_FAMILY, "LocalCache", "Local");
+    const canonical = pathApi.join(packageLocal, "sol-luna-deepseek-router", "native-api");
+    if (pathApi.basename(base).toLowerCase() !== "local"
+        || pathApi.basename(pathApi.dirname(base)).toLowerCase() !== "appdata"
+        || !regularDirectoryTree(nominal, pathApi, fsApi)
+        || !regularDirectoryTree(canonical, pathApi, fsApi)) return nominal;
+    // Match native-gateway-source's fs/promises.realpath semantics for MSIX aliases.
+    const actual = fsApi.realpathSync(nominal);
+    const expected = fsApi.realpathSync(canonical);
+    if (normalizedPath(actual, platform) !== normalizedPath(expected, platform)
+        || normalizedPath(expected, platform) !== normalizedPath(canonical, platform)) return nominal;
+    return expected;
+  } catch {
+    return nominal;
+  }
 }
 
 export function apiServicePaths(apiDir = defaultNativeApiDir()) {
