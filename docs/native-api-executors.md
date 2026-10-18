@@ -296,8 +296,9 @@ until the run completes. This is build evidence, not a local installation,
 restart, or desktop API-role acceptance. No new runtime was installed in this
 worktree.
 
-The two corrected cold-resume tests box their futures and retain the
-`Feature` result `.expect`; production code is unchanged. The eight Rust
+The corrected patch boxes the futures in the two cold-resume tests and
+handles the retry-role `Feature` result with `.expect`; production code is
+unchanged. The eight Rust
 native API tests, guard, and assertions remain in the patch.
 
 Mocked/free tests cover artifacts, install/rollback, Task namespace, health,
