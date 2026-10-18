@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { realpathSync, statSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createApiProfile, defaultRouterSettingsPath, readRouterSettingsSnapshot, saveRouterSettings } from "../scripts/native-api-settings.mjs";
@@ -54,7 +54,7 @@ const definitionB = {
   contextWindow: 8_192,
 };
 
-const root = await mkdtemp(path.join(os.tmpdir(), "native-api-install-"));
+const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "native-api-install-")));
 try {
   const apiDir = path.join(root, "native-api");
   const codexHome = path.join(root, "codex-home");
