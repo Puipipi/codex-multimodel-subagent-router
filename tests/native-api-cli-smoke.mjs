@@ -34,7 +34,7 @@ function option(name) {
 
 function usage() {
   return [
-    "Usage: node tests/native-api-cli-smoke.mjs --binary PATH [--sha256 HASH]",
+    "Usage: node tests/native-api-cli-smoke.mjs --binary PATH [--sha256 HASH] [--none-profile]",
     "",
     "Runs an opt-in loopback-only generic API adapter smoke. It requires a",
     "Codex CLI path; the expected SHA-256 is optional but recommended. It never",
@@ -53,6 +53,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 
 const binary = option("binary") || process.env.SOL_LUNA_NATIVE_API_SMOKE_BINARY;
 const expectedHash = option("sha256") || process.env.SOL_LUNA_NATIVE_API_SMOKE_SHA256;
+const noneProfile = process.argv.includes("--none-profile");
 if (!binary) throw new Error(`--binary is required (or set SOL_LUNA_NATIVE_API_SMOKE_BINARY)\n\n${usage()}`);
 const binaryPath = path.resolve(binary);
 const binaryHash = createHash("sha256").update(await fs.readFile(binaryPath)).digest("hex");
@@ -169,7 +170,9 @@ try {
       protocol: "chat_completions",
       baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
       model: MODEL,
-      reasoning: { supported: ["low", "medium", "high"], default: "low", parameter: "reasoning_effort" },
+      reasoning: noneProfile
+        ? { supported: ["none"], default: "none", parameter: "none" }
+        : { supported: ["low", "medium", "high"], default: "low", parameter: "reasoning_effort" },
       credential: { type: "env", name: "OPENAI_API_KEY" },
     } : null,
     resolveAuth: async () => ({ headers: { authorization: "Bearer loopback-smoke-only" } }),
@@ -180,10 +183,10 @@ try {
   gateway.server.on("request", (req) => gatewayHosts.add(req.headers.host));
   const { port, baseUrl } = await gateway.start(0);
   const providerBase = `${baseUrl}/profiles/${PROFILE_ID}/v1`;
-  await fs.writeFile(path.join(codexHome, "config.toml"), [
+  const configLines = [
     `model = "${MODEL}"`,
     'model_provider = "local_smoke"',
-    'model_reasoning_effort = "low"',
+    ...(noneProfile ? ['model_reasoning_effort = "none"', 'model_reasoning_summary = "none"'] : ['model_reasoning_effort = "low"']),
     'approval_policy = "never"',
     'sandbox_mode = "workspace-write"',
     'web_search = "disabled"',
@@ -195,7 +198,8 @@ try {
     'env_key = "OPENAI_API_KEY"',
     'supports_websockets = false',
     "",
-  ].join("\n"), "utf8");
+  ];
+  await fs.writeFile(path.join(codexHome, "config.toml"), configLines.join("\n"), "utf8");
 
   const safeEnv = {};
   for (const key of ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA"]) {
@@ -224,6 +228,13 @@ try {
   ]).finally(() => clearTimeout(timeout));
   assert.equal(exitCode, 0, `Codex CLI exited ${exitCode}; stderr tail: ${stderr.slice(-1500)}`);
   assert.equal(calls.length, 2, `expected the tool request and one continuation; got ${calls.length}`);
+  const firstReasoning = calls[0].reasoning;
+  if (noneProfile) {
+    assert.ok(firstReasoning === undefined
+      || (firstReasoning && typeof firstReasoning === "object"
+        && !Array.isArray(firstReasoning) && Object.keys(firstReasoning).length === 0),
+    `none-profile CLI must send an empty/omitted reasoning object, got ${JSON.stringify(firstReasoning)}`);
+  }
   assert.equal((await fs.readFile(path.join(workspace, "smoke-output.txt"), "utf8")).trim(), "native-api-cli-proof");
   assert.equal([...requestedHosts].every((host) => /^(127\.0\.0\.1|localhost):\d+$/.test(host)), true, "upstream host must be loopback");
   assert.equal([...gatewayHosts].every((host) => /^(127\.0\.0\.1|localhost):\d+$/.test(host)), true, "gateway host must be loopback");
@@ -234,6 +245,8 @@ try {
     gatewayPort: port,
     cliExitCode: exitCode,
     chatRequests: calls.length,
+    noneProfile,
+    firstReasoning: firstReasoning ?? null,
     toolResultReturnedToUpstream: calls.length === 2,
     workspaceFileCreatedByCliTool: true,
     stdoutTail: stdout.slice(-600),

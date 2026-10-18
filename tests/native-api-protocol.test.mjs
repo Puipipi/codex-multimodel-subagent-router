@@ -99,6 +99,44 @@ test("ignores Codex's optional encrypted-reasoning include, but rejects other no
   assert.throws(() => responsesRequestToChat({ model: "mimo-model", input: "x", include: ["web_search_call.action.sources"] }, profile), /include/);
 });
 
+test("a none-parameter profile accepts Codex's empty reasoning object but rejects meaningful reasoning", () => {
+  const noReasoningProfile = {
+    ...profile,
+    reasoning: { supported: ["none"], default: "none", parameter: "none" },
+  };
+  const empty = responsesRequestToChat({
+    model: "mimo-model",
+    input: "x",
+    reasoning: {},
+  }, noReasoningProfile);
+  assert.equal(empty.body.reasoning_effort, undefined);
+  assert.equal(empty.body.reasoning, undefined);
+
+  const nullValue = responsesRequestToChat({
+    model: "mimo-model",
+    input: "x",
+    reasoning: null,
+  }, noReasoningProfile);
+  assert.equal(nullValue.body.reasoning_effort, undefined);
+  const explicitNone = responsesRequestToChat({
+    model: "mimo-model",
+    input: "x",
+    reasoning: { effort: "none" },
+  }, noReasoningProfile);
+  assert.equal(explicitNone.body.reasoning_effort, undefined, "an explicit disabled effort has no Chat reasoning parameter");
+
+  assert.throws(() => responsesRequestToChat({
+    model: "mimo-model",
+    input: "x",
+    reasoning: { effort: "high" },
+  }, noReasoningProfile), /does not accept reasoning/);
+  assert.throws(() => responsesRequestToChat({
+    model: "mimo-model",
+    input: "x",
+    reasoning: { summary: "auto" },
+  }, noReasoningProfile), /does not accept reasoning/);
+});
+
 test("DeepSeek account effort normalization is local to the API adapter", () => {
   const deepseek = {
     ...profile,

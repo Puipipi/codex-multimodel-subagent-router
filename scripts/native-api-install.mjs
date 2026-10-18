@@ -222,6 +222,22 @@ function journalFile(pathname, nextBytes) {
   return { path: pathname, next: Buffer.from(nextBytes) };
 }
 
+function apiTaskLauncherBytes(plan) {
+  if (typeof plan?.launcher?.content !== "string" || !plan.launcher.path) throw new Error("native API task plan has no launcher");
+  return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(plan.launcher.content, "utf16le")]);
+}
+
+function isOwnedLauncher(bytes, marker) {
+  if (bytes === null || bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xfe) return false;
+  return bytes.toString("utf16le", 2).startsWith(`' ${marker}\r\n`);
+}
+
+async function restoreLauncherIfNext(launcher) {
+  const current = await readRegularOrAbsent(launcher.path, "native API task launcher");
+  if (!sameBytes(current, launcher.next)) throw new Error("native API task launcher changed after activation; preserving the later change");
+  await restoreSnapshot(launcher.prior);
+}
+
 export async function prepare(options = {}, dependencies = {}) {
   const apiDir = assertAbsolute("apiDir", options.apiDir || defaultNativeApiDir());
   const paths = nativeApiPaths(apiDir);
@@ -293,6 +309,11 @@ export async function prepare(options = {}, dependencies = {}) {
   const nextRegistry = registryNext(registrySnapshot.value, profileId, artifacts);
   const taskPlan = gatewayTaskPlan({ paths: paths.service, gatewayScriptPath: gatewayScript, service: "api" });
   const taskSnapshot = await snapshotGatewayTask(taskPlan, tasks);
+  const launcherNext = apiTaskLauncherBytes(taskPlan);
+  const launcherCurrent = await readRegularOrAbsent(taskPlan.launcher.path, "native API task launcher");
+  if (launcherCurrent !== null && !sameBytes(launcherCurrent, launcherNext) && !isOwnedLauncher(launcherCurrent, taskPlan.marker)) {
+    throw new Error("an unowned native API task launcher already exists; refusing to overwrite it");
+  }
   const identityBytes = await readRegularOrAbsent(paths.service.identity, "native API gateway identity");
   if (identityBytes === null) throw new Error("native API gateway identity was not persisted");
 
@@ -316,6 +337,11 @@ export async function prepare(options = {}, dependencies = {}) {
       identitySha256: sha256(identityBytes),
       taskPlan,
       taskSnapshot,
+      launcher: {
+        path: taskPlan.launcher.path,
+        prior: { path: taskPlan.launcher.path, exists: launcherCurrent !== null, bytes: launcherCurrent },
+        next: launcherNext,
+      },
     },
     config: {
       path: path.join(codexHome, "config.toml"),
@@ -336,7 +362,7 @@ export async function prepare(options = {}, dependencies = {}) {
         },
       },
     },
-    completed: { files: false, task: false },
+    completed: { launcher: false, files: false, task: false },
   };
   await writeJournal(journalPath, journal);
   return {
@@ -355,6 +381,11 @@ async function assertPrepared(journal, tasks, verifyRuntime, verifySource) {
   const identityBytes = await readRegularOrAbsent(journal.gateway.identityFile, "native API gateway identity");
   if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) {
     throw new Error("native API gateway identity changed since prepare");
+  }
+  if (!journal.gateway.launcher) throw new Error("native API install journal has no launcher snapshot; reinstall the profile");
+  const launcherCurrent = await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher");
+  if (!sameBytes(launcherCurrent, journal.gateway.launcher.prior.bytes)) {
+    throw new Error("native API task launcher changed since prepare");
   }
   for (const item of Object.values(journal.files)) {
     const current = await readRegularOrAbsent(item.path, "managed file");
@@ -393,7 +424,12 @@ export async function activate({ journalPath } = {}, dependencies = {}) {
   const written = [];
   let taskAttempted = false;
   let taskRegistered = false;
+  let launcherAttempted = false;
   try {
+    launcherAttempted = true;
+    await atomicWrite(journal.gateway.launcher.path, journal.gateway.launcher.next);
+    journal.completed.launcher = true;
+    await writeJournal(file, journal);
     for (const [name, item] of Object.entries(journal.files)) {
       await atomicWrite(item.path, item.next);
       written.push(name);
@@ -420,6 +456,13 @@ export async function activate({ journalPath } = {}, dependencies = {}) {
     if (taskAttempted) {
       try { await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks); }
       catch (item) { recoveryErrors.push(item); }
+    }
+    if (launcherAttempted) {
+      try {
+        if (sameBytes(await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher"), journal.gateway.launcher.next)) {
+          await restoreSnapshot(journal.gateway.launcher.prior);
+        }
+      } catch (item) { recoveryErrors.push(item); }
     }
     for (const name of [...written].reverse()) {
       try {
@@ -453,6 +496,12 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
     if (!sameBytes(await readRegularOrAbsent(item.path, "managed file"), item.next)) {
       throw new Error(`native API ${name} changed after activation; refusing rollback`);
     }
+  }
+  if (!journal.completed.launcher || !journal.gateway.launcher) {
+    throw new Error("native API install journal has no activated launcher; reinstall the profile");
+  }
+  if (!sameBytes(await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher"), journal.gateway.launcher.next)) {
+    throw new Error("native API task launcher changed after activation; refusing rollback");
   }
   const currentConfigBytes = await readRegularOrAbsent(journal.config.path, "Codex config");
   const currentConfig = currentConfigBytes === null ? "" : currentConfigBytes.toString("utf8");
@@ -488,6 +537,7 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
   await rm(journal.files.catalog.path, { force: true });
   if (remainingIds.length === 0) {
     await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks);
+    await restoreLauncherIfNext(journal.gateway.launcher);
   }
   journal.phase = "rolled_back";
   journal.completed.files = false;
@@ -527,7 +577,7 @@ export async function inspectNativeApiDispatchState({
   const file = journalPath ? path.resolve(journalPath) : paths.journal(profileId);
   const { journal } = await readJournal(file);
   if (journal.profile.profileId !== profileId) throw new Error("native API install journal belongs to another profile");
-  if (journal.phase !== "active" || !journal.completed.files || !journal.completed.task) {
+  if (journal.phase !== "active" || !journal.completed.launcher || !journal.completed.files || !journal.completed.task) {
     throw new Error("native API profile artifacts are not fully activated");
   }
   const verifyRuntime = dependencies.verifyRuntimeVersion || verifyRuntimeVersion;
@@ -547,6 +597,12 @@ export async function inspectNativeApiDispatchState({
   const identityBytes = await readRegularOrAbsent(journal.gateway.identityFile, "native API gateway identity");
   if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) {
     throw new Error("native API gateway identity changed after activation");
+  }
+  if (!journal.gateway.launcher || !sameBytes(
+    await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher"),
+    journal.gateway.launcher.next,
+  )) {
+    throw new Error("native API task launcher changed after activation");
   }
   const servicePaths = apiServicePaths(journal.paths.apiDir);
   const identity = await readGatewayIdentity(servicePaths);
@@ -635,8 +691,11 @@ export async function discoverCompatibleRuntime({ apiDir = defaultNativeApiDir()
   add(env.SOL_LUNA_NATIVE_API_VERSION_DIR);
   if (env.SOL_LUNA_NATIVE_INSTALL_JOURNAL) {
     try {
-      const legacy = await readJournal(env.SOL_LUNA_NATIVE_INSTALL_JOURNAL);
-      add(legacy.journal.paths?.versionDir);
+      // This may be the DeepSeek installer journal, which has a different
+      // top-level shape than an API install journal. Read only its immutable
+      // runtime locator instead of requiring API-only fields.
+      const legacy = JSON.parse(await readFile(path.resolve(env.SOL_LUNA_NATIVE_INSTALL_JOURNAL), "utf8"));
+      add(legacy?.paths?.versionDir);
     } catch { /* a missing or foreign journal is not a runtime candidate */ }
   }
   const paths = nativeApiPaths(apiDir);
@@ -720,9 +779,13 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
   } catch { credentialAvailable = false; }
 
   let installed = false;
-  if (journal?.phase === "active" && journal.completed?.files && journal.completed?.task) {
+  if (journal?.phase === "active" && journal.completed?.launcher && journal.completed?.files && journal.completed?.task) {
     const roleOk = sameBytes(await readRegularOrAbsent(journal.files.role.path, "managed file"), journal.files.role.next);
     const catalogOk = sameBytes(await readRegularOrAbsent(journal.files.catalog.path, "managed file"), journal.files.catalog.next);
+    const launcherOk = Boolean(journal.gateway?.launcher) && sameBytes(
+      await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher"),
+      journal.gateway.launcher.next,
+    );
     let configOk = false;
     try {
       const identity = await readGatewayIdentity(apiServicePaths(apiDir));
@@ -733,7 +796,7 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
         gatewayBaseUrl: apiGatewayBaseUrl(identity),
       }) === config;
     } catch { configOk = false; }
-    installed = roleOk && catalogOk && configOk;
+    installed = roleOk && catalogOk && launcherOk && configOk;
   }
 
   let gatewayRunning = false;
@@ -802,7 +865,26 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
   for (const profileId of Object.keys(validated.profiles)) {
     const journalPath = paths.journal(profileId);
     const existing = await journalIfPresent(journalPath);
-    if (existing?.phase === "active") { alreadyInstalled.push(profileId); continue; }
+    if (existing?.phase === "active") {
+      if (existing.paths?.versionDir !== runtime.versionDir) {
+        throw new Error(`API profile ${profileId} is active with a different runtime; rollback or reinstall it before counting it as installed`);
+      }
+      try {
+        await inspectNativeApiDispatchState({
+          profileId,
+          apiDir,
+          settingsPath,
+          journalPath,
+          taskAdapter: dependencies.taskAdapter,
+          requireRunning: false,
+          requireCredential: false,
+        }, dependencies);
+      } catch (error) {
+        throw new Error(`API profile ${profileId} is active but incomplete or changed (${error.message}); rollback or reinstall it before counting it as installed`);
+      }
+      alreadyInstalled.push(profileId);
+      continue;
+    }
     if (existing?.phase === "prepared") {
       await activate({ journalPath }, dependencies);
       applied.push(profileId);

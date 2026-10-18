@@ -156,7 +156,15 @@ function mapReasoning(body, profile, chat) {
   const config = profile.reasoning || { supported: [], parameter: "none" };
   const requested = body.reasoning?.effort;
   if (config.parameter === "none") {
-    if (body.reasoning !== undefined) invalid("This profile does not accept reasoning parameters.", "unsupported_parameter");
+    const reasoning = body.reasoning;
+    const empty = reasoning === undefined || reasoning === null
+      || (typeof reasoning === "object" && !Array.isArray(reasoning) && Object.keys(reasoning).length === 0)
+      // Some Codex builds serialize an explicit disabled effort even when the
+      // profile has parameter=none. It has no thinking effect and is accepted;
+      // any other explicit effort, summary, or context remains meaningful.
+      || (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)
+        && Object.keys(reasoning).length === 1 && reasoning.effort === "none");
+    if (!empty) invalid("This profile does not accept reasoning parameters.", "unsupported_parameter");
     return;
   }
   let effort = requested ?? config.default;

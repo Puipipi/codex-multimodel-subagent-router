@@ -194,6 +194,11 @@ try {
     gatewayScriptPath: gatewayScript,
   }, dependencies);
   await activate({ journalPath }, dependencies);
+  const launcherPath = path.join(paths.service.dir, "api-task.vbs");
+  const launcherBytes = await readFile(launcherPath);
+  equal(launcherBytes[0], 0xff, "lifecycle fixture launcher has a BOM");
+  assert.match(launcherBytes.toString("utf16le", 2), /--api-only/);
+  checks += 1;
   await writeFile(apiServiceState(apiDir), `${JSON.stringify({
     version: 1,
     pid: process.pid,
@@ -213,6 +218,15 @@ try {
       requireRunning: true,
     }, dependencies);
     equal(ready.ready, true, "gate accepts activated role/provider/catalog/task/health");
+
+    await writeFile(launcherPath, "tampered");
+    await rejects(() => inspectNativeApiDispatchState({
+      profileId: profile.profileId,
+      apiDir,
+      settingsPath: paths.settings,
+      taskAdapter: tasks,
+    }, dependencies), /launcher changed/);
+    await writeFile(launcherPath, launcherBytes);
 
     const rolePath = path.join(codexHome, "agents", `native_api_${profile.profileId}.toml`);
     const roleBytes = await readFile(rolePath);
@@ -362,6 +376,20 @@ try {
   equal(applied.restartRequired, true, "Apply reports the restart requirement");
   equal(applyTasks.registers, 1, "Apply registers the owned API task");
   equal(applyTasks.starts, 0, "Apply never starts a gateway or model request");
+  const applyJournalPath = applyPaths.journal(applyProfile.profileId);
+  const applyJournalBytes = await readFile(applyJournalPath);
+  const applyJournal = JSON.parse(applyJournalBytes.toString("utf8"));
+  applyJournal.paths.versionDir = path.join(tempRoot, "other-runtime");
+  await writeFile(applyJournalPath, `${JSON.stringify(applyJournal, null, 2)}\n`);
+  await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps),
+    /different runtime|rollback|reinstall/i);
+  await writeFile(applyJournalPath, applyJournalBytes);
+  const applyRolePath = path.join(applyHome, "agents", `native_api_${applyProfile.profileId}.toml`);
+  const applyRoleBytes = await readFile(applyRolePath);
+  await writeFile(applyRolePath, "tampered active role\n");
+  await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps),
+    /incomplete|rollback|reinstall/i);
+  await writeFile(applyRolePath, applyRoleBytes);
   const secondApply = await applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps);
   equal(secondApply.alreadyInstalled.length, 1, "repeated Apply is idempotent");
   equal(applyTasks.registers, 1, "repeated Apply does not duplicate the task");

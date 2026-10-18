@@ -46,6 +46,9 @@ equal(server.cwd, '.', 'the MCP server resolves relative paths from the plugin r
 equal(server.tool_timeout_sec, 86400, 'unbounded waits are not cut off by a short tool timeout');
 ok(server.env_vars.includes('LOCALAPPDATA'), 'the state directory environment is forwarded');
 ok(server.env_vars.includes('PATH'), 'the node/npm lookup environment is forwarded');
+ok(server.env_vars.includes('CODEX_HOME'), 'the Codex home locator is forwarded');
+ok(server.env_vars.includes('SOL_LUNA_NATIVE_INSTALL_JOURNAL'), 'the installed native journal locator is forwarded');
+ok(server.env_vars.includes('SOL_LUNA_NATIVE_API_VERSION_DIR'), 'the staged generic API runtime locator is forwarded');
 doesNotMatch(JSON.stringify(mcp), /(?:api[_-]?key|authorization|bearer|sk-[A-Za-z0-9]{12,})/i, 'the MCP config contains no credential');
 
 function deepEqualArray(actual, expected, message) {

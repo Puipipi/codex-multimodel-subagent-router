@@ -125,6 +125,14 @@ try {
   equal(activatedA.restartNeeded, true, "new role installation requires a full restart");
   equal(tasks.registers, 1, "activation registers one owned API task");
   equal(tasks.starts, 0, "activation does not start an unused API service");
+  const launcherPath = path.join(paths.service.dir, "api-task.vbs");
+  const launcherBytes = await readFile(launcherPath);
+  equal(launcherBytes[0], 0xff, "API launcher starts with the UTF-16LE BOM high byte");
+  equal(launcherBytes[1], 0xfe, "API launcher starts with the UTF-16LE BOM low byte");
+  const launcherText = launcherBytes.toString("utf16le", 2);
+  assert.match(launcherText, /--api-only/);
+  assert.match(launcherText, /sol-luna-native-api-task:v1:/);
+  checks += 3;
   const configA = await readFile(path.join(codexHome, "config.toml"), "utf8");
   assert.match(configA, new RegExp(`\\[model_providers\\.api-native-${profileA.profileId}\\]`));
   assert.match(configA, /\[foreign\]/);
@@ -145,6 +153,30 @@ try {
     taskAdapter: tasks,
   }, dependencies);
   equal(inspected.ready, true, "static dispatch gate accepts complete owned artifacts");
+
+  // A failed activation must restore the existing launcher and role/config.
+  const profileC = createApiProfile({ ...definitionA, model: "exact/model-c" });
+  settings.profiles[profileC.profileId] = profileC;
+  const settingsSnapshot = await readRouterSettingsSnapshot(paths.settings);
+  await saveRouterSettings(paths.settings, settings, { expectedSha256: settingsSnapshot.sha256 });
+  const failingTasks = fakeTaskAdapter();
+  failingTasks.register = async () => { throw new Error("simulated task registration failure"); };
+  const journalC = paths.journal(profileC.profileId);
+  await prepare({
+    profileId: profileC.profileId,
+    settingsPath: paths.settings,
+    apiDir,
+    codexHome,
+    versionDir: path.join(root, "runtime"),
+    journalPath: journalC,
+    gatewayScriptPath: gatewayScript,
+  }, { ...dependencies, taskAdapter: failingTasks });
+  const launcherBeforeFailure = await readFile(launcherPath);
+  const beforeFailure = await readFile(path.join(codexHome, "config.toml"), "utf8");
+  await rejects(() => activate({ journalPath: journalC }, { ...dependencies, taskAdapter: failingTasks }), /simulated task registration failure/);
+  equal(await readFile(path.join(codexHome, "config.toml"), "utf8"), beforeFailure, "failed activation restores config");
+  equal((await readFile(launcherPath)).equals(launcherBeforeFailure), true, "failed activation restores the existing launcher");
+  await rejectMissing(path.join(codexHome, "agents", `native_api_${profileC.profileId}.toml`), "failed activation removes the new role");
 
   const journalB = paths.journal(profileB.profileId);
   await prepare({
@@ -177,29 +209,8 @@ try {
   assert.match(finalConfig, /\[foreign\]/);
   assert.match(finalConfig, /\[model_providers\.deepseek-native\]/);
   equal((await tasks.status()).exists, false, "rolling back the last profile unregisters the owned task");
+  await rejectMissing(launcherPath, "rolling back the last profile removes the owned launcher");
   checks += 2;
-
-  // A failed activation must restore config, role, catalog, registry, and task.
-  const profileC = createApiProfile({ ...definitionA, model: "exact/model-c" });
-  settings.profiles[profileC.profileId] = profileC;
-  const settingsSnapshot = await readRouterSettingsSnapshot(paths.settings);
-  await saveRouterSettings(paths.settings, settings, { expectedSha256: settingsSnapshot.sha256 });
-  const failingTasks = fakeTaskAdapter();
-  failingTasks.register = async () => { throw new Error("simulated task registration failure"); };
-  const journalC = paths.journal(profileC.profileId);
-  await prepare({
-    profileId: profileC.profileId,
-    settingsPath: paths.settings,
-    apiDir,
-    codexHome,
-    versionDir: path.join(root, "runtime"),
-    journalPath: journalC,
-    gatewayScriptPath: gatewayScript,
-  }, { ...dependencies, taskAdapter: failingTasks });
-  const beforeFailure = await readFile(path.join(codexHome, "config.toml"), "utf8");
-  await rejects(() => activate({ journalPath: journalC }, { ...dependencies, taskAdapter: failingTasks }), /simulated task registration failure/);
-  equal(await readFile(path.join(codexHome, "config.toml"), "utf8"), beforeFailure, "failed activation restores config");
-  await rejectMissing(path.join(codexHome, "agents", `native_api_${profileC.profileId}.toml`), "failed activation removes the new role");
 
   const foreignHome = path.join(root, "foreign-home");
   await mkdir(path.join(foreignHome, "agents"), { recursive: true });
