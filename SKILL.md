@@ -110,7 +110,7 @@ The generic OpenAI-compatible API executor backend is described in `docs/native-
 
 官方 DeepSeek API profile（自动账号或手工 env/file）使用官方文档列出的 `none/low/high/max`；官方说明 `none` 会关闭 thinking。`xhigh` 在 API adapter 局部规范为 `high`，有效 `max` 保留；`none` 原样传递，不另造 `off`。非 DeepSeek API 保持其声明的档位，历史 DS 路由行为不变。这里只是官方 wire 规则依据，不代表真实 generic API role 已完成端到端验收。
 
-保持唯一的 canonical skill：`sol-luna-deepseek-router`。未来如需更清晰的产品显示名，可讨论 “Sol Luna DeepSeek Router — Native API”，但不要另建第二个 skill，不要物理删除旧 cache/backup；registry ID 和目录尽量保持，避免出现两个 enabled skills。
+保持唯一的 canonical skill：`sol-luna-deepseek-router`。后续正式打包的可见显示名统一为“Sol 主控 · 多模型峰谷子代理”；不要另建第二个 skill，不要物理删除旧 cache/backup，保持 registry ID 和目录稳定，避免出现两个 enabled skills。
 
 ## Price and calendar sources
 

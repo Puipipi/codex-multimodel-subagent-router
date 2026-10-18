@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createNativeApiGateway } from "../scripts/native-api-gateway.mjs";
 import { gatewayTaskPlan } from "../scripts/native-gateway-task.mjs";
+import { apiTaskPlan } from "../scripts/native-api-manager.mjs";
 import { createApiProfile, saveRouterSettings } from "../scripts/native-api-settings.mjs";
 import {
   activate,
@@ -109,6 +110,11 @@ try {
   };
   const dsPlan = gatewayTaskPlan({ paths: servicePaths, gatewayScriptPath: path.join(repoRoot, "scripts", "native-gateway.mjs") });
   const apiPlan = gatewayTaskPlan({ paths: servicePaths, gatewayScriptPath: path.join(repoRoot, "scripts", "native-api-serve.mjs"), service: "api" });
+  const apiPlanWithSettings = apiTaskPlan({
+    apiDir: path.join(tempRoot, "custom-api-plan"),
+    gatewayScriptPath: path.join(repoRoot, "scripts", "native-api-serve.mjs"),
+    settingsPath: path.join(tempRoot, "custom-router.json"),
+  });
   ok(dsPlan.name.startsWith("SolLunaNativeGateway-"), "default task keeps the DeepSeek namespace");
   ok(apiPlan.name.startsWith("SolLunaNativeApi-"), "API task uses an independent namespace");
   equal(dsPlan.autoStart, true, "DeepSeek task keeps the existing logon trigger");
@@ -118,6 +124,8 @@ try {
   ok(apiPlan.launcher.path.endsWith("api-task.vbs"), "API launcher has its own hidden VBS");
   assert.match(dsPlan.launcher.content, /--deepseek-only/);
   assert.match(apiPlan.launcher.content, /--api-only/);
+  assert.match(apiPlanWithSettings.launcher.content, /--settings/);
+  assert.match(apiPlanWithSettings.launcher.content, /custom-router\.json/);
   assert.match(apiPlan.launcher.content, /shell\.Run\(command, 0, True\)/);
   assert.doesNotMatch(apiPlan.launcher.content, /--deepseek-only/);
   checks += 1;
@@ -313,6 +321,20 @@ try {
   equal(executorStatus.credentialAvailable, true, "status checks credential presence in memory");
   equal(executorStatus.apiVerified, false, "status never claims an API/model verification");
   equal(tasks.starts, startsBeforeStatus, "status is read-only and does not start the service");
+  const registryPath = nativeApiPaths(apiDir).registry;
+  const registryBytes = await readFile(registryPath);
+  const registryData = JSON.parse(registryBytes.toString("utf8"));
+  delete registryData.profiles[profile.profileId];
+  await writeFile(registryPath, `${JSON.stringify(registryData, null, 2)}\n`);
+  const missingRegistryStatus = await getExecutorStatus({ settings, profileId: profile.profileId }, {
+    apiDir,
+    env: { SOL_LUNA_NATIVE_API_VERSION_DIR: path.join(tempRoot, "runtime") },
+    verifyRuntimeVersion: dependencies.verifyRuntimeVersion,
+    taskAdapter: tasks,
+    resolveApiCredential: dependencies.resolveApiCredential,
+  });
+  equal(missingRegistryStatus.installed, false, "status does not report ready when the registry entry is missing");
+  await writeFile(registryPath, registryBytes);
   const incompatibleStatus = await getExecutorStatus({ settings, profileId: profile.profileId }, {
     apiDir,
     verifyRuntimeVersion: async () => { throw new Error("old runtime patch"); },

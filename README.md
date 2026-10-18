@@ -151,6 +151,8 @@ node .\tests\plugin-trace.test.mjs
 node .\tests\plugin-mcp.test.mjs
 node .\tests\plugin-client.test.mjs
 node .\tests\plugin-manifest.test.mjs
+node .\tests\plugin-router-settings.test.mjs
+node .\tests\plugin-mcp-env.test.mjs
 node .\tests\dsh-mcp-client.test.mjs
 node .\tests\docs.test.mjs
 node .\tests\native-routing.test.mjs
@@ -159,6 +161,13 @@ node .\tests\native-gateway.test.mjs
 node .\tests\native-state.test.mjs
 node .\tests\native-agent.test.mjs
 node .\tests\native-isolated-install.test.mjs
+node .\tests\native-api-settings.test.mjs
+node .\tests\native-api-routing.test.mjs
+node .\tests\native-api-protocol.test.mjs
+node .\tests\native-api-artifacts.test.mjs
+node .\tests\native-api-install.test.mjs
+node .\tests\native-api-lifecycle.test.mjs
+node .\tests\native-api-origin.test.mjs
 node .\tests\native-install.test.mjs
 node .\tests\native-manager.test.mjs
 node .\tests\native-autostart.test.mjs
@@ -217,7 +226,7 @@ Saving an API profile only writes router JSON. A compatible, already-staged runt
 
 Official DeepSeek API profiles (account or manual env/file credentials) use the documented `none/low/high/max` reasoning levels; the official API docs state that `none` disables thinking. `xhigh` is normalized to `high` in the API adapter and a valid `max` is preserved. The adapter passes `none` through and does not invent a separate `off` value; non-DeepSeek profiles keep their declared efforts. Historical DeepSeek routing behavior is unchanged. This is wire-rule evidence, not a claim that a real generic API role has completed end-to-end acceptance.
 
-The canonical routing skill remains `sol-luna-deepseek-router`; do not add a second skill or delete old cache/backup directories. A future display name such as “Sol Luna DeepSeek Router — Native API” is a naming suggestion only and does not change registry IDs or folders.
+The canonical routing skill remains `sol-luna-deepseek-router`; do not add a second skill or delete old cache/backup directories. The agreed visible display name for the next package is “Sol 主控 · 多模型峰谷子代理”; keep the stable registry IDs and folders so a display-name update does not create two enabled skills.
 
 ## Privacy and state
 

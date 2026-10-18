@@ -134,6 +134,10 @@ const testScripts = [
   'route.test.mjs', 'route-hook.test.mjs', 'dsh-mcp-client.test.mjs', 'docs.test.mjs',
   'plugin-state.test.mjs', 'plugin-cross-process.test.mjs', 'plugin-trace.test.mjs',
   'plugin-mcp.test.mjs', 'plugin-client.test.mjs', 'plugin-manifest.test.mjs',
+  'plugin-router-settings.test.mjs', 'plugin-mcp-env.test.mjs',
+  'native-api-settings.test.mjs', 'native-api-routing.test.mjs', 'native-api-protocol.test.mjs',
+  'native-api-artifacts.test.mjs', 'native-api-install.test.mjs', 'native-api-lifecycle.test.mjs',
+  'native-api-origin.test.mjs',
   'patch-backend-windows.test.mjs',
 ];
 for (const script of testScripts) assert.match(readme, new RegExp(script.replaceAll('.', '\\.')), `README must list ${script}`);

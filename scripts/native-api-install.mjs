@@ -35,6 +35,7 @@ import {
 import { gatewaySourceEntry, stageGatewaySource, verifyGatewaySource } from "./native-gateway-source.mjs";
 import { verifyRuntimeVersion } from "./native-runtime.mjs";
 import { readRouterSettingsSnapshot, resolveApiCredential, validateRouterSettings } from "./native-api-settings.mjs";
+import { withFileLock } from "./plugin-state.mjs";
 
 const JOURNAL_VERSION = 1;
 const REGISTRY_VERSION = 1;
@@ -113,6 +114,8 @@ export function nativeApiPaths(apiDir = defaultNativeApiDir()) {
     root,
     settings: path.join(root, "router.json"),
     registry: path.join(root, "installed-profiles.json"),
+    gatewayOrigin: path.join(root, "gateway-origin.json"),
+    gatewayOriginLock: path.join(root, "gateway-origin.lock"),
     profiles: path.join(root, "profiles"),
     service: apiServicePaths(root),
     journal(profileId) {
@@ -140,6 +143,61 @@ async function readRegistry(file) {
   }
   for (const id of Object.keys(value.profiles)) apiIdentifiers(id);
   return { bytes, value };
+}
+
+function samePath(left, right) {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function assertRegistryEntry(registry, journal, profileId) {
+  const entry = registry?.value?.profiles?.[profileId];
+  if (!entry) throw new Error(`native API registry has no entry for profile ${profileId}`);
+  if (!samePath(entry.rolePath, journal.files.role.path) || !samePath(entry.catalogPath, journal.files.catalog.path)) {
+    throw new Error(`native API registry entry for ${profileId} points at different artifacts`);
+  }
+}
+
+async function readGatewayOrigin(file) {
+  const bytes = await readRegularOrAbsent(file, "native API gateway origin");
+  if (bytes === null) return null;
+  let value;
+  try { value = JSON.parse(bytes.toString("utf8")); }
+  catch { throw new Error("native API gateway origin is not valid JSON"); }
+  if (value?.version !== 1 || !value.taskPlan || !value.taskSnapshot || !value.launcher?.path || !value.launcher?.prior) {
+    throw new Error("native API gateway origin is incomplete");
+  }
+  return { bytes, value, sha256: sha256(bytes) };
+}
+
+async function ensureGatewayOrigin({ paths, existingIds, taskPlan, taskSnapshot, launcherCurrent }) {
+  return withFileLock(paths.gatewayOriginLock, async () => {
+    const current = await readGatewayOrigin(paths.gatewayOrigin);
+    if (current) {
+      if (JSON.stringify(current.value.taskPlan) !== JSON.stringify(taskPlan)) {
+        throw new Error("native API task plan differs from the shared gateway origin; rollback or reinstall all API profiles");
+      }
+      return current;
+    }
+    if (existingIds.length > 0) {
+      throw new Error("native API install has profiles but no shared gateway origin; rollback or reinstall all API profiles");
+    }
+    const value = {
+      version: 1,
+      created_at: new Date().toISOString(),
+      taskPlan,
+      taskSnapshot,
+      launcher: {
+        path: taskPlan.launcher.path,
+        prior: { path: taskPlan.launcher.path, exists: launcherCurrent !== null, bytes: launcherCurrent },
+      },
+    };
+    const bytes = Buffer.from(`${JSON.stringify(encodeValue(value), null, 2)}\n`);
+    await atomicWrite(paths.gatewayOrigin, bytes);
+    return { bytes, value: decodeJournal(bytes.toString("utf8")), sha256: sha256(bytes) };
+  }, { timeoutMs: 30_000 });
 }
 
 function registryNext(registry, profileId, artifacts) {
@@ -263,8 +321,17 @@ export async function prepare(options = {}, dependencies = {}) {
 
   await verifyRuntime(versionDir);
   await mkdir(paths.root, { recursive: true, mode: 0o700 });
-  if (await readRegularOrAbsent(journalPath, "native API install journal") !== null) {
-    throw new Error(`native API install journal already exists: ${journalPath}`);
+  const existingJournalBytes = await readRegularOrAbsent(journalPath, "native API install journal");
+  let replacesReceipt = null;
+  if (existingJournalBytes !== null) {
+    let existing;
+    try { existing = decodeJournal(existingJournalBytes.toString("utf8")); }
+    catch { throw new Error(`native API install journal is not valid JSON: ${journalPath}`); }
+    if (existing?.version !== JOURNAL_VERSION || existing.phase !== "rolled_back" || existing.indeterminateStages?.length) {
+      throw new Error(`native API install journal already exists in phase ${existing?.phase ?? "unknown"}; only a fully rolled-back journal may be prepared again`);
+    }
+    replacesReceipt = `${journalPath}.receipt-${Date.now()}-${randomUUID().slice(0, 8)}.json`;
+    await atomicWrite(replacesReceipt, existingJournalBytes);
   }
   const identity = await prepareIdentity({ paths: paths.service });
   const gatewayBaseUrl = apiGatewayBaseUrl(identity);
@@ -307,19 +374,27 @@ export async function prepare(options = {}, dependencies = {}) {
   const nextIds = [...existingIds, profileId];
   const nextConfig = composeApiConfig(priorConfig, { profileIds: nextIds, gatewayBaseUrl });
   const nextRegistry = registryNext(registrySnapshot.value, profileId, artifacts);
-  const taskPlan = gatewayTaskPlan({ paths: paths.service, gatewayScriptPath: gatewayScript, service: "api" });
+  const taskPlan = gatewayTaskPlan({ paths: paths.service, gatewayScriptPath: gatewayScript, service: "api", settingsPath });
   const taskSnapshot = await snapshotGatewayTask(taskPlan, tasks);
   const launcherNext = apiTaskLauncherBytes(taskPlan);
   const launcherCurrent = await readRegularOrAbsent(taskPlan.launcher.path, "native API task launcher");
   if (launcherCurrent !== null && !sameBytes(launcherCurrent, launcherNext) && !isOwnedLauncher(launcherCurrent, taskPlan.marker)) {
     throw new Error("an unowned native API task launcher already exists; refusing to overwrite it");
   }
+  const gatewayOrigin = await ensureGatewayOrigin({
+    paths,
+    existingIds,
+    taskPlan,
+    taskSnapshot,
+    launcherCurrent,
+  });
   const identityBytes = await readRegularOrAbsent(paths.service.identity, "native API gateway identity");
   if (identityBytes === null) throw new Error("native API gateway identity was not persisted");
 
   const journal = {
     version: JOURNAL_VERSION,
     phase: "prepared",
+    ...(replacesReceipt ? { replacesReceipt } : {}),
     paths: {
       apiDir,
       codexHome,
@@ -337,6 +412,8 @@ export async function prepare(options = {}, dependencies = {}) {
       identitySha256: sha256(identityBytes),
       taskPlan,
       taskSnapshot,
+      originFile: paths.gatewayOrigin,
+      originSha256: gatewayOrigin.sha256,
       launcher: {
         path: taskPlan.launcher.path,
         prior: { path: taskPlan.launcher.path, exists: launcherCurrent !== null, bytes: launcherCurrent },
@@ -491,7 +568,7 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
   if (!currentTask.exists || !currentTask.owned || currentTask.specMatches !== true) {
     throw new Error("native API Task Scheduler task changed; refusing rollback");
   }
-  for (const name of ["role", "catalog", "registry"]) {
+  for (const name of ["role", "catalog"]) {
     const item = journal.files[name];
     if (!sameBytes(await readRegularOrAbsent(item.path, "managed file"), item.next)) {
       throw new Error(`native API ${name} changed after activation; refusing rollback`);
@@ -506,15 +583,17 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
   const currentConfigBytes = await readRegularOrAbsent(journal.config.path, "Codex config");
   const currentConfig = currentConfigBytes === null ? "" : currentConfigBytes.toString("utf8");
   const gatewayBaseUrl = await verifiedGatewayBaseUrl(journal);
+  const registry = await readRegistry(journal.files.registry.path);
+  assertRegistryEntry(registry, journal, journal.profile.profileId);
+  const registryIds = Object.keys(registry.value.profiles);
   const allComposed = composeApiConfig(currentConfig, {
-    profileIds: journal.config.profileIds,
+    profileIds: registryIds,
     gatewayBaseUrl,
   });
   if (currentConfig !== allComposed) {
     throw new Error("native API provider block changed after activation; refusing rollback");
   }
-  const registry = await readRegistry(journal.files.registry.path);
-  const remainingIds = Object.keys(registry.value.profiles).filter((id) => id !== journal.profile.profileId);
+  const remainingIds = registryIds.filter((id) => id !== journal.profile.profileId);
   const nextConfig = currentConfigBytes.equals(Buffer.from(journal.config.nextText, "utf8"))
     ? composeApiConfig(journal.config.priorText, {
       profileIds: journal.config.profileIds.filter((id) => id !== journal.profile.profileId),
@@ -536,12 +615,26 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
   await rm(journal.files.role.path, { force: true });
   await rm(journal.files.catalog.path, { force: true });
   if (remainingIds.length === 0) {
-    await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks);
-    await restoreLauncherIfNext(journal.gateway.launcher);
+    const origin = journal.gateway.originFile
+      ? await readGatewayOrigin(journal.gateway.originFile)
+      : null;
+    if (origin && journal.gateway.originSha256 && origin.sha256 !== journal.gateway.originSha256) {
+      throw new Error("native API gateway origin changed; refusing to restore a different baseline");
+    }
+    const restorePlan = origin?.value.taskPlan || journal.gateway.taskPlan;
+    const restoreTaskSnapshot = origin?.value.taskSnapshot || journal.gateway.taskSnapshot;
+    const restoreLauncher = origin?.value.launcher || journal.gateway.launcher.prior;
+    if (path.resolve(restoreLauncher.path) !== path.resolve(journal.gateway.launcher.path)) {
+      throw new Error("native API gateway origin launcher path differs from this install");
+    }
+    await restoreGatewayTask(restoreTaskSnapshot, restorePlan, tasks);
+    await restoreLauncherIfNext({ ...journal.gateway.launcher, prior: restoreLauncher.prior });
+    if (journal.gateway.originFile) await rm(journal.gateway.originFile, { force: true });
   }
   journal.phase = "rolled_back";
   journal.completed.files = false;
   journal.completed.task = remainingIds.length > 0;
+  journal.completed.launcher = remainingIds.length > 0;
   await writeJournal(file, journal);
   return {
     rolled_back: true,
@@ -557,7 +650,7 @@ export async function status({ journalPath } = {}) {
     phase: journal.phase,
     profileId: journal.profile.profileId,
     configured: journal.phase === "active",
-    restartNeeded: journal.phase === "active",
+    restartNeeded: journal.phase === "active" ? "unknown" : false,
     journalPath: file,
     rolePath: journal.files.role.path,
     catalogPath: journal.files.catalog.path,
@@ -616,9 +709,11 @@ export async function inspectNativeApiDispatchState({
       throw new Error(`native API ${name} changed after activation`);
     }
   }
+  const registry = await readRegistry(journal.files.registry.path);
+  assertRegistryEntry(registry, journal, profileId);
   const configBytes = await readRegularOrAbsent(journal.config.path, "Codex config");
   const config = configBytes === null ? "" : configBytes.toString("utf8");
-  const composed = composeApiConfig(config, { profileIds: journal.config.profileIds, gatewayBaseUrl });
+  const composed = composeApiConfig(config, { profileIds: Object.keys(registry.value.profiles), gatewayBaseUrl });
   if (composed !== config) throw new Error("native API provider config changed after activation");
   if (rootApiReference(config, gatewayBaseUrl)) {
     throw new Error("the root Sol provider references the native API gateway");
@@ -787,16 +882,23 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
       journal.gateway.launcher.next,
     );
     let configOk = false;
+    let registryOk = false;
+    let registry = null;
+    try {
+      registry = await readRegistry(journal.files.registry.path);
+      assertRegistryEntry(registry, journal, selected.profileId);
+      registryOk = true;
+    } catch { registryOk = false; }
     try {
       const identity = await readGatewayIdentity(apiServicePaths(apiDir));
       const configBytes = await readRegularOrAbsent(journal.config.path, "Codex config");
       const config = configBytes === null ? "" : configBytes.toString("utf8");
       configOk = composeApiConfig(config, {
-        profileIds: journal.config.profileIds,
+        profileIds: registry ? Object.keys(registry.value.profiles) : journal.config.profileIds,
         gatewayBaseUrl: apiGatewayBaseUrl(identity),
       }) === config;
     } catch { configOk = false; }
-    installed = roleOk && catalogOk && launcherOk && configOk;
+    installed = roleOk && catalogOk && launcherOk && configOk && registryOk;
   }
 
   let gatewayRunning = false;

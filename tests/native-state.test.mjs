@@ -49,6 +49,26 @@ try {
   const tasks = new NativeTasks({ stateDir });
   await tasks.begin({ parentThreadId: "parent-A", childThreadId: "child-A", model: "deepseek/deepseek-flash", workspace: workspaceA, taskNonce: "task-nonce-A" });
   await tasks.begin({ parentThreadId: "parent-B", childThreadId: "child-B", model: "gpt-6-luna", workspace: workspaceB, taskNonce: "task-nonce-B" });
+  const profileId = "abcdefabcdefabcdefabcdef";
+  const apiBinding = {
+    executor: "api",
+    profileId,
+    model: "different-api-model",
+    role: `native_api_${profileId}`,
+    providerId: `api-native-${profileId}`,
+  };
+  await assert.rejects(tasks.begin({
+    parentThreadId: "parent-A",
+    childThreadId: "child-A",
+    binding: apiBinding,
+  }), /already has a different model/);
+  checks += 1;
+  const lateBound = await tasks.begin({
+    parentThreadId: "parent-A",
+    childThreadId: "child-A",
+    binding: { ...apiBinding, model: "deepseek/deepseek-flash" },
+  });
+  equal(lateBound.binding.profileId, profileId, "a matching late binding preserves the original child model");
   equal((await tasks.owned("parent-A")).length, 1, "parent A sees only its own child");
   equal((await tasks.owned("parent-A"))[0].child_thread_id, "child-A", "parent A owns child A");
   equal((await tasks.owned("parent-B")).length, 1, "parent B sees only its own child");

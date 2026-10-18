@@ -27,6 +27,13 @@ not inherit DeepSeek's 1M-token window or claim a web/search capability.
 Settings additions, validation, compare-and-swap writes, and immutable
 profiles are implemented in `scripts/native-api-settings.mjs`.
 
+The canonical `.mcp.json` forwards the non-secret locator variables
+`CODEX_HOME`, `SOL_LUNA_NATIVE_INSTALL_JOURNAL`, and
+`SOL_LUNA_NATIVE_API_VERSION_DIR` in addition to the existing state/runtime
+variables. It never forwards API key values or the root OpenAI OAuth token.
+The filtered-env stdio regression starts the real MCP entry with this allowlist
+and verifies that the status path can find the staged runtime.
+
 ## Generated artifacts
 
 For profile ID `<24hex>`, the installer owns:
@@ -69,6 +76,24 @@ node scripts/native-api-install.mjs rollback --journal-path <journal.json>
 `activate` reports `restartNeeded: true`. New native role/catalog discovery is
 not proven hot-reloadable; fully exit and restart the Codex application before
 claiming the role is visible. Existing chats are not changed by this install.
+
+Profiles share one demand-only API Task. The first install records the
+pre-plugin Task/launcher baseline in `gateway-origin.json`; when the last
+profile is rolled back, the installer restores that origin regardless of which
+profile is removed last. Removing A while B remains, or the reverse, therefore
+ends at the same user/absent Task state. The launcher is written as UTF-16LE
+with BOM and its `--api-only` command and `--settings` path are covered by the
+Task fingerprint. The Task must have exactly one logon trigger for the existing
+DeepSeek policy and zero triggers for the API demand-only policy.
+
+A fully `rolled_back` journal may be prepared again. The old journal is copied
+to a timestamped receipt before the new journal is written; it is not deleted
+or silently reused. An installed profile is `alreadyInstalled` only when its
+role, catalog, launcher, provider config, shared registry entry, Task, and the
+selected compatible runtime all verify. A missing or changed artifact reports
+rollback/reinstall instead of a false success. The shared
+`installed-profiles.json` is checked by profile membership and exact artifact
+paths, never by comparing an older journal's complete registry bytes.
 
 The API service is started on demand for a selected profile by the dispatch
 gate. The default `auto` plan remains Luna/DeepSeek and does not start an API
@@ -115,6 +140,8 @@ until a separate real probe exists. When artifacts are installed,
 but this backend has no reliable observation that the running application has
 adopted it. Do not turn that unknown into a permanent “must restart” banner or
 edit a journal to manufacture an accepted state.
+The lower-level `status()` result uses the same `restartNeeded: "unknown"`
+semantics for an active journal.
 
 `applyApiConfiguration` is the explicit Apply-button path. It verifies that
 the supplied settings were already saved (and the optional `expectedSha256`

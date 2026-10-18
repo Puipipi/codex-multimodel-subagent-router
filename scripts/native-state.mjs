@@ -94,6 +94,9 @@ export class NativeTasks {
       if (immutable && normalizedBinding && !sameBinding(immutable, normalizedBinding)) {
         throw new Error("This child's executor/profile binding is immutable and cannot be changed");
       }
+      if (!immutable && normalizedBinding && existing?.model && existing.model !== normalizedBinding.model) {
+        throw new Error("This child already has a different model; a late executor binding cannot change it");
+      }
       const bound = immutable || normalizedBinding;
       if (immutable && typeof model === "string" && model !== immutable.model) {
         throw new Error("This child's model binding is immutable and cannot be changed");

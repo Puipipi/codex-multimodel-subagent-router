@@ -26,13 +26,14 @@ export function apiServicePaths(apiDir = defaultNativeApiDir()) {
   return gatewayPaths(path.join(path.resolve(apiDir), "gateway"));
 }
 
-export function apiTaskPlan({ apiDir = defaultNativeApiDir(), gatewayScriptPath, nodePath = process.execPath, wscriptPath } = {}) {
+export function apiTaskPlan({ apiDir = defaultNativeApiDir(), gatewayScriptPath, nodePath = process.execPath, wscriptPath, settingsPath = path.join(path.resolve(apiDir), "router.json") } = {}) {
   return gatewayTaskPlan({
     paths: apiServicePaths(apiDir),
     gatewayScriptPath,
     nodePath,
     wscriptPath,
     service: "api",
+    settingsPath,
   });
 }
 
@@ -45,10 +46,10 @@ export async function verifyApiHealth(state) {
   return health;
 }
 
-export async function ensureApiGateway({ apiDir = defaultNativeApiDir(), taskAdapter, gatewayScriptPath, paths = apiServicePaths(apiDir) } = {}) {
+export async function ensureApiGateway({ apiDir = defaultNativeApiDir(), taskAdapter, gatewayScriptPath, settingsPath, paths = apiServicePaths(apiDir) } = {}) {
   if (typeof gatewayScriptPath !== "string" || !path.isAbsolute(gatewayScriptPath)) throw new Error("gatewayScriptPath must be absolute");
   const tasks = taskAdapter || createWindowsTaskSchedulerAdapter();
-  const plan = apiTaskPlan({ apiDir, gatewayScriptPath });
+  const plan = apiTaskPlan({ apiDir, gatewayScriptPath, settingsPath });
   const task = await statusOwnedGatewayTask(plan, tasks);
   if (!task.exists || !task.owned || task.specMatches !== true || !task.enabled) {
     throw new Error("native API Task Scheduler task is missing, changed, or disabled");
@@ -89,8 +90,9 @@ async function main(argv) {
   };
   const apiDir = value("api-dir") || defaultNativeApiDir();
   const gatewayScriptPath = value("gateway-script");
+  const settingsPath = value("settings");
   if (command === "start" || command === "ensure") {
-    const result = await ensureApiGateway({ apiDir, gatewayScriptPath });
+    const result = await ensureApiGateway({ apiDir, gatewayScriptPath, settingsPath });
     process.stdout.write(`${JSON.stringify({ started: result.started, pid: result.state.pid, port: result.state.port, task: result.taskName })}\n`);
     return;
   }
@@ -102,7 +104,7 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify(await apiStatus({ apiDir }))}\n`);
     return;
   }
-  throw new Error("usage: native-api-manager.mjs <start|ensure|stop|status> [--api-dir PATH] [--gateway-script PATH]");
+  throw new Error("usage: native-api-manager.mjs <start|ensure|stop|status> [--api-dir PATH] [--gateway-script PATH] [--settings PATH]");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -11,6 +11,8 @@ const POWERSHELL_TIMEOUT_MS = 10_000;
 const RESTART_COUNT = 3;
 const RESTART_INTERVAL_MINUTES = 1;
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+export const windowsTaskTriggerPolicyScript = String.raw`$triggerCount = @($task.Triggers).Count
+$triggerMatches = if ($request.autoStart) { $triggerCount -eq 1 } else { $triggerCount -eq 0 }`;
 
 function taskError(message, code) {
   const error = new Error(message);
@@ -46,10 +48,11 @@ function Get-TaskRecord($request) {
   try { $restartCount = [int]$task.Settings.RestartCount } catch { }
   $restartIntervalSeconds = -1
   try { $restartIntervalSeconds = [int][System.Xml.XmlConvert]::ToTimeSpan([string]$task.Settings.RestartInterval).TotalSeconds } catch { }
+  ${windowsTaskTriggerPolicyScript}
   $settingsMatches = [string]$task.Settings.MultipleInstances -eq 'IgnoreNew' -and
     $executionLimit -eq [TimeSpan]::Zero -and
     $restartCount -eq ${RESTART_COUNT} -and $restartIntervalSeconds -eq ${RESTART_INTERVAL_MINUTES * 60} -and
-    [bool]$task.Settings.AllowDemandStart -and [bool]$task.Settings.Hidden
+    [bool]$task.Settings.AllowDemandStart -and [bool]$task.Settings.Hidden -and $triggerMatches
   $owned = $task.Description -ceq $request.marker -and $actionMatches
   $info = Get-ScheduledTaskInfo -InputObject $task
   return @{
@@ -111,7 +114,7 @@ function taskHash(directory) {
   return createHash("sha256").update(path.resolve(directory).toLowerCase()).digest("hex").slice(0, 20);
 }
 
-export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPath, gatewayScriptPath, service = null } = {}) {
+export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPath, gatewayScriptPath, service = null, settingsPath } = {}) {
   if (!paths || typeof paths !== "object") throw new Error("gateway paths are required");
   const dir = absolutePath(paths.dir, "gateway directory");
   const state = absolutePath(paths.state, "gateway state path");
@@ -127,6 +130,7 @@ export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPat
   const marker = `${api ? API_OWNERSHIP_PREFIX : OWNERSHIP_PREFIX}${hash}`;
   const launcherPath = path.join(dir, api ? "api-task.vbs" : "gateway-task.vbs");
   const serveArgs = api ? ["--serve", "--api-only"] : ["--serve", "--deepseek-only"];
+  if (api && settingsPath) serveArgs.push("--settings", absolutePath(settingsPath, "API settings path"));
   const command = [
     windowsQuote(node), windowsQuote(gateway), ...serveArgs,
     "--state", windowsQuote(state), "--identity", windowsQuote(identity), "--log", windowsQuote(log),

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 
 const lifecycle = await import("../scripts/native-gateway-task.mjs").catch(() => null);
 assert.ok(lifecycle, "gateway Task Scheduler lifecycle module is available");
@@ -11,7 +12,7 @@ const rejects = async (operation, pattern, message) => {
   checks += 1;
 };
 
-const { gatewayTaskPlan, rebaseGatewayTaskSnapshot, registerOwnedGatewayTask, startOwnedGatewayTask, statusOwnedGatewayTask, unregisterOwnedGatewayTask, snapshotGatewayTask, installOwnedGatewayTask, restoreGatewayTask, windowsTaskSchedulerScript, createWindowsTaskSchedulerAdapter } = lifecycle;
+const { gatewayTaskPlan, rebaseGatewayTaskSnapshot, registerOwnedGatewayTask, startOwnedGatewayTask, statusOwnedGatewayTask, unregisterOwnedGatewayTask, snapshotGatewayTask, installOwnedGatewayTask, restoreGatewayTask, windowsTaskSchedulerScript, windowsTaskTriggerPolicyScript, createWindowsTaskSchedulerAdapter } = lifecycle;
 const paths = {
   dir: "C:\\Users\\Test User\\AppData\\Local\\Router\\native gateway",
   state: "C:\\Users\\Test User\\AppData\\Local\\Router\\native gateway\\gateway.json",
@@ -65,6 +66,16 @@ ok(windowsTaskSchedulerScript.includes("$restartCount -eq 3 -and $restartInterva
 ok(windowsTaskSchedulerScript.includes("restartCount = $restartCount; restartIntervalSeconds = $restartIntervalSeconds"), "task query returns the observed restart policy");
 ok(windowsTaskSchedulerScript.includes("$taskPrincipalSid -ceq $expectedSid") && windowsTaskSchedulerScript.includes("Principal.LogonType") && windowsTaskSchedulerScript.includes("Principal.RunLevel"), "ownership status validates current-user interactive limited principal");
 ok(windowsTaskSchedulerScript.includes("lastTaskResult = [long]$info.LastTaskResult"), "status preserves unsigned scheduler result codes without Int32 overflow");
+ok(windowsTaskSchedulerScript.includes("$request.autoStart") && windowsTaskSchedulerScript.includes("$triggerCount -eq 0"), "status requires zero triggers for demand-only tasks");
+if (process.platform === "win32") {
+  const runTriggerPolicy = (autoStart, triggerCount) => spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    `$task=[pscustomobject]@{Triggers=${triggerCount === 0 ? "@()" : "@([pscustomobject]@{})"}}; $request=[pscustomobject]@{autoStart=$${autoStart}}; ${windowsTaskTriggerPolicyScript}; if ($triggerMatches) { exit 0 } else { exit 1 }`,
+  ], { windowsHide: true, encoding: "utf8" }).status;
+  equal(runTriggerPolicy("false", 0), 0, "PowerShell accepts an API demand-only task with no triggers");
+  equal(runTriggerPolicy("false", 1), 1, "PowerShell rejects an external logon trigger on an API task");
+  equal(runTriggerPolicy("true", 1), 0, "PowerShell preserves the DeepSeek logon task policy");
+}
 ok(windowsTaskSchedulerScript.includes("TASK_SCHEDULER_ACCESS_DENIED") && windowsTaskSchedulerScript.includes("TASK_SCHEDULER_OPERATION_FAILED"), "PowerShell failures produce minimal structured error codes");
 
 let scheduler = { exists: false, owned: false, state: "missing", lastTaskResult: null };

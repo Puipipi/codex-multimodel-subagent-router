@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createApiProfile, readRouterSettingsSnapshot, saveRouterSettings } from "../scripts/native-api-settings.mjs";
@@ -109,6 +109,10 @@ try {
     gatewayScriptPath: gatewayScript,
   }, dependencies);
   equal(preparedA.prepared, true, "prepare writes a transaction journal");
+  const preparedJournal = JSON.parse(await readFile(journalA, "utf8"));
+  assert.match(preparedJournal.gateway.taskPlan.launcher.content, /--settings/);
+  assert.match(preparedJournal.gateway.taskPlan.launcher.content, new RegExp(paths.settings.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  checks += 1;
   equal((await readFile(path.join(codexHome, "config.toml"), "utf8")), priorConfig, "prepare does not change config");
   await rejects(() => prepare({
     profileId: profileA.profileId,
@@ -145,6 +149,7 @@ try {
   equal(catalogA.models.length, 1, "installed catalog contains exactly one model");
   equal(catalogA.models[0].slug, profileA.model, "installed catalog uses the exact model");
   equal((await status({ journalPath: journalA })).phase, "active", "status reports the activated phase");
+  equal((await status({ journalPath: journalA })).restartNeeded, "unknown", "status does not claim restart adoption");
 
   const inspected = await inspectNativeApiDispatchState({
     profileId: profileA.profileId,
@@ -192,25 +197,60 @@ try {
   const configAB = await readFile(path.join(codexHome, "config.toml"), "utf8");
   assert.match(configAB, new RegExp(`api-native-${profileB.profileId}`));
   equal(tasks.registers, 1, "adding a second profile reuses the owned API task");
+  const inspectedAWithB = await inspectNativeApiDispatchState({
+    profileId: profileA.profileId,
+    apiDir,
+    settingsPath: paths.settings,
+    taskAdapter: tasks,
+  }, dependencies);
+  equal(inspectedAWithB.ready, true, "a shared registry with a second profile keeps A ready");
+  const registryFile = paths.registry;
+  const registryBytes = await readFile(registryFile);
+  const registryValue = JSON.parse(registryBytes.toString("utf8"));
+  delete registryValue.profiles[profileA.profileId];
+  await writeFile(registryFile, `${JSON.stringify(registryValue, null, 2)}\n`);
+  await rejects(() => inspectNativeApiDispatchState({
+    profileId: profileA.profileId,
+    apiDir,
+    settingsPath: paths.settings,
+    taskAdapter: tasks,
+  }, dependencies), /registry has no entry/);
+  await writeFile(registryFile, registryBytes);
+
+  const rolledBackAWithB = await rollback({ journalPath: journalA }, dependencies);
+  equal(rolledBackAWithB.remainingProfiles.includes(profileB.profileId), true, "rolling back A while B remains preserves B");
+  await rejectMissing(path.join(codexHome, "agents", `native_api_${profileA.profileId}.toml`), "A role is removed first");
+  ok((await readFile(path.join(codexHome, "agents", `native_api_${profileB.profileId}.toml`), "utf8")).includes("unbounded_connection_retries"), "B role remains after A rollback");
+  assert.match(await readFile(path.join(codexHome, "config.toml"), "utf8"), new RegExp(`api-native-${profileB.profileId}`));
+  equal((await tasks.status()).exists, true, "A rollback preserves the shared B task");
+  equal((await readFile(launcherPath)).length > 0, true, "A rollback preserves the shared B launcher");
+  equal((await status({ journalPath: journalA })).phase, "rolled_back", "A journal is terminal after its rollback");
+
   const rolledBackB = await rollback({ journalPath: journalB }, dependencies);
-  equal(rolledBackB.remainingProfiles.includes(profileA.profileId), true, "rolling back B preserves A");
-  await rejectMissing(path.join(codexHome, "agents", `native_api_${profileB.profileId}.toml`), "B role is removed");
-  ok((await readFile(path.join(codexHome, "agents", `native_api_${profileA.profileId}.toml`), "utf8")).includes("unbounded_connection_retries"), "A role remains installed");
-  const configAfterB = await readFile(path.join(codexHome, "config.toml"), "utf8");
-  assert.match(configAfterB, new RegExp(`api-native-${profileA.profileId}`));
-  assert.doesNotMatch(configAfterB, new RegExp(`api-native-${profileB.profileId}`));
-  assert.match(configAfterB, /\[foreign\]/);
-  checks += 1;
-  equal((await status({ journalPath: journalA })).phase, "active", "old profile journal stays active");
-  const rolledBackA = await rollback({ journalPath: journalA }, dependencies);
-  equal(rolledBackA.remainingProfiles.length, 0, "rolling back the last profile leaves no API selection");
+  equal(rolledBackB.remainingProfiles.length, 0, "rolling back B last leaves no API selection");
   const finalConfig = await readFile(path.join(codexHome, "config.toml"), "utf8");
   assert.doesNotMatch(finalConfig, /sol-luna-native-api/);
   assert.match(finalConfig, /\[foreign\]/);
   assert.match(finalConfig, /\[model_providers\.deepseek-native\]/);
   equal((await tasks.status()).exists, false, "rolling back the last profile unregisters the owned task");
   await rejectMissing(launcherPath, "rolling back the last profile removes the owned launcher");
-  checks += 2;
+  await rejectMissing(paths.gatewayOrigin, "rolling back the last profile removes the shared origin receipt");
+  checks += 1;
+
+  // Reapply the same rolled-back profile without manually deleting its journal.
+  const reapplied = await prepare({
+    profileId: profileA.profileId,
+    settingsPath: paths.settings,
+    apiDir,
+    codexHome,
+    versionDir: path.join(root, "runtime"),
+    journalPath: journalA,
+    gatewayScriptPath: gatewayScript,
+  }, dependencies);
+  equal(reapplied.prepared, true, "a rolled-back profile journal can be prepared again");
+  const journalDir = path.dirname(journalA);
+  const receipts = (await readdir(journalDir)).filter((name) => name.includes(".receipt-"));
+  equal(receipts.length > 0, true, "reprepare preserves the old rolled-back journal as a receipt");
 
   const foreignHome = path.join(root, "foreign-home");
   await mkdir(path.join(foreignHome, "agents"), { recursive: true });
