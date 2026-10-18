@@ -548,7 +548,8 @@ export async function inspectNativeApiDispatchState({
   if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) {
     throw new Error("native API gateway identity changed after activation");
   }
-  const identity = await readGatewayIdentity(apiServicePaths(apiDir));
+  const servicePaths = apiServicePaths(journal.paths.apiDir);
+  const identity = await readGatewayIdentity(servicePaths);
   const gatewayBaseUrl = apiGatewayBaseUrl(identity);
   if (!identity?.token) {
     throw new Error("native API gateway identity does not match the installed provider URLs");
@@ -573,7 +574,7 @@ export async function inspectNativeApiDispatchState({
   }
   if (requireRunning) {
     if (task.state !== "Running") throw new Error("native API Task Scheduler task is not Running");
-    const state = await readGatewayState(apiServicePaths(apiDir));
+    const state = await readGatewayState(servicePaths);
     if (!state || state.token !== identity.token || state.port !== identity.port || !Number.isInteger(state.pid)) {
       throw new Error("native API gateway state does not match its private identity");
     }
@@ -584,8 +585,7 @@ export async function inspectNativeApiDispatchState({
 
 export async function ensureNativeApiDispatch(options = {}, dependencies = {}) {
   const inspected = await inspectNativeApiDispatchState({ ...options, requireRunning: false }, dependencies);
-  const apiDir = options.apiDir || defaultNativeApiDir();
-  const paths = apiServicePaths(apiDir);
+  const paths = apiServicePaths(inspected.journal.paths.apiDir);
   const tasks = options.taskAdapter || dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
   const launchImpl = createOwnedGatewayTaskLauncher(inspected.journal.gateway.taskPlan, tasks);
   const ensured = await (dependencies.ensureGateway || ensureGateway)({ paths, launchImpl });
