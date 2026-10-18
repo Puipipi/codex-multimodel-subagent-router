@@ -11,7 +11,7 @@ const POWERSHELL_TIMEOUT_MS = 10_000;
 const RESTART_COUNT = 3;
 const RESTART_INTERVAL_MINUTES = 1;
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
-export const windowsTaskTriggerPolicyScript = String.raw`$triggerCount = @($task.Triggers).Count
+export const windowsTaskTriggerPolicyScript = String.raw`$triggerCount = @($task.Triggers | Where-Object { $null -ne $_ }).Count
 $triggerMatches = if ($request.autoStart) { $triggerCount -eq 1 } else { $triggerCount -eq 0 }`;
 
 function taskError(message, code) {
