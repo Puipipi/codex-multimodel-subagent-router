@@ -8,6 +8,7 @@ import {
   createDefaultRouterSettings,
   defaultRouterSettingsPath,
   loadRouterSettings,
+  readRouterSettingsSnapshot,
   resolveApiCredential,
   saveRouterSettings,
   validateRouterSettings,
@@ -89,7 +90,14 @@ throws(() => createApiProfile({ ...apiDefinition, credential: { type: "dsh_accou
 const root = await mkdtemp(path.join(os.tmpdir(), "native-api-settings-"));
 try {
   const settingsFile = path.join(root, "native-api", "router.json");
-  await saveRouterSettings(settingsFile, fixed);
+  equal((await readRouterSettingsSnapshot(path.join(root, "absent", "router.json"))).sha256, null,
+    "an absent settings file has no revision token");
+  const saved = await saveRouterSettings(settingsFile, fixed);
+  const snapshot = await readRouterSettingsSnapshot(settingsFile);
+  const bytes = await readFile(settingsFile);
+  equal(snapshot.sha256, createHash("sha256").update(bytes).digest("hex"), "settings and revision come from the same byte snapshot");
+  equal(saved.sha256, snapshot.sha256, "save returns the exact committed revision token");
+  equal(snapshot.settings.mode, "fixed", "snapshot returns validated settings with its revision");
   const loaded = await loadRouterSettings(settingsFile);
   equal(loaded.mode, "fixed", "settings round-trip through the plugin-owned JSON file");
   equal(loaded.profiles[profile.profileId].model, profile.model, "profile round-trip preserves exact wire model");

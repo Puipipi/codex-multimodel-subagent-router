@@ -159,11 +159,19 @@ async function requireRegularOrAbsent(file) {
 }
 
 export async function loadRouterSettings(file = defaultRouterSettingsPath()) {
-  if (!await requireRegularOrAbsent(file)) return createDefaultRouterSettings();
+  return (await readRouterSettingsSnapshot(file)).settings;
+}
+
+export async function readRouterSettingsSnapshot(file = defaultRouterSettingsPath()) {
+  if (!await requireRegularOrAbsent(file)) return { settings: createDefaultRouterSettings(), sha256: null };
+  const bytes = await readFile(file);
   let settings;
-  try { settings = JSON.parse(await readFile(file, "utf8")); }
+  try { settings = JSON.parse(bytes.toString("utf8")); }
   catch { throw new Error("router settings JSON is invalid; refusing to change the active plan"); }
-  return validateRouterSettings(settings);
+  return {
+    settings: validateRouterSettings(settings),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  };
 }
 
 export async function saveRouterSettings(file, settings, { expectedSha256 } = {}) {
@@ -190,8 +198,13 @@ export async function saveRouterSettings(file, settings, { expectedSha256 } = {}
     } else if (expectedSha256 !== undefined && expectedSha256 !== null) {
       throw new Error("router settings were removed since they were read; reload before updating");
     }
+    const serialized = `${JSON.stringify(validated, null, 2)}\n`;
     await writeJsonAtomic(file, validated);
-    return { settings: validated, previousSha256: currentHash };
+    return {
+      settings: validated,
+      previousSha256: currentHash,
+      sha256: createHash("sha256").update(serialized, "utf8").digest("hex"),
+    };
   });
 }
 

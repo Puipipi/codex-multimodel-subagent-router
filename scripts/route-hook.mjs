@@ -39,6 +39,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decideRoute } from './route.mjs';
+import { loadRouterSettings, validateRouterSettings } from './native-api-settings.mjs';
 
 const SUPPORTED_EVENTS = new Set(['UserPromptSubmit', 'PreToolUse']);
 const STATE_VERSION = 1;
@@ -113,9 +114,10 @@ export function buildNotification(route, at) {
  * models are treated as main-chat turns so a new Sol model still receives
  * notices.
  */
-export function isChildExecutor(input) {
+export function isChildExecutor(input, apiProfiles = {}) {
   const model = typeof input?.model === 'string' ? input.model : '';
   if (/luna|deepseek/i.test(model)) return true;
+  if (model && Object.values(apiProfiles).some(profile => profile?.model === model)) return true;
   for (const key of ['agent_type', 'agent_role', 'subagent_type']) {
     const value = input?.[key];
     if (typeof value === 'string' && (/luna|deepseek|subagent/i.test(value) || /^native_api_[a-f0-9]{24}$/.test(value))) return true;
@@ -216,12 +218,20 @@ export async function handleHook({
   hookStateDir,
   overrideStateDir,
   overrideSessionId,
+  routerSettings,
+  settingsPath,
 } = {}) {
   const event = input?.hook_event_name;
   if (!SUPPORTED_EVENTS.has(event)) return { output: null, reason: 'unsupported_event' };
   const sessionId = typeof input?.session_id === 'string' ? input.session_id.trim() : '';
   if (!sessionId) return { output: null, reason: 'missing_session' };
   if (isChildExecutor(input)) return { output: null, reason: 'child_executor' };
+  const settings = routerSettings === undefined
+    ? await loadRouterSettings(settingsPath)
+    : validateRouterSettings(routerSettings);
+  // Hook payloads usually provide only model. A parent chat deliberately using
+  // the same exact API model is therefore indistinguishable and is suppressed.
+  if (isChildExecutor(input, settings.profiles)) return { output: null, reason: 'child_executor' };
 
   const at = now instanceof Date ? now : new Date(now);
   if (!Number.isFinite(at.getTime())) throw new Error('Invalid hook clock');
@@ -232,6 +242,7 @@ export async function handleHook({
     at,
     sessionId: routeSessionId,
     stateDir: resolveOverrideStateDir(overrideStateDir),
+    routerSettings: settings,
   });
   const key = notificationKey(route);
   const directory = resolveHookStateDir(hookStateDir);

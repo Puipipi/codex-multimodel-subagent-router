@@ -12,6 +12,7 @@ import { decideRoute } from '../scripts/route.mjs';
 import {
   buildNotification, handleHook, isChildExecutor, notificationKey,
 } from '../scripts/route-hook.mjs';
+import { createApiProfile } from '../scripts/native-api-settings.mjs';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const hookPath = path.join(repoRoot, 'scripts', 'route-hook.mjs');
@@ -269,6 +270,34 @@ equal(isChildExecutor({ model: 'deepseek/deepseek-flash' }), true, 'native DeepS
 equal(isChildExecutor({ model: 'openai/gpt-6.1-sol' }), false, 'Sol model turns are not treated as children');
 equal(isChildExecutor({ model: 'gpt-6.1-sol', agent_type: 'subagent' }), true, 'explicit subagent evidence is respected');
 equal(isChildExecutor({ model: undefined }), false, 'unknown model evidence is tolerated');
+
+const hookApiProfile = createApiProfile({
+  protocol: 'responses', baseUrl: 'https://api.example.invalid/v1', model: 'example-child-model',
+  reasoning: { supported: ['none'], default: 'none', parameter: 'none' },
+  credential: { type: 'env', name: 'EXAMPLE_API_KEY' },
+});
+const hookApiSettings = {
+  schemaVersion: 1, mode: 'fixed', fixedExecutor: hookApiProfile.profileId,
+  profiles: { [hookApiProfile.profileId]: hookApiProfile },
+};
+equal(isChildExecutor({ model: hookApiProfile.model }, hookApiSettings.profiles), true,
+  'configured API model is enough to identify a child when role metadata is absent');
+const apiChildHookDir = await mkdtemp(path.join(os.tmpdir(), 'route-hook-api-child-'));
+try {
+  const result = await handleHook({
+    input: inputFor('api-child-session', 'PreToolUse', hookApiProfile.model),
+    now: new Date(`2026-10-19T10:30:00${shanghai}`),
+    hookStateDir: apiChildHookDir,
+    overrideStateDir: isolatedOverrideDir,
+    routerSettings: hookApiSettings,
+  });
+  equal(result.output, null, 'handleHook suppresses a configured API child using the supplied settings snapshot');
+  equal(result.reason, 'child_executor', 'API child suppression is reported consistently');
+  equal((await readdir(apiChildHookDir)).filter(name => name.endsWith('.json')).length, 0,
+    'API child suppression does not create parent notification state');
+} finally {
+  await rm(apiChildHookDir, { recursive: true, force: true });
+}
 
 // Weekday boundaries: initial notice then only changes.
 const boundaryDir = await mkdtemp(path.join(os.tmpdir(), 'route-hook-boundary-'));
