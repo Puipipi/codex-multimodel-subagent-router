@@ -508,7 +508,7 @@ index 6d97ece..4b03c00 100644
  async fn check_v2_agent_reload(route: V2ReloadRoute) {
      let (home, mut config) = test_config().await;
      let _ = config.features.enable(Feature::MultiAgentV2);
-@@ -6051,3 +6073,525 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails()
+@@ -6051,3 +6073,526 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails()
          .await
          .expect("tree shutdown after partial subtree resume should succeed");
  }
@@ -1003,10 +1003,11 @@ index 6d97ece..4b03c00 100644
 +        .expect("openai provider should exist");
 +    sender_config.model_reasoning_effort = Some(ReasoningEffort::XHigh);
 +    sender_config.service_tier = Some("flex".to_string());
-+    let _pin = control
-+        .ensure_v2_agent_loaded(sender_config, child_id, /*parent*/ None)
-+        .await
-+        .expect("non-reasoning API child should reload without an effort");
++    let _pin = Box::pin(control.ensure_v2_agent_loaded(
++        sender_config, child_id, /*parent*/ None,
++    ))
++    .await
++    .expect("non-reasoning API child should reload without an effort");
 +
 +    let resumed = harness
 +        .manager
@@ -1582,7 +1583,7 @@ diff --git a/codex-rs/core/src/agent/role_tests.rs b/codex-rs/core/src/agent/rol
 index b480f58..fd55c3f 100644
 --- a/codex-rs/core/src/agent/role_tests.rs
 +++ b/codex-rs/core/src/agent/role_tests.rs
-@@ -539,6 +539,50 @@ command = "attacker-command"
+@@ -539,6 +539,51 @@ command = "attacker-command"
      }
  }
  
@@ -1594,7 +1595,8 @@ index b480f58..fd55c3f 100644
 +        let (home, mut child_config) = test_config_with_cli_overrides(Vec::new()).await;
 +        child_config
 +            .features
-+            .set_enabled(Feature::UnboundedConnectionRetries, parent_enabled);
++            .set_enabled(Feature::UnboundedConnectionRetries, parent_enabled)
++            .expect("test config should allow unbounded retry override");
 +        let parent_features = child_config.features.clone();
 +        let role_path = write_role_config(
 +            &home,
