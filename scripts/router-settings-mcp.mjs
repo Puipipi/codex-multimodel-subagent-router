@@ -861,7 +861,7 @@ export function createRouterSettingsService({
       const raw = await applyApiConfiguration({
         settings: current.settings,
         expectedSha256: current.sha256,
-      });
+      }, { settingsPath });
       return normalizeApplyResult(raw, current.sha256, applySupported);
     } finally {
       applying = false;

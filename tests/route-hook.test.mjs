@@ -265,6 +265,18 @@ ok(peakNotice.includes(peakAt.toISOString()), 'notice includes the evaluated ins
 equal(notificationKey(peakRoute), 'peak|luna|schedule', 'notification key is stable');
 ok(notificationKey({ ...peakRoute, phase: 'valley' }) !== notificationKey(peakRoute), 'phase changes the key');
 ok(notificationKey({ ...peakRoute, source: 'session_override' }) !== notificationKey(peakRoute), 'source changes the key');
+const fixedRoute = {
+  phase: 'fixed',
+  executor: 'luna',
+  source: 'fixed',
+  reason: 'fixed executor selection; calendar not consulted',
+  timezone: 'Asia/Shanghai',
+};
+const fixedNotice = buildNotification(fixedRoute, peakAt);
+ok(fixedNotice.includes('Schedule: fixed'), 'fixed notice names the fixed phase');
+ok(fixedNotice.includes('fixed executor selection'), 'fixed notice explains the fixed source');
+ok(!fixedNotice.includes('automatic schedule'), 'fixed notice must not claim an automatic schedule');
+ok(fixedNotice.includes('calendar not consulted'), 'fixed notice explains that the calendar is unused');
 equal(isChildExecutor({ model: 'gpt-6-luna' }), true, 'Luna model turns are treated as child work');
 equal(isChildExecutor({ model: 'deepseek/deepseek-flash' }), true, 'native DeepSeek child turns are suppressed');
 equal(isChildExecutor({ model: 'openai/gpt-6.1-sol' }), false, 'Sol model turns are not treated as children');
@@ -345,6 +357,76 @@ try {
   equal(preToolAgain.output, null, 'same PreToolUse phase must not repeat');
 } finally {
   await rm(boundaryDir, { recursive: true, force: true });
+}
+
+// Fixed mode consults no calendar, announces once, and reminds again only when
+// the effective fixed profile changes.
+const fixedHookDir = await mkdtemp(path.join(os.tmpdir(), 'route-hook-fixed-'));
+try {
+  const fixedA = createApiProfile({
+    protocol: 'responses', baseUrl: 'https://api.fixed-a.invalid/v1', model: 'fixed-model-a',
+    reasoning: { supported: ['none'], default: 'none', parameter: 'none' },
+    credential: { type: 'env', name: 'FIXED_A_API_KEY' },
+  });
+  const fixedB = createApiProfile({
+    protocol: 'responses', baseUrl: 'https://api.fixed-b.invalid/v1', model: 'fixed-model-b',
+    reasoning: { supported: ['none'], default: 'none', parameter: 'none' },
+    credential: { type: 'env', name: 'FIXED_B_API_KEY' },
+  });
+  const fixedProfiles = { [fixedA.profileId]: fixedA, [fixedB.profileId]: fixedB };
+  const fixedSettings = (profileId) => ({
+    schemaVersion: 1, mode: 'fixed', fixedExecutor: profileId, profiles: fixedProfiles,
+  });
+  const sessionId = 'fixed-profile-chat';
+  const at = new Date(`2026-10-19T10:30:00${shanghai}`);
+
+  let result = await handleHook({
+    input: inputFor(sessionId),
+    now: at,
+    hookStateDir: fixedHookDir,
+    overrideStateDir: isolatedOverrideDir,
+    routerSettings: fixedSettings(fixedA.profileId),
+  });
+  const firstNotice = result.output?.hookSpecificOutput.additionalContext || '';
+  ok(firstNotice.includes('Schedule: fixed'), 'fixed mode initial notice names the fixed schedule');
+  ok(firstNotice.includes(fixedA.profileId), 'fixed mode notice names the effective profile');
+  ok(!firstNotice.includes('automatic schedule'), 'fixed mode notice never claims an automatic schedule');
+  ok(firstNotice.includes('calendar not consulted'), 'fixed mode notice explains the calendar is unused');
+
+  result = await handleHook({
+    input: inputFor(sessionId),
+    now: new Date(`2026-10-19T11:30:00${shanghai}`),
+    hookStateDir: fixedHookDir,
+    overrideStateDir: isolatedOverrideDir,
+    routerSettings: fixedSettings(fixedA.profileId),
+  });
+  equal(result.output, null, 'unchanged fixed profile is not repeated');
+
+  result = await handleHook({
+    input: inputFor(sessionId),
+    now: at,
+    hookStateDir: fixedHookDir,
+    overrideStateDir: isolatedOverrideDir,
+    routerSettings: fixedSettings(fixedB.profileId),
+  });
+  const changedNotice = result.output?.hookSpecificOutput.additionalContext || '';
+  ok(changedNotice.includes(fixedB.profileId), 'a changed fixed profile is announced');
+  ok(!changedNotice.includes('automatic schedule'), 'a changed fixed profile still avoids the automatic wording');
+
+  result = await handleHook({
+    input: inputFor(sessionId),
+    now: at,
+    hookStateDir: fixedHookDir,
+    overrideStateDir: isolatedOverrideDir,
+    routerSettings: fixedSettings(fixedB.profileId),
+  });
+  equal(result.output, null, 'the changed fixed profile is announced only once');
+
+  const stored = JSON.parse(await readFile(stateFile(fixedHookDir, sessionId), 'utf8'));
+  equal(stored.lastSource, 'fixed', 'fixed notification state records the fixed source');
+  equal(stored.lastPhase, 'fixed', 'fixed notification state records the fixed phase');
+} finally {
+  await rm(fixedHookDir, { recursive: true, force: true });
 }
 
 // Weekend, holiday, and unknown-calendar behavior.

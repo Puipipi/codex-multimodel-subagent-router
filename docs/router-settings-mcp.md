@@ -84,7 +84,7 @@ API 编辑表单的“高级”区提供可选的“上下文预算（tokens）�
 
 ```js
 getExecutorStatus({settings, profileId?})
-applyApiConfiguration({settings, expectedSha256?})
+applyApiConfiguration({settings, expectedSha256?}, {settingsPath})
 ```
 
 - 生产 `plugin-mcp.mjs` 显式注入 `native-api-install.mjs` 的同名函数；`createPluginMcp` 工厂仍可注入 mock 供隔离测试。
@@ -102,7 +102,7 @@ applyApiConfiguration({settings, expectedSha256?})
 - 生产入口注入应用接口后，按钮可用；不兼容 runtime 会在点击时返回明确 unsupported。工厂未注入时 `capabilities.applyApiConfiguration` 为 `false`，按钮禁用。
 - 点击后使用当前保存的 `sha256` revision；stale revision 在调用注入接口前被拒绝，提示重新载入。
 - 同一服务内并发应用只允许一个请求进入生命周期接口；重复点击显示正在进行，不会双重应用。UI 在请求期间禁用按钮。
-- 生产 apply 只把 `{settings, expectedSha256}` 交给生命周期模块；不下载或替换 runtime、不启动或重启 Codex、不调用模型。
+- 生产 apply 把 `{settings, expectedSha256}` 和当前服务的 `settingsPath` 交给生命周期模块，确保保存、读取与应用使用同一路径；不下载或替换 runtime、不启动或重启 Codex、不调用模型。
 
 在已安装且兼容的 runtime 下，lifecycle 的 apply 只应用 owned API profile roles/catalog/provider/Task；不自动下载或安装 runtime，不关闭或重启 Codex，也不调用模型。新增角色需要提示完整重启 Codex 后生效；当前状态读取只报告采用未知。
 

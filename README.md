@@ -34,7 +34,7 @@ The command resolves from the plugin root, so it does not depend on the user's w
 The hook injects a concise `hookSpecificOutput.additionalContext` notice:
 
 - once on the first observation for a chat;
-- again only when the effective phase, executor, or override source changes;
+- again only when the effective phase, executor, API profile, or override source changes;
 - never repeatedly for the same phase, including across `UserPromptSubmit` and `PreToolUse`.
 
 A manual one-task choice or sticky chat override wins over the schedule, and the notice reports the effective executor and source. The hook does not create a new chat, start an idle turn, poll in the background, or interrupt an executing task. An idle chat receives nothing until the user or a tool produces the next hook event. Only a new task should use the newly reported route; a running task can finish after a peak boundary.

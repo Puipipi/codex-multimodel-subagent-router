@@ -170,6 +170,8 @@ The plugin hook runs `scripts/route-hook.mjs` on `UserPromptSubmit` and `PreTool
 
 The notice is sent once on the first observation for a chat and only when the effective phase, executor, or override source changes. A manual choice wins, and a sticky chat override outranks the schedule. The hook does not create a new chat, wake an idle chat, poll in the background, or interrupt a running task; only a new task uses the new route. `additionalContext` is model-visible context, not a UI banner. Per-chat state lives under LocalAppData, uses hashed filenames, and fails silently if unavailable. Set `SOL_LUNA_ROUTE_HOOK_DEBUG=1` only for local debugging.
 
+Fixed mode is reported as a fixed executor selection. It does not consult the holiday calendar, never claims an automatic schedule, and repeats only when the fixed API profile changes.
+
 Hook payloads expose `session_id` and `model`, not a reliable main/subagent role. Native Luna and `deepseek/deepseek-flash` child turns are suppressed by model name. A main chat intentionally using those models is therefore also silent. Ownership-critical work uses the native task state and the trusted plugin `_meta.threadId` where available.
 
 ## Legacy DSH compatibility

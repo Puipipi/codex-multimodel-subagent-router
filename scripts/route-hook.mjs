@@ -103,9 +103,11 @@ export function buildNotification(route, at) {
       ? 'one-time explicit override'
       : route.source === 'calendar_missing'
         ? 'conservative fallback because the holiday calendar is missing'
-        : 'automatic schedule';
+        : route.source === 'fixed'
+          ? 'fixed executor selection; the peak/valley calendar is not used'
+          : 'automatic schedule';
   const timezone = route.timezone || 'Asia/Shanghai';
-  return `[sol-luna-deepseek-router] Schedule: ${schedule}. Effective executor for new coding tasks: ${executor} (${source}). Evaluated at ${at.toISOString()} (${timezone}). Already running tasks are not interrupted; this chat is reminded again only after the effective schedule or executor changes.`;
+  return `[sol-luna-deepseek-router] Schedule: ${schedule}. Effective executor for new coding tasks: ${executor} (${source}). Evaluated at ${at.toISOString()} (${timezone}). Already running tasks are not interrupted; this chat is reminded again only after the effective schedule, executor, or API profile changes.`;
 }
 
 /**

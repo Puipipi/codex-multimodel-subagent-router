@@ -542,8 +542,8 @@ try {
             detail: "mock unavailable status",
           };
       },
-      applyApiConfiguration: async args => {
-        applyCalls.push(args);
+      applyApiConfiguration: async (args, dependencies) => {
+        applyCalls.push({ args, dependencies });
         await applyGate;
         return {applied: true, restartRequired: true, detail: "mock apply sk-apply-secret-1234567890"};
       },
@@ -646,6 +646,13 @@ try {
       equal(firstPayload.applied, true, "the first apply reaches the injected lifecycle");
       equal(firstPayload.supported, true, "an injected apply reports support");
       equal(firstPayload.restartRequired, true, "the apply result carries the restart requirement");
+      equal(
+        path.resolve(applyCalls[0].dependencies?.settingsPath || ""),
+        path.resolve(injectedSettings),
+        "apply receives the service's custom settings path",
+      );
+      ok(applyCalls[0].args.settings.profiles[injectedProfileId],
+        "apply receives the current settings snapshot");
       doesNotMatch(firstPayload.detail, /sk-apply-secret-1234567890/,
         "apply details redact credential-shaped text");
 
