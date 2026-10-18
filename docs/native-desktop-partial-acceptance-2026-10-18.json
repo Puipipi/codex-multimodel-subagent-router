@@ -69,12 +69,26 @@
     "includes_third_turn_or_audit": false,
     "codex_quota_percentage": null
   },
+  "live_route_hook_acceptance": {
+    "scope": "same_parent_chat_real_hook_events",
+    "event_count": 4,
+    "sticky_deepseek_override_notice": true,
+    "sticky_luna_override_notice": true,
+    "automatic_valley_deepseek_notice": true,
+    "route_reset_used_for_schedule_observation": true,
+    "route_decision_used_model_call": false,
+    "child_or_model_api_dispatched": false,
+    "original_luna_sticky_override_restored": true,
+    "full_peak_boundary_observed": false,
+    "multi_chat_hook_isolation_verified": false,
+    "notification_channel": "real_pre_tool_use_developer_context",
+    "acceptance_record": "native-live-route-hook-acceptance-2026-10-18.md"
+  },
   "pending_acceptance": [
     "new_child_entry_discovery",
     "historical_message_clickability",
     "full_cold_start_recovery",
-    "multi_chat_desktop_isolation",
-    "hooks_notification"
+    "multi_chat_desktop_isolation"
   ],
   "desktop_acceptance": false
 }
