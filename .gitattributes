@@ -1,1 +1,2 @@
 patches/*.patch text eol=lf
+tests/fixtures/native-gateway-task-0.10.3.mjs -text
