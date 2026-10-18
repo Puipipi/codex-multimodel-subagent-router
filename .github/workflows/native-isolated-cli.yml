@@ -149,8 +149,8 @@ jobs:
             throw 'Expected the native API profile tests to report a test count.'
           }
           $count = [int]$matches[1]
-          if ($count -ne 6) {
-            throw "Expected 6 native API profile tests, ran $count."
+          if ($count -ne 8) {
+            throw "Expected 8 native API profile tests, ran $count."
           }
           if ($testExit -ne 0) { exit $testExit }
 

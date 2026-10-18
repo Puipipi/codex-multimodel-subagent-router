@@ -420,20 +420,21 @@ index 70cf8b7..69aa9ab 100644
 +    }
 +}
 diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/control_tests.rs
-index 6d97ece..6e8195c 100644
+index 6d97ece..4b03c00 100644
 --- a/codex-rs/core/src/agent/control_tests.rs
 +++ b/codex-rs/core/src/agent/control_tests.rs
-@@ -3,6 +3,9 @@ use crate::CodexThread;
+@@ -3,6 +3,10 @@ use crate::CodexThread;
  use crate::StateDbHandle;
  use crate::ThreadManager;
  use crate::agent::agent_status_from_event;
 +use crate::agent::child_config::SpawnConfigOptions;
 +use crate::agent::child_config::SpawnConfigVersion;
 +use crate::agent::child_config::prepare_agent_spawn_config;
++use crate::agent::native_deepseek::apply_native_deepseek_child_config;
  use crate::agent::api::AgentControl;
  use crate::agent::api::AgentInfo;
  use crate::agent::api::AgentInput;
-@@ -21,6 +24,7 @@ use crate::agent_communication::AgentCommunicationKind;
+@@ -21,6 +25,7 @@ use crate::agent_communication::AgentCommunicationKind;
  use crate::config::AgentRoleConfig;
  use crate::config::Config;
  use crate::config::ConfigBuilder;
@@ -441,7 +442,7 @@ index 6d97ece..6e8195c 100644
  use crate::context::ContextualUserFragment;
  use crate::context::ManagedDeveloperInstructions;
  use crate::context::MultiAgentRoleInstructions;
-@@ -41,6 +45,9 @@ use codex_extension_api::LoadedUserInstructions;
+@@ -41,6 +46,9 @@ use codex_extension_api::LoadedUserInstructions;
  use codex_extension_api::ThreadInstructionsProvider;
  use codex_extension_api::empty_extension_registry;
  use codex_features::Feature;
@@ -451,7 +452,7 @@ index 6d97ece..6e8195c 100644
  use codex_history::CompactedItem;
  use codex_history::InitialHistory;
  use codex_history::ResumedHistory;
-@@ -56,6 +63,7 @@ use codex_protocol::config_types::CollaborationMode;
+@@ -56,6 +64,7 @@ use codex_protocol::config_types::CollaborationMode;
  use codex_protocol::config_types::ModeKind;
  use codex_protocol::config_types::ReasoningSummary;
  use codex_protocol::config_types::Settings;
@@ -459,7 +460,7 @@ index 6d97ece..6e8195c 100644
  use codex_protocol::error::AgentErrorContext;
  use codex_protocol::error::CodexErrKind;
  use codex_protocol::error::CodexErrorDetails;
-@@ -74,7 +82,9 @@ use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+@@ -74,7 +83,9 @@ use codex_protocol::models::InternalChatMessageMetadataPassthrough;
  use codex_protocol::models::MessagePhase;
  use codex_protocol::models::PermissionProfile;
  use codex_protocol::models::ResponseItem;
@@ -469,7 +470,7 @@ index 6d97ece..6e8195c 100644
  use codex_protocol::protocol::AskForApproval;
  use codex_protocol::protocol::EnvironmentConfigState;
  use codex_protocol::protocol::ErrorEvent;
-@@ -1214,17 +1224,18 @@ enum V2ReloadRoute {
+@@ -1214,17 +1225,18 @@ enum V2ReloadRoute {
      NestedParent,
  }
  
@@ -490,7 +491,7 @@ index 6d97ece..6e8195c 100644
          Some(task_name.to_string()),
      )
      .expect("child source");
-@@ -1242,6 +1253,16 @@ async fn spawn_v2_reload_test_child(
+@@ -1242,6 +1254,16 @@ async fn spawn_v2_reload_test_child(
          .expect("spawn_agent should succeed")
  }
  
@@ -507,7 +508,7 @@ index 6d97ece..6e8195c 100644
  async fn check_v2_agent_reload(route: V2ReloadRoute) {
      let (home, mut config) = test_config().await;
      let _ = config.features.enable(Feature::MultiAgentV2);
-@@ -6051,3 +6072,332 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails()
+@@ -6051,3 +6073,525 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails()
          .await
          .expect("tree shutdown after partial subtree resume should succeed");
  }
@@ -532,11 +533,13 @@ index 6d97ece..6e8195c 100644
 +    path: &std::path::Path,
 +    role: &str,
 +    model: &str,
-+    effort: &str,
++    effort: Option<&str>,
 +) {
-+    let contents = format!(
-+        "name = {role:?}\nmodel = {model:?}\nmodel_reasoning_effort = {effort:?}\n\n[features]\nunbounded_connection_retries = false\n"
-+    );
++    let mut contents = format!("name = {role:?}\nmodel = {model:?}\n");
++    if let Some(effort) = effort {
++        contents.push_str(&format!("model_reasoning_effort = {effort:?}\n"));
++    }
++    contents.push_str("\n[features]\nunbounded_connection_retries = false\n");
 +    std::fs::write(path, contents).expect("write native API role");
 +}
 +
@@ -544,7 +547,8 @@ index 6d97ece..6e8195c 100644
 +    home: &TempDir,
 +    config: &mut Config,
 +    role_model: &str,
-+    role_effort: &str,
++    role_effort: Option<&str>,
++    reasoning_supported: bool,
 +) -> (String, String, ModelsResponse, ModelProviderInfo) {
 +    let role = native_api_role();
 +    let provider_id = native_api_provider_id();
@@ -562,20 +566,27 @@ index 6d97ece..6e8195c 100644
 +    );
 +
 +    let mut model = model_info_from_slug(NATIVE_API_MODEL);
-+    model.supported_reasoning_levels = vec![
-+        ReasoningEffortPreset {
-+            effort: ReasoningEffort::Low,
-+            description: "Low effort".to_string(),
-+        },
-+        ReasoningEffortPreset {
-+            effort: ReasoningEffort::Medium,
-+            description: "Medium effort".to_string(),
-+        },
-+        ReasoningEffortPreset {
-+            effort: ReasoningEffort::High,
-+            description: "High effort".to_string(),
-+        },
-+    ];
++    if reasoning_supported {
++        model.supported_reasoning_levels = vec![
++            ReasoningEffortPreset {
++                effort: ReasoningEffort::Low,
++                description: "Low effort".to_string(),
++            },
++            ReasoningEffortPreset {
++                effort: ReasoningEffort::Medium,
++                description: "Medium effort".to_string(),
++            },
++            ReasoningEffortPreset {
++                effort: ReasoningEffort::High,
++                description: "High effort".to_string(),
++            },
++        ];
++        model.default_reasoning_level = Some(ReasoningEffort::Medium);
++    } else {
++        model.supported_reasoning_levels = Vec::new();
++        model.default_reasoning_level = None;
++        model.multi_agent_reasoning_effort = None;
++    }
 +    model.context_window = Some(64_000);
 +    model.max_context_window = Some(64_000);
 +    let catalog = ModelsResponse { models: vec![model] };
@@ -608,7 +619,7 @@ index 6d97ece..6e8195c 100644
 +    config.service_tier = Some("flex".to_string());
 +    config.web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
 +    let (role, provider_id, _catalog, provider) =
-+        configure_native_api_profile(&home, &mut config, NATIVE_API_MODEL, "medium");
++        configure_native_api_profile(&home, &mut config, NATIVE_API_MODEL, Some("medium"), true);
 +    let harness = AgentControlHarness::new_with_config(home, config.clone()).await;
 +    let (_root_id, thread) = harness.start_thread().await;
 +    let root_before = thread.session.get_config().await;
@@ -683,7 +694,8 @@ index 6d97ece..6e8195c 100644
 +        },
 +    )
 +    .await
-+    .expect_err("native API profile model override must fail");
++    .err()
++    .expect("native API profile model override must fail");
 +    assert!(model_error.contains("omit the model override"));
 +
 +    let effort_error = prepare_agent_spawn_config(
@@ -698,7 +710,8 @@ index 6d97ece..6e8195c 100644
 +        },
 +    )
 +    .await
-+    .expect_err("unsupported native API effort must fail");
++    .err()
++    .expect("unsupported native API effort must fail");
 +    assert!(effort_error.contains("not supported"));
 +
 +    let root_after = thread.session.get_config().await;
@@ -728,7 +741,7 @@ index 6d97ece..6e8195c 100644
 +        .set_permission_profile(PermissionProfile::read_only())
 +        .expect("read-only parent profile");
 +    let (role, provider_id, catalog, provider) =
-+        configure_native_api_profile(&home, &mut config, NATIVE_API_MODEL, "medium");
++        configure_native_api_profile(&home, &mut config, NATIVE_API_MODEL, Some("medium"), true);
 +    let home_path = home.path().to_path_buf();
 +    let harness = AgentControlHarness::new_with_config(home, config.clone()).await;
 +    let (_root_id, root_thread) = harness.start_paginated_thread().await;
@@ -781,7 +794,7 @@ index 6d97ece..6e8195c 100644
 +        &home_path.join("agents").join(format!("{role}.toml")),
 +        &role,
 +        "vendor/role-default-changed",
-+        "low",
++        Some("low"),
 +    );
 +
 +    let mut sender_config = config.clone();
@@ -840,6 +853,187 @@ index 6d97ece..6e8195c 100644
 +    assert_eq!(root_after.service_tier, root_before.service_tier);
 +    assert_eq!(root_after.web_search_mode.value(), WebSearchMode::Cached);
 +}
++
++
++#[tokio::test]
++async fn native_api_none_reasoning_profile_clears_parent_effort() {
++    let (home, mut config) = test_config().await;
++    let _ = config.features.enable(Feature::MultiAgentV2);
++    config.model = Some("gpt-5.6-sol".to_string());
++    config.model_reasoning_effort = Some(ReasoningEffort::XHigh);
++    config.service_tier = Some("flex".to_string());
++    config.web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
++    let (role, provider_id, _catalog, _provider) =
++        configure_native_api_profile(&home, &mut config, NATIVE_API_MODEL, None, false);
++    let harness = AgentControlHarness::new_with_config(home, config.clone()).await;
++    let (_root_id, thread) = harness.start_thread().await;
++    let root_before = thread.session.get_config().await;
++    assert_eq!(
++        root_before.model_reasoning_effort,
++        Some(ReasoningEffort::XHigh)
++    );
++    let turn = thread.session.new_default_turn().await;
++    let step_context = StepContext::for_test(Arc::clone(&turn));
++
++    let prepared = prepare_agent_spawn_config(
++        thread.session.as_ref(),
++        &step_context,
++        SpawnConfigOptions {
++            version: SpawnConfigVersion::V2,
++            full_history_fork: false,
++            role_name: Some(&role),
++            model: None,
++            reasoning_effort: None,
++        },
++    )
++    .await
++    .expect("non-reasoning profile must clear parent effort");
++    assert_eq!(prepared.config.model_reasoning_effort, None);
++    assert_eq!(prepared.config.model_provider_id, provider_id);
++    assert_eq!(prepared.config.service_tier, None);
++    assert_eq!(
++        prepared.config.web_search_mode.value(),
++        WebSearchMode::Disabled
++    );
++
++    let effort_error = prepare_agent_spawn_config(
++        thread.session.as_ref(),
++        &step_context,
++        SpawnConfigOptions {
++            version: SpawnConfigVersion::V2,
++            full_history_fork: false,
++            role_name: Some(&role),
++            model: None,
++            reasoning_effort: Some(ReasoningEffort::High),
++        },
++    )
++    .await
++    .err()
++    .expect("non-reasoning profile must reject an explicit effort");
++    assert!(effort_error.contains("not supported"));
++
++    // Cold resume calls the same child configuration layer with the stored effort.
++    let mut cold_config = prepared.config.clone();
++    cold_config.model_reasoning_effort = Some(ReasoningEffort::XHigh);
++    apply_native_deepseek_child_config(&mut cold_config, Some(&role), false)
++        .expect("non-reasoning catalog must clear stale stored effort");
++    assert_eq!(cold_config.model_reasoning_effort, None);
++    assert_eq!(cold_config.model_provider_id, provider_id);
++
++    let root_after = thread.session.get_config().await;
++    assert_eq!(
++        root_after.model_reasoning_effort,
++        Some(ReasoningEffort::XHigh)
++    );
++}
++
++
++#[tokio::test]
++async fn native_api_none_reasoning_cold_resume_keeps_effort_empty() {
++    let (home, mut config) = test_config().await;
++    let _ = config.features.enable(Feature::MultiAgentV2);
++    let _ = config.features.enable(Feature::Sqlite);
++    config.model = Some("gpt-5.6-sol".to_string());
++    config.model_reasoning_effort = Some(ReasoningEffort::XHigh);
++    config.service_tier = Some("flex".to_string());
++    config.web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
++    config.multi_agent_v2.max_concurrent_threads_per_session = 3;
++    config.permissions.allow_login_shell = true;
++    config
++        .permissions
++        .set_permission_profile(PermissionProfile::read_only())
++        .expect("read-only parent profile");
++    let (role, provider_id, catalog, provider) =
++        configure_native_api_profile(&home, &mut config, NATIVE_API_MODEL, None, false);
++    let harness = AgentControlHarness::new_with_config(home, config.clone()).await;
++    let (_root_id, root_thread) = harness.start_paginated_thread().await;
++    let root_before = root_thread.session.get_config().await;
++    let control = root_thread
++        .session
++        .services
++        .local_agent_runtime
++        .control(root_thread.session.session_id());
++
++    let mut child_config = config.clone();
++    child_config.model = Some(NATIVE_API_MODEL.to_string());
++    child_config.model_provider_id = provider_id.clone();
++    child_config.model_provider = provider.clone();
++    child_config.model_catalog = Some(catalog.clone());
++    // Simulate an old child that still carried the Sol parent's effort.
++    child_config.model_reasoning_effort = Some(ReasoningEffort::XHigh);
++    child_config.service_tier = Some("flex".to_string());
++    let child = spawn_v2_reload_test_child_with_role(
++        &control,
++        child_config,
++        &root_thread,
++        "non-reasoning-worker",
++        Some(&role),
++    )
++    .await;
++    let child_id = child.thread_id;
++    let child_thread = harness
++        .manager
++        .get_thread(child_id)
++        .await
++        .expect("child thread should exist");
++    persist_thread_for_tree_resume(
++        &child_thread,
++        "native API non-reasoning child persisted",
++    )
++    .await;
++    let stored = child_thread
++        .read_thread(/*include_archived*/ true, /*include_history*/ false)
++        .await
++        .expect("child metadata should be readable");
++    assert_eq!(stored.model.as_deref(), Some(NATIVE_API_MODEL));
++    assert_eq!(stored.model_provider, provider_id);
++    child_thread
++        .shutdown_and_wait()
++        .await
++        .expect("child thread should shut down");
++    assert!(harness.manager.remove_thread(&child_id).await.is_some());
++
++    let mut sender_config = config.clone();
++    sender_config.model = Some("gpt-5.6-sol".to_string());
++    sender_config.model_provider_id = "openai".to_string();
++    sender_config.model_provider = sender_config
++        .model_providers
++        .get("openai")
++        .cloned()
++        .expect("openai provider should exist");
++    sender_config.model_reasoning_effort = Some(ReasoningEffort::XHigh);
++    sender_config.service_tier = Some("flex".to_string());
++    let _pin = control
++        .ensure_v2_agent_loaded(sender_config, child_id, /*parent*/ None)
++        .await
++        .expect("non-reasoning API child should reload without an effort");
++
++    let resumed = harness
++        .manager
++        .get_thread(child_id)
++        .await
++        .expect("resumed child should exist");
++    let resumed_config = resumed.session.get_config().await;
++    assert_eq!(resumed_config.model_reasoning_effort, None);
++    assert_eq!(resumed_config.model.as_deref(), Some(NATIVE_API_MODEL));
++    assert_eq!(resumed_config.model_provider_id, provider_id);
++    assert_eq!(resumed_config.service_tier, None);
++    assert_eq!(
++        resumed_config.web_search_mode.value(),
++        WebSearchMode::Disabled
++    );
++    assert_eq!(
++        resumed.session_source.get_agent_role().as_deref(),
++        Some(role.as_str())
++    );
++
++    let root_after = root_thread.session.get_config().await;
++    assert_eq!(
++        root_after.model_reasoning_effort,
++        Some(ReasoningEffort::XHigh)
++    );
++    assert_eq!(root_after.service_tier, root_before.service_tier);
++}
 diff --git a/codex-rs/core/src/agent/mod.rs b/codex-rs/core/src/agent/mod.rs
 index c9a1547..a602cdb 100644
 --- a/codex-rs/core/src/agent/mod.rs
@@ -854,10 +1048,10 @@ index c9a1547..a602cdb 100644
  pub(crate) mod status;
 diff --git a/codex-rs/core/src/agent/native_deepseek.rs b/codex-rs/core/src/agent/native_deepseek.rs
 new file mode 100644
-index 0000000..86fe17e
+index 0000000..2b86152
 --- /dev/null
 +++ b/codex-rs/core/src/agent/native_deepseek.rs
-@@ -0,0 +1,504 @@
+@@ -0,0 +1,511 @@
 +use crate::config::Config;
 +use crate::config::Constrained;
 +use codex_protocol::config_types::WebSearchMode;
@@ -1018,6 +1212,13 @@ index 0000000..86fe17e
 +        return Err(format!(
 +            "{role_name} catalog must contain exactly the configured model `{model_slug}`"
 +        ));
++    }
++    // `parameter = "none"` profiles omit role effort and advertise no reasoning levels.
++    // Clear inherited/stored parent effort instead of validating a value this catalog cannot support.
++    if catalog.models[0].supported_reasoning_levels.is_empty()
++        && catalog.models[0].default_reasoning_level.is_none()
++    {
++        config.model_reasoning_effort = None;
 +    }
 +    if let Some(effort) = config.model_reasoning_effort.as_ref() {
 +        validate_profile_reasoning_effort(role_name, &catalog, effort)?;
