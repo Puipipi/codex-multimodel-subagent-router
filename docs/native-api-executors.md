@@ -266,11 +266,12 @@ These are documented wire rules. They do not prove that a real generic API
 role, account credential, gateway, and model endpoint have completed
 end-to-end acceptance.
 
-Chat Completions profiles are adapted to a stateless Chat request. Codex's
-built-in web search is not representable by that adapter; the gateway reports
-an explicit unsupported-parameter error instead of forwarding it. Use a
-Responses profile when web search is required. The local smoke fixture disables
-web search explicitly.
+Chat Completions profiles are adapted to a stateless Chat request. The first
+version disables Codex built-in web search for all API children, for both
+Responses and Chat Completions profiles; the gateway reports an explicit
+unsupported-parameter error instead of forwarding an unavailable search tool.
+Do not infer search support from the Responses wire shape. The local smoke
+fixture disables web search explicitly.
 
 ## Verification and current limits
 
@@ -310,10 +311,10 @@ rather than silently skipping when enabled without both values.
 
 The smoke's private `CODEX_HOME` sets `web_search = "disabled"`. It therefore
 proves the adapter paths with search off; it does not prove the root
-`cached`/`auto` web-search inheritance case. Keeping that tool out of a Chat
-child belongs to the runtime/provider fix, not to this adapter smoke.
+`cached`/`auto` web-search inheritance case. Keeping that tool out of every API
+child belongs to the runtime/provider boundary, not to this adapter smoke.
 
 New-role end-to-end acceptance must wait for a build of the current Rust patch,
 a full application restart, and a real desktop run. README/SKILL product
-onboarding for the generic API panel is a separate next stage; this backend
-does not claim that UI or desktop acceptance is complete.
+guidance is integrated; this backend does not claim that UI or desktop
+acceptance is complete.
