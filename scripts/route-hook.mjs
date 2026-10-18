@@ -77,7 +77,9 @@ function trimReason(reason) {
  * is intentionally excluded so repeated hooks in one phase stay silent.
  */
 export function notificationKey(route) {
-  return [route.phase, route.executor, route.source].join('|');
+  const key = [route.phase, route.executor, route.source];
+  if (route.executor === 'api' && typeof route.profileId === 'string') key.push(route.profileId);
+  return key.join('|');
 }
 
 /**
@@ -89,7 +91,11 @@ export function buildNotification(route, at) {
   const schedule = route.phase === 'unknown'
     ? `unknown${reason ? ` (${reason})` : ''}`
     : `${route.phase}${reason ? ` (${reason})` : ''}`;
-  const executor = route.executor === 'deepseek' ? 'native DeepSeek gateway' : 'native Luna';
+  const executor = route.executor === 'deepseek'
+    ? 'native DeepSeek gateway'
+    : route.executor === 'api'
+      ? `native API profile ${route.profileLabel || route.profileId || 'unknown'}`
+      : 'native Luna';
   const source = route.source === 'session_override'
     ? 'sticky chat override; it outranks the automatic schedule'
     : route.source === 'one_time_override'
@@ -112,7 +118,7 @@ export function isChildExecutor(input) {
   if (/luna|deepseek/i.test(model)) return true;
   for (const key of ['agent_type', 'agent_role', 'subagent_type']) {
     const value = input?.[key];
-    if (typeof value === 'string' && /luna|deepseek|subagent/i.test(value)) return true;
+    if (typeof value === 'string' && (/luna|deepseek|subagent/i.test(value) || /^native_api_[a-f0-9]{24}$/.test(value))) return true;
   }
   return false;
 }

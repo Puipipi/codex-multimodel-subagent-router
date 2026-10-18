@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PICKER_SLUG } from "./native-routing.mjs";
 import { ensureNativeDeepseekDispatch } from "./native-isolated-install.mjs";
+import { loadRouterSettings } from "./native-api-settings.mjs";
 
 const LUNA_MAP = {
   "gpt-6.1-sol": "gpt-6-luna",
@@ -21,7 +22,7 @@ export function modelsFromCache(cache) {
   return cache.models.map((model) => model?.slug).filter((slug) => typeof slug === "string");
 }
 
-export function resolveNativeAgent({ executor, mainModel, models = [] }) {
+export function resolveNativeAgent({ executor, mainModel, models = [], apiProfiles = {} }) {
   if (executor === "deepseek") {
     return {
       executor: "deepseek",
@@ -30,7 +31,22 @@ export function resolveNativeAgent({ executor, mainModel, models = [] }) {
       resolved_model: PICKER_SLUG,
     };
   }
-  if (executor !== "luna") throw new Error("executor must be luna or deepseek");
+  if (executor !== "luna" && executor !== "deepseek") {
+    if (typeof executor !== "string" || !executor.trim()) {
+      throw new Error("executor must be luna, deepseek, or a configured API profile");
+    }
+    const profile = apiProfiles[executor]
+      || Object.values(apiProfiles).find((candidate) => candidate.aliases?.includes(executor));
+    if (!profile) throw new Error("unknown API profile; refusing executor fallback");
+    return {
+      executor: "api",
+      profile_id: profile.profileId,
+      provider_id: `api-native-${profile.profileId}`,
+      agent_type: `native_api_${profile.profileId}`,
+      resolved_model: profile.model,
+      fork_turns: "none",
+    };
+  }
   const available = new Set(models);
   const preferred = LUNA_MAP[mainModel];
   const lunaModels = models.filter((slug) => /luna/i.test(slug));
@@ -52,6 +68,9 @@ async function main(argv) {
   };
   const executor = get("executor");
   const mainModel = get("main-model");
+  if (typeof executor !== "string" || !executor.trim()) {
+    throw new Error("executor must be luna, deepseek, or a configured API profile");
+  }
   if (executor === "deepseek") {
     const journalFlagAt = argv.indexOf("--install-journal");
     let journalPath;
@@ -66,7 +85,12 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel, models: [] }))}\n`);
     return;
   }
-  if (executor !== "luna") throw new Error("executor must be luna or deepseek");
+  if (executor !== "luna") {
+    const settings = await loadRouterSettings(get("settings"));
+    const result = resolveNativeAgent({ executor, mainModel, apiProfiles: settings.profiles });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
   const cacheAt = path.resolve(get("models-cache", defaultModelsCachePath()));
   if (!existsSync(cacheAt)) throw new Error(`models_cache.json is missing at ${cacheAt}; Luna resolution never substitutes a model`);
   const cache = JSON.parse(readFileSync(cacheAt, "utf8"));

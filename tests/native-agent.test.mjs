@@ -38,6 +38,8 @@ equal(deepseek.resolved_model, "deepseek/deepseek-flash", "role metadata identif
 equal(deepseek.fork_turns, "none", "DeepSeek child has no inherited turns");
 assert.throws(() => resolveNativeAgent({ executor: "luna", mainModel: "x", models: ["gpt-6.1-sol"] }), /No supported native Luna/);
 checks += 1;
+assert.throws(() => resolveNativeAgent({}), /executor must be luna, deepseek, or a configured API profile/);
+checks += 1;
 
 const catalog = mergeCatalog(cache);
 equal(catalog.models.length, 4, "catalog preserves every native model and adds DeepSeek");

@@ -490,8 +490,8 @@ equal(config.hooks.UserPromptSubmit[0].hooks[0].timeout, 10, 'hook timeout is bo
 equal(config.hooks.PreToolUse[0].hooks[0].additionalContextLimit, 2000, 'hook context is bounded');
 
 // The command must work from the plugin root rather than the user's workspace,
-// including a plugin path with spaces. Copy just the two runtime modules into a
-// temporary plugin-shaped tree and launch from an unrelated directory.
+// including a plugin path with spaces. Copy the route runtime dependency set
+// into a temporary plugin-shaped tree and launch from an unrelated directory.
 const spaceRoot = await mkdtemp(path.join(os.tmpdir(), 'route-hook-space-'));
 try {
   const pluginRoot = path.join(spaceRoot, 'plugin root with spaces');
@@ -501,6 +501,9 @@ try {
   await mkdir(unrelated, { recursive: true });
   await cp(path.join(repoRoot, 'scripts', 'route-hook.mjs'), path.join(pluginScripts, 'route-hook.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'route.mjs'), path.join(pluginScripts, 'route.mjs'));
+  await cp(path.join(repoRoot, 'scripts', 'native-api-settings.mjs'), path.join(pluginScripts, 'native-api-settings.mjs'));
+  await cp(path.join(repoRoot, 'scripts', 'native-credentials.mjs'), path.join(pluginScripts, 'native-credentials.mjs'));
+  await cp(path.join(repoRoot, 'scripts', 'plugin-state.mjs'), path.join(pluginScripts, 'plugin-state.mjs'));
   const stateDir = path.join(spaceRoot, 'hook state');
   const overrideDir = path.join(spaceRoot, 'override state');
   const now = `2026-10-19T12:00:00${shanghai}`;
