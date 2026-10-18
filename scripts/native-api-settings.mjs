@@ -7,7 +7,7 @@ import { withFileLock, writeJsonAtomic } from "./plugin-state.mjs";
 
 const PROFILE_ID = /^[a-f0-9]{24}$/;
 const REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
-const PROFILE_FIELDS = new Set(["profileId", "protocol", "baseUrl", "model", "reasoning", "credential", "label", "aliases"]);
+const PROFILE_FIELDS = new Set(["profileId", "protocol", "baseUrl", "model", "reasoning", "credential", "label", "aliases", "contextWindow"]);
 const ROOT_FIELDS = new Set(["schemaVersion", "mode", "fixedExecutor", "schedule", "profiles"]);
 const SELECTORS = new Set(["luna", "deepseek"]);
 
@@ -39,6 +39,7 @@ function canonicalProfile(profile) {
     model: profile.model,
     reasoning: profile.reasoning,
     credential: profile.credential,
+    ...(profile.contextWindow === undefined ? {} : { contextWindow: profile.contextWindow }),
   };
 }
 
@@ -101,6 +102,10 @@ function validateProfile(profile, key) {
   if (!reasoning.supported.includes(reasoning.default)) throw new Error("reasoning.default must be in reasoning.supported");
   if (!new Set(["none", "reasoning_effort", "reasoning"]).has(reasoning.parameter)) throw new Error("reasoning.parameter is invalid");
   validateCredential(profile.credential, profile.baseUrl, profile.protocol);
+  if (profile.contextWindow !== undefined
+      && (!Number.isSafeInteger(profile.contextWindow) || profile.contextWindow < 1_024 || profile.contextWindow > 2_000_000)) {
+    throw new Error("contextWindow must be an integer from 1024 to 2000000");
+  }
   if (profile.label !== undefined && (typeof profile.label !== "string" || !profile.label.trim())) throw new Error("profile label must be non-empty text");
   if (profile.aliases !== undefined && (!Array.isArray(profile.aliases)
       || profile.aliases.some((alias) => typeof alias !== "string" || !alias.trim())

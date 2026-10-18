@@ -39,6 +39,13 @@ equal(profile.profileId.length, 24, "profile id is a short stable SHA-256 prefix
 ok(/^[a-f0-9]{24}$/.test(profile.profileId), "profile id is lowercase hex");
 equal(createApiProfile(apiDefinition).profileId, profile.profileId, "labels do not affect the profile identity");
 equal(createApiProfile({ ...apiDefinition, model: "mimo-v2-lite" }).profileId === profile.profileId, false, "wire model changes create a new profile identity");
+const explicitWindow = createApiProfile({ ...apiDefinition, contextWindow: 2_048 });
+equal(explicitWindow.contextWindow, 2_048, "an explicit context budget is preserved");
+equal(explicitWindow.profileId === profile.profileId, false, "an explicit context budget participates in the canonical profile id");
+equal(validateRouterSettings({ schemaVersion: 1, mode: "auto", fixedExecutor: null, profiles: { [profile.profileId]: profile } }).profiles[profile.profileId].contextWindow, undefined,
+  "profiles without contextWindow keep their existing definition and id");
+throws(() => createApiProfile({ ...apiDefinition, contextWindow: 1_023 }), /1024/, "context budgets below the locked range are rejected");
+throws(() => createApiProfile({ ...apiDefinition, contextWindow: 2_000_001 }), /2000000/, "context budgets above the locked range are rejected");
 
 const fixed = {
   schemaVersion: 1,
