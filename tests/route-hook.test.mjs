@@ -379,6 +379,18 @@ try {
   });
   const sessionId = 'fixed-profile-chat';
   const at = new Date(`2026-10-19T10:30:00${shanghai}`);
+  const scheduledSettings = {
+    schemaVersion: 1, mode: 'scheduled',
+    schedule: { peak: 'luna', valley: 'deepseek' },
+    profiles: fixedProfiles,
+  };
+  const peakSchedule = await decideRoute({ at, routerSettings: scheduledSettings });
+  const valleySchedule = await decideRoute({
+    at: new Date(`2026-10-19T13:30:00${shanghai}`),
+    routerSettings: scheduledSettings,
+  });
+  equal(peakSchedule.phase, 'peak', 'the first fixed-mode evaluation coincides with a peak phase');
+  equal(valleySchedule.phase, 'valley', 'the second fixed-mode evaluation coincides with a valley phase');
 
   let result = await handleHook({
     input: inputFor(sessionId),
@@ -395,12 +407,12 @@ try {
 
   result = await handleHook({
     input: inputFor(sessionId),
-    now: new Date(`2026-10-19T11:30:00${shanghai}`),
+    now: new Date(`2026-10-19T13:30:00${shanghai}`),
     hookStateDir: fixedHookDir,
     overrideStateDir: isolatedOverrideDir,
     routerSettings: fixedSettings(fixedA.profileId),
   });
-  equal(result.output, null, 'unchanged fixed profile is not repeated');
+  equal(result.output, null, 'fixed profile stays silent across a peak-to-valley boundary');
 
   result = await handleHook({
     input: inputFor(sessionId),
