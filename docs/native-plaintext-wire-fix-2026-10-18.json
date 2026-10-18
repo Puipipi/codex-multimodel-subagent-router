@@ -54,8 +54,8 @@
     "http_403_established": false
   },
   "pending_acceptance": [
-    "specific failed check from the real API acceptance run (not retained)",
-    "real same-child follow-up and file proof",
+    "underlying cause of the patch 65 discover-and-verify failures (first-run assertion detail not retained; later check_id child_proof_write_evidence retained but underlying cause unresolved)",
+    "real file proof and same-child follow-up (later attempts did not reach either)",
     "cold resume",
     "formal installation",
     "desktop panel/history and multiple sessions",

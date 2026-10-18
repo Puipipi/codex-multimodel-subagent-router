@@ -86,11 +86,50 @@ provider responses and a completed child turn are useful real-API observations,
 but they do not establish complete acceptance, file proof, formal installation,
 or desktop behavior.
 
+## Later real API attempts (runs 2 and 3)
+
+Two later runs of the same patch 65 candidate again stopped at
+`discover_and_verify_child`. In both, the parent completed and one child was
+observed with role `native_deepseek`, provider `deepseek-native`, and model
+`deepseek/deepseek-flash`; the child completed its turn without an error. The
+granular spawn checks passed: one native `spawn_agent`, the expected role and
+task name, `fork_turns=none`, no model override, and the Chinese instruction
+suffix exactly once. The overall child-discovery gate did not pass, and the
+retained failure `check_id` was `child_proof_write_evidence`; the underlying
+reason that proof was unavailable remains unknown.
+
+Neither run established file proof: the expected proof file was absent and
+`child_proof_write_evidence` was false. `thread/read` exposed no
+command-execution or file-change items, but that projection can omit ordinary
+tool errors; this does not prove the model made no tool call. No same-child
+follow-up or cold resume was reached. Each run recorded four DeepSeek HTTP 200
+responses, with zero OpenAI-through-gateway, relay, or denied requests. This
+does not mean zero Sol usage: run 2's parent used 51,142 total tokens (50,798
+input, 33,408 cached input, 344 output), and run 3's parent used 68,243
+(67,895 input, 63,232 cached input, 348 output). DeepSeek usage was 496,611
+tokens in run 2 and 495,436 in run 3. All four cleanup checks passed and
+stderr was empty for both runs.
+
+In run 3, the generated child catalog reported shell type `unified_exec` and a
+null tool mode. That static catalog field is not evidence of a resolved
+runtime. Its request diagnostic sampled 128 items, at the sample cap, with the
+complete total unknown: 122 function items, one custom item, and five
+namespace items. `exec_command`, `write_stdin`, and `apply_patch` were seen;
+visibility of other tools is unknown because the sample was truncated. The
+four input function-item counts were 0, 1, 1, and 2; custom-item counts were
+0, 0, 1, and 1. The request choice was `auto` and `encrypted=false`. Four SSE
+monitors reached `SSE_LINE_LIMIT` with truncated samples; their zero counters
+are unknown, not proof that no call occurred. Although the failed check ID is
+known, the underlying tool-execution cause remains unresolved. Pause further
+paid runs until a larger fixture and a free actual-CLI file-dispatch check are
+available.
+
 ## Remaining acceptance
 
-- Identify the specific failed assertion from the discover-and-verify stage if
-  a future run retains it safely.
-- Verify real same-child follow-up and file proof, then cold resume.
+- Identify the underlying cause of the failed discover-and-verify stage; the
+  first run's assertion was not retained, and later runs still did not prove
+  file writing.
+- Verify real file proof, same-child follow-up, and cold resume.
 - Complete formal installation, desktop panel/history, and multiple-session
   acceptance.
 - Exercise formal fault cases and the peak/off-peak notification demonstration.

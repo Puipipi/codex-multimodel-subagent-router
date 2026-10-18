@@ -121,9 +121,134 @@
     "complete_acceptance": false,
     "file_proof_check_result": "unknown_not_retained"
   },
+  "later_real_api_attempts": [
+    {
+      "ordinal": 2,
+      "status": "failed",
+      "stage": "discover_and_verify_child",
+      "failure_check_retained": true,
+      "failure_check_id": "child_proof_write_evidence",
+      "underlying_cause_known": false,
+      "parent_completed": true,
+      "overall_child_discovery_gate_passed": false,
+      "child_count_observed": 1,
+      "child": {
+        "role": "native_deepseek",
+        "provider": "deepseek-native",
+        "model": "deepseek/deepseek-flash",
+        "role_provider_model_validation_passed": true,
+        "last_turn_completed_without_error": true
+      },
+      "spawn_validation": {
+        "native_spawn_count": 1,
+        "task_name_matches": true,
+        "agent_role_matches": true,
+        "chinese_instruction_suffix_matches": true,
+        "instruction_occurrences": 1,
+        "fork_turns_none": true,
+        "model_override_absent": true
+      },
+      "file_proof": {
+        "proof_file_exists": false,
+        "child_proof_write_evidence": false,
+        "thread_read_command_execution_items": 0,
+        "thread_read_file_change_items": 0,
+        "model_tool_call_absence": "unknown_thread_read_projection_may_omit_ordinary_tool_errors"
+      },
+      "same_child_followup_reached": false,
+      "cold_resume_reached": false,
+      "gateway": {
+        "requests": 4,
+        "deepseek_http_requests": 4,
+        "deepseek_http_statuses": [200, 200, 200, 200],
+        "openai_through_gateway_requests": 0,
+        "relay_requests": 0,
+        "denied_requests": 0
+      },
+      "usage": {
+        "parent": {"total_tokens": 51142, "input_tokens": 50798, "cached_input_tokens": 33408, "output_tokens": 344},
+        "deepseek_child": {"total_tokens": 496611, "input_tokens": 495156, "cached_input_tokens": 490880, "output_tokens": 1455, "reasoning_tokens": 534}
+      },
+      "cleanup": {"auth_copy_removed": true, "app_server_closed": true, "gateway_closed": true, "run_directory_removed": true},
+      "cleanup_complete": true,
+      "stderr_bytes": 0
+    },
+    {
+      "ordinal": 3,
+      "status": "failed",
+      "stage": "discover_and_verify_child",
+      "failure_check_retained": true,
+      "failure_check_id": "child_proof_write_evidence",
+      "underlying_cause_known": false,
+      "parent_completed": true,
+      "overall_child_discovery_gate_passed": false,
+      "child_count_observed": 1,
+      "child": {
+        "role": "native_deepseek",
+        "provider": "deepseek-native",
+        "model": "deepseek/deepseek-flash",
+        "role_provider_model_validation_passed": true,
+        "last_turn_completed_without_error": true
+      },
+      "spawn_validation": {
+        "native_spawn_count": 1,
+        "task_name_matches": true,
+        "agent_role_matches": true,
+        "chinese_instruction_suffix_matches": true,
+        "instruction_occurrences": 1,
+        "fork_turns_none": true,
+        "model_override_absent": true
+      },
+      "file_proof": {
+        "proof_file_exists": false,
+        "child_proof_write_evidence": false,
+        "thread_read_command_execution_items": 0,
+        "thread_read_file_change_items": 0,
+        "model_tool_call_absence": "unknown_thread_read_projection_may_omit_ordinary_tool_errors"
+      },
+      "same_child_followup_reached": false,
+      "cold_resume_reached": false,
+      "gateway": {
+        "requests": 4,
+        "deepseek_http_requests": 4,
+        "deepseek_http_statuses": [200, 200, 200, 200],
+        "openai_through_gateway_requests": 0,
+        "relay_requests": 0,
+        "denied_requests": 0
+      },
+      "usage": {
+        "parent": {"total_tokens": 68243, "input_tokens": 67895, "cached_input_tokens": 63232, "output_tokens": 348},
+        "deepseek_child": {"total_tokens": 495436, "input_tokens": 494449, "cached_input_tokens": 490368, "output_tokens": 987, "reasoning_tokens": 322}
+      },
+      "runtime_observation_limits": {
+        "generated_child_catalog_shell_type": "unified_exec",
+        "generated_child_catalog_tool_mode": null,
+        "catalog_is_resolved_runtime_evidence": false,
+        "request_sample": {
+          "item_count": 128,
+          "at_sample_cap": true,
+          "complete_total_item_count": "unknown",
+          "observed_item_types": {"function": 122, "custom": 1, "namespace": 5},
+          "tools_seen": {"exec_command": true, "write_stdin": true, "apply_patch": true},
+          "other_tool_visibility": "unknown_sample_truncated",
+          "input_function_item_counts": [0, 1, 1, 2],
+          "input_custom_item_counts": [0, 0, 1, 1],
+          "choice": "auto",
+          "encrypted": false
+        },
+        "sse_monitors_at_line_limit": 4,
+        "sse_samples_truncated": 4,
+        "zero_sse_counters_mean": "unknown"
+      },
+      "cleanup": {"auth_copy_removed": true, "app_server_closed": true, "gateway_closed": true, "run_directory_removed": true},
+      "cleanup_complete": true,
+      "stderr_bytes": 0
+    }
+  ],
   "pending_acceptance": [
-    "retain and identify the specific failed discover_and_verify_child assertion",
-    "real same-child follow-up and file proof",
+    "identify the underlying cause of the failed discover_and_verify_child gate",
+    "use a larger fixture and a free actual-CLI file-dispatch check before another paid run",
+    "real file proof and same-child follow-up",
     "cold resume",
     "formal installation",
     "desktop panel/history and multiple sessions",

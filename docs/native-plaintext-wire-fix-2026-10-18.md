@@ -55,7 +55,10 @@ end-to-end fix.
 
 A separate earlier real run stopped at the gateway preflight. The previous
 matcher did not expose a child-level response error, so no real API child HTTP
-403 was observed or established. The candidate's real API attempt is reported
-separately; its final assertion failed without retaining the specific check.
-Real same-child follow-up, file proof, cold resume, installation, and desktop
-acceptance remain pending.
+403 was observed or established. The candidate's first real API attempt and
+two later attempts are reported in the [runtime evidence](native-plaintext-runtime-2026-10-18.md).
+The later attempts again failed at child discovery/verification: child proof
+was not established, and no follow-up or cold resume was reached. Their
+retained failure check was `child_proof_write_evidence`; the underlying reason
+proof was unavailable remains unknown. Real file proof, same-child follow-up,
+cold resume, installation, and desktop acceptance remain pending.
