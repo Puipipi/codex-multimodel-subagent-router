@@ -32,6 +32,8 @@ smoke 完成后，`prepare` 仅对路径校验通过的本次临时 fixture 删�
 
 后续稳定 source binding 与实际 Task source-switch 的主机记录见[稳定网关验收](native-stable-gateway-acceptance-2026-10-18.md)；部分 Task 故障与本机 TCP 结果见[故障验收记录](native-formal-fault-acceptance-2026-10-18.md)。后者明确区分通过的恢复/transport 场景与尚未通过的自动 Task restart，不代表完整故障矩阵或桌面验收。稳定记录所述主机当前 Task 已指向 `native-isolated` 下的内容寻址 bundle，不再从 0.10.2 或 0.10.3 plugin cache 加载 gateway 模块；五个 bundle 文件与 0.10.3 插件源码逐字节一致。此结论仅适用于该主机的当前 Task，不能单独作为删除旧 cache 的依据。root Sol 配置连接和已暂存 runtime 文件未变。HKCU 计划值均匹配，但仍运行的 CLI 进程继承值未刷新；未来新 chat 继承环境前仍须完全退出并重启 Codex。该记录不代表 desktop acceptance。
 
+该主机的 0.10.4 插件包更新快照见[0.10.4 package 更新记录](native-plugin-update-0.10.4-2026-10-18.md)及其[结构化回执](native-plugin-update-0.10.4-2026-10-18.json)。它记录插件包/standalone skill 同步与安装时环境快照；不替代用户后续完整重启后的运行时和桌面验收。
+
 所有命令均要求显式路径；以下值是占位符，不含凭据。主模型/provider/URL 应填写当前实际值，不要将包含凭据的 URL 写入 shell 历史、journal 或任务参数。`--plugin-root` 应是正式安装目录，不能指向工作区源码目录。
 
 ```powershell
