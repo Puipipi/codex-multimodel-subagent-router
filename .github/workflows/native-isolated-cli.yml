@@ -131,11 +131,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run core native DeepSeek tests
+        id: core-native-deepseek-tests
         shell: pwsh
         working-directory: codex-rs
         run: |
-          cargo test --locked -p codex-core native_deepseek --lib -- --skip native_api_
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $output = cargo test --locked -p codex-core native_deepseek --lib -- --skip native_api_ 2>&1
+          $testExit = $LASTEXITCODE
+          $outputText = $output | Out-String
+          Write-Output $outputText
+          $diagnosticPath = Join-Path $env:RUNNER_TEMP "core-native-deepseek-tests-${env:GITHUB_RUN_ID}.log"
+          [System.IO.File]::WriteAllText($diagnosticPath, $outputText, [System.Text.UTF8Encoding]::new($false))
+          if ($testExit -ne 0) { exit $testExit }
+
+      - name: Upload core native DeepSeek test diagnostics
+        if: ${{ failure() && steps.core-native-deepseek-tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-native-deepseek-tests-${{ github.run_id }}
+          path: ${{ runner.temp }}/core-native-deepseek-tests-${{ github.run_id }}.log
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run native API profile tests
         id: native-api-profile-tests
