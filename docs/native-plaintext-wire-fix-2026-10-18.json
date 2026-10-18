@@ -39,18 +39,27 @@
   "fix_candidate": {
     "protocol_source_normalized_lf_sha256": "B163648D7C753F5E222F3210E90C909E5C4A81CBCFA80EA1905E63834D803967",
     "combined_patch_sha256": "65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae",
-    "compile_status": "not_run_yet"
+    "build_run_id": 39074481203,
+    "build_run_url": "https://github.com/Puipipi/sol-luna-deepseek-router/actions/runs/39074481203",
+    "build_head": "a5730feb0080cbe5343aa561cd6753c3278e26db",
+    "compile_status": "passed",
+    "focused_protocol_tests": {"status": "passed", "count": 11},
+    "focused_core_tests": {"status": "passed", "count": 6},
+    "runtime_evidence": "native-plaintext-runtime-2026-10-18.json"
   },
   "real_provider_boundary": {
+    "historical_scope": "patch 51 / pre-fix binary only; not the patch 65 run with four DeepSeek HTTP 200 responses",
     "gateway_preflight_stopped_run": true,
     "child_http_status_observed": false,
     "http_403_established": false
   },
   "pending_acceptance": [
-    "GitHub Rust compile and tests",
-    "new CLI build and runtime acceptance",
-    "real API behavior",
+    "specific failed check from the real API acceptance run (not retained)",
+    "real same-child follow-up and file proof",
     "cold resume",
-    "desktop acceptance"
+    "formal installation",
+    "desktop panel/history and multiple sessions",
+    "formal fault acceptance",
+    "peak/off-peak notification demonstration"
   ]
 }

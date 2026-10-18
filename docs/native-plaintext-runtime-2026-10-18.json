@@ -1,0 +1,141 @@
+{
+  "evidence_schema": "native-plaintext-runtime-v1",
+  "date": "2026-10-18",
+  "candidate": {
+    "workflow_run_id": 39074481203,
+    "workflow_run_url": "https://github.com/Puipipi/sol-luna-deepseek-router/actions/runs/39074481203",
+    "repository_head": "a5730feb0080cbe5343aa561cd6753c3278e26db",
+    "source_commit": "4ebc485ca321243727539187169425fcf972f2c4",
+    "patch_sha256": "65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae",
+    "protocol_source_normalized_lf_sha256": "B163648D7C753F5E222F3210E90C909E5C4A81CBCFA80EA1905E63834D803967",
+    "target": "x86_64-pc-windows-msvc",
+    "version": "0.163.0-alpha.10.2",
+    "focused_tests": {
+      "protocol": {"status": "passed", "count": 11},
+      "core": {"status": "passed", "count": 6}
+    },
+    "build_timestamps_utc": {
+      "release_start": "2026-10-17T22:30:52Z",
+      "release_end": "2026-10-17T23:39:49Z",
+      "artifact_upload": "2026-10-17T23:45:56Z"
+    },
+    "artifact": {
+      "id": 12118234030,
+      "name": "native-isolated-codex-windows-msvc-39074481203",
+      "reported_size_bytes": 117765448,
+      "github_reported_archive_digest": "sha256:eb48c1d2ddc9a00f9db9917a659ef1da658bf4c9139ae714c884ee0af0a999aa",
+      "archive_bytes_rehashed": false,
+      "binary_sha256": "b311c3c365d1a9a5c19a6040428e02d49b10d7bdd766a859f0b842d42c3e3963",
+      "provenance_sha256": "644c27784e4b0de3b17f354c0592f53980ffefa1f03a9ffa52ea765a9c1cd356",
+      "binary_and_provenance_rehashed_match": true,
+      "staged": true,
+      "activated": false,
+      "stock_companions_from_artifact_build": false,
+      "license_notice_and_lock_report_checked": true
+    }
+  },
+  "local_mock_acceptance": {
+    "real_api_calls": 0,
+    "cases": [
+      {"name": "normal", "runs": 1, "exit_code": 0, "status": "passed", "stage_complete": true},
+      {"name": "flattened_alias", "runs": 1, "exit_code": 0, "status": "passed", "stage_complete": true},
+      {"name": "http_401", "runs": 1, "exit_code": 0, "status": "passed", "stage_complete": true},
+      {"name": "disconnect", "runs": 1, "exit_code": 0, "status": "passed", "stage_complete": true},
+      {"name": "timeout", "runs": 1, "exit_code": 0, "status": "passed", "stage_complete": true}
+    ],
+    "genuine_native_rollout_parent_verified": true,
+    "all_five_cleanup_checks_true": true,
+    "stderr_bytes": 0,
+    "auth_material_copied": false,
+    "success_case_counts_each": {
+      "main_provider_http_requests": 8,
+      "deepseek_provider_http_requests": 3,
+      "native_deepseek_spawn": 1,
+      "same_child_followup": 1,
+      "luna_spawn": 1,
+      "local_deepseek_compactions": 1,
+      "remote_compactions": 0,
+      "deepseek_encrypted_inputs": [false, false, false],
+      "decoded_parent_calls_with_empty_encrypted_function_args": 3,
+      "same_child_followup_completed": true,
+      "local_compaction_completed": true,
+      "parent_and_luna_completed_after_deepseek_mock_closed": true,
+      "flattened_wire_namespace": null,
+      "flattened_wire_name": "collaboration-optimize.start_delegated_task"
+    },
+    "fault_case_counts_each": {
+      "main_provider_http_requests": 5,
+      "deepseek_provider_http_requests": 1,
+      "native_deepseek_spawn": 1,
+      "luna_spawn": 1,
+      "child_failed_terminal_state": true,
+      "classifications": ["http_401", "connection_or_stream_disconnected", "request_or_stream_timeout"],
+      "deepseek_requests_after_child_terminal": 0,
+      "parent_luna_recovery": true,
+      "duplicate_child": false,
+      "fallback": false
+    },
+    "timeout_case": {
+      "fixture_stream_idle_timeout_ms": 2000,
+      "production_gateway_timeout_verified": false
+    }
+  },
+  "real_api_attempt": {
+    "runs": 1,
+    "exit_code": 1,
+    "stage": "discover_and_verify_child",
+    "error_class": "ERR_ASSERTION",
+    "specific_check_retained": false,
+    "cause_known": false,
+    "parent_completed": true,
+    "child_count": 1,
+    "child_role": "native_deepseek",
+    "child_provider": "deepseek-native",
+    "child_model": "deepseek/deepseek-flash",
+    "child_last_turn_completed_without_error": true,
+    "genuine_native_spawn_count": 1,
+    "fork_count": 0,
+    "model_override": false,
+    "gateway_actual_requests": 4,
+    "deepseek_http_responses": 4,
+    "deepseek_http_statuses": [200, 200, 200, 200],
+    "openai_through_gateway_requests": 0,
+    "relay_requests": 0,
+    "denied_requests": 0,
+    "usage": {
+      "parent": {"total_tokens": 68207, "input_tokens": 67840, "cached_input_tokens": 50176, "output_tokens": 367},
+      "child": {"total_tokens": 498609, "input_tokens": 496691, "cached_input_tokens": 375680, "output_tokens": 1918, "reasoning_tokens": 861},
+      "relay_requests": 0,
+      "relay_tokens": 0
+    },
+    "elapsed_ms": 29889,
+    "cleanup": {
+      "auth_copy": true,
+      "app_server": true,
+      "gateway": true,
+      "run_directory": true
+    },
+    "stderr_bytes": 0,
+    "same_child_followup_reached": false,
+    "cold_resume_reached": false,
+    "complete_acceptance": false,
+    "file_proof_check_result": "unknown_not_retained"
+  },
+  "pending_acceptance": [
+    "retain and identify the specific failed discover_and_verify_child assertion",
+    "real same-child follow-up and file proof",
+    "cold resume",
+    "formal installation",
+    "desktop panel/history and multiple sessions",
+    "formal fault acceptance",
+    "peak/off-peak notification demonstration"
+  ],
+  "redaction": {
+    "private_capture_ids_included": false,
+    "thread_ids_included": false,
+    "private_absolute_paths_included": false,
+    "gateway_urls_included": false,
+    "credentials_included": false,
+    "raw_messages_or_http_bodies_included": false
+  }
+}

@@ -59,10 +59,11 @@ A later free app-server probe using local mock providers verified the native
 child's configured `deepseek-native` provider and
 `deepseek/deepseek-flash` model, and completed a follow-up on that same child.
 It did **not** trigger automatic local compaction: the sanitized receipt records
-zero local-compaction requests. This is not a DeepSeek API call or desktop
-acceptance, and it does not verify the current child-catalog metadata fix.
-That fix still needs a Rust build and a rerun that observes the child model's
-actual catalog metadata and compaction behavior.
+zero local-compaction requests. This earlier fixture result did not verify the
+child-catalog metadata fix. The later patch 65 build passed focused protocol
+and core tests, and its local-mock runtime cases completed DeepSeek local
+compaction. These results do not establish real API file proof or cold resume;
+see [the candidate runtime evidence](native-plaintext-runtime-2026-10-18.md).
 
 The separate Windows junction fixture had previously failed three times with
 `ENOTEMPTY` while recursively cleaning its temporary root. Its test-only cleanup
@@ -83,13 +84,15 @@ recognize it. Explicit encrypted arguments remain unchanged. The combined patch
 now has SHA-256
 `65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae`.
 The `51c1a0b...` value above remains the historical hash for the earlier
-ModelsManager combination and is not a build or test result for this later
-patch. The Rust tests for this protocol change have not yet run.
+ModelsManager combination. The later patch 65 candidate compiled in Windows
+workflow run `39074481203`; its 11 focused protocol tests and 6 focused core
+tests passed. The candidate's runtime evidence and limits are recorded in
+[`native-plaintext-runtime-2026-10-18.md`](native-plaintext-runtime-2026-10-18.md).
 
 ## Limits
 
-Rust was not compiled or tested locally, so this is not proof that the change
-builds or passes Cargo tests. The new test exercises the selector, not a full
-`spawn_thread` or cold-resume Session. The first real compile and selector test
-run must happen in the GitHub native build; real compaction thresholds and
-cold-resume behavior still require runtime acceptance after that build.
+Rust was not compiled or tested locally; the focused CI compile and tests are
+recorded above. The selector test does not exercise a full `spawn_thread` or
+cold-resume Session. The real-API run observed a completed child but did not
+complete follow-up or file proof, so real compaction thresholds, same-child
+follow-up, and cold-resume behavior remain unverified.

@@ -46,11 +46,16 @@ This RED result belongs to the pre-fix 51/beab binary. The fix candidate uses
 protocol source normalized LF SHA-256
 `B163648D7C753F5E222F3210E90C909E5C4A81CBCFA80EA1905E63834D803967` and
 combined patch SHA-256
-`65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae`; it has
-not yet been compiled or evaluated by this guard.
+`65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae`. That
+candidate was compiled and its focused protocol/core tests passed in Windows
+workflow run `39074481203`; see [the candidate runtime evidence](native-plaintext-runtime-2026-10-18.md).
+Its local-mock cases also observed plaintext inputs, but the separate real API
+run did not pass the complete acceptance gate. The candidate is not a verified
+end-to-end fix.
 
-A separate real run stopped at the gateway preflight. The previous matcher did
-not expose a child-level response error, so no real API child HTTP 403 was
-observed or established. The new Rust tests have not run locally. GitHub
-compilation and Rust tests, the candidate CLI build and runtime acceptance,
-real API behavior, cold resume, and desktop acceptance remain pending.
+A separate earlier real run stopped at the gateway preflight. The previous
+matcher did not expose a child-level response error, so no real API child HTTP
+403 was observed or established. The candidate's real API attempt is reported
+separately; its final assertion failed without retaining the specific check.
+Real same-child follow-up, file proof, cold resume, installation, and desktop
+acceptance remain pending.
