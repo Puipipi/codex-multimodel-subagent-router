@@ -8,9 +8,12 @@ import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import { NATIVE_RUNTIME_PATCH_SHA256, NATIVE_RUNTIME_SOURCE_COMMIT, NATIVE_RUNTIME_TARGET, NATIVE_RUNTIME_VERSION } from "../scripts/native-runtime.mjs";
 import { gatewayPaths, readGatewayIdentity } from "../scripts/native-gateway-manager.mjs";
+import { stageGatewaySource } from "../scripts/native-gateway-source.mjs";
 import { autostartFile, autostartScript } from "../scripts/native-autostart.mjs";
 import * as installModule from "../scripts/native-isolated-install.mjs";
-const { activate, decodeJournal, encodeJournal, ensureNativeDeepseekDispatch, prepare, rollback, status } = installModule;
+import * as oldTaskClient0103 from "./fixtures/native-gateway-task-0.10.3.mjs";
+import { migrateActiveGatewaySource } from "../scripts/native-gateway-source-migrate.mjs";
+const { activate, decodeJournal, encodeJournal, ensureNativeDeepseekDispatch, inspectNativeDeepseekDispatchState, prepare, rollback, status } = installModule;
 
 let checks = 0;
 const equal = (a, b, m) => { assert.equal(a, b, m); checks += 1; };
@@ -93,6 +96,18 @@ async function fixture(label) {
     readGatewayIdentity, readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
   });
   return { dir, versionDir, codexHome, gatewayDir, startupDir, journalPath, environment, envAdapter, startup, autostartAdapter, taskAdapter, state, ensureCalls, taskCalls, stopCalls, common, activateFixture, rollbackFixture };
+}
+
+async function activeMigrationFixture(label) {
+  const value = await fixture(label);
+  await prepare(value.common);
+  await value.activateFixture();
+  const pluginRoot = path.join(value.dir, "plugin-cache");
+  await mkdir(path.join(pluginRoot, "scripts"), { recursive: true });
+  for (const name of ["native-credentials.mjs", "native-gateway.mjs", "native-relay.mjs", "native-routing.mjs", "native-usage.mjs"]) {
+    await cp(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", name), path.join(pluginRoot, "scripts", name));
+  }
+  return { ...value, pluginRoot };
 }
 
 try {
@@ -579,6 +594,268 @@ try {
   equal(success.environment.get("PATH").value, "keep", "activation preserves unrelated environment values");
   equal(success.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").value, path.resolve(success.journalPath), "activation publishes journal path for future chats");
   equal(success.startup.size, 0, "activation removes the older managed Startup VBS after gateway health");
+  const taskCallsBeforeReadOnlyInspection = success.taskCalls.length;
+  const ensureCallsBeforeReadOnlyInspection = success.ensureCalls.length;
+  const inspected = await inspectNativeDeepseekDispatchState({ journalPath: success.journalPath, envAdapter: success.envAdapter, taskAdapter: success.taskAdapter, requireRunning: true }, {
+    readGatewayIdentity,
+    readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+    gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+  });
+  equal(inspected.ready, true, "read-only readiness verifier accepts an active, strict, healthy, Running Task");
+  equal(success.ensureCalls.length, ensureCallsBeforeReadOnlyInspection, "read-only readiness verifier never ensures or starts the gateway");
+  equal(success.taskCalls.slice(taskCallsBeforeReadOnlyInspection).some(([operation]) => ["register", "start", "unregister"].includes(operation)), false, "read-only readiness verifier never mutates the Task");
+
+  const migration = await fixture("gateway-source-migration");
+  await prepare(migration.common);
+  await migration.activateFixture();
+  const migrationPluginRoot = path.join(migration.dir, "plugin-cache");
+  await mkdir(path.join(migrationPluginRoot, "scripts"), { recursive: true });
+  for (const name of ["native-credentials.mjs", "native-gateway.mjs", "native-relay.mjs", "native-routing.mjs", "native-usage.mjs"]) {
+    await cp(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", name), path.join(migrationPluginRoot, "scripts", name));
+  }
+  const migrationJournalBefore = decodeJournal(await readFile(migration.journalPath, "utf8"));
+  for (const [key, expected] of Object.entries(migrationJournalBefore.environment.next)) {
+    const current = migration.environment.get(key);
+    equal(current?.present === expected?.present && (!current?.present || current.value === expected.value), true, `migration fixture begins with the active ${key} snapshot`);
+  }
+  const oldScript = migrationJournalBefore.paths.gatewayScript;
+  const oldLauncherBytes = await readFile(migrationJournalBefore.gateway.launcher.path);
+  const migrationTaskCalls = migration.taskCalls.length;
+  const migrationEnsureCalls = migration.ensureCalls.length;
+  let migrationReadinessCalls = 0;
+  const migrated = await migrateActiveGatewaySource({ journalPath: migration.journalPath, pluginRoot: migrationPluginRoot, envAdapter: migration.envAdapter, taskAdapter: migration.taskAdapter }, {
+    readinessVerifier: async (...args) => { migrationReadinessCalls += 1; return inspectNativeDeepseekDispatchState(...args); },
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+  });
+  const migrationJournalAfter = decodeJournal(await readFile(migration.journalPath, "utf8"));
+  equal(migrated.status, "migrated", "active gateway migration reports a completed next-launch rebind");
+  equal(migrationReadinessCalls, 3, "migration performs a final strict Running/health verification after writing both files");
+  equal(migrationJournalAfter.phase, "active", "migration returns the journal to active after launcher and journal updates");
+  equal(encodeJournal(migrationJournalAfter.files), encodeJournal(migrationJournalBefore.files), "migration preserves every file prior/next snapshot including Buffer bytes");
+  equal(encodeJournal(migrationJournalAfter.environment), encodeJournal(migrationJournalBefore.environment), "migration preserves the original environment plan");
+  equal(encodeJournal(migrationJournalAfter.environmentSnapshot), encodeJournal(migrationJournalBefore.environmentSnapshot), "migration preserves the applied environment rollback snapshot");
+  equal(encodeJournal(migrationJournalAfter.autostart), encodeJournal(migrationJournalBefore.autostart), "migration preserves the autostart rollback snapshot");
+  equal(encodeJournal(migrationJournalAfter.completed), encodeJournal(migrationJournalBefore.completed), "migration preserves all completed-stage bits");
+  equal(encodeJournal(migrationJournalAfter.gateway.launcher.prior), encodeJournal(migrationJournalBefore.gateway.launcher.prior), "migration preserves launcher prior bytes exactly");
+  equal(migrationJournalAfter.paths.gatewayScript === oldScript, false, "migration points future Task launch at the durable source bundle");
+  equal(migrationJournalAfter.gateway.sourceBundle.files.length, 5, "migration journals the verified five-file bundle");
+  equal(migrationJournalAfter.gateway.taskPlan.action.execute, migrationJournalBefore.gateway.taskPlan.action.execute, "migration leaves the Task action executable unchanged");
+  equal(migrationJournalAfter.gateway.taskPlan.action.arguments, migrationJournalBefore.gateway.taskPlan.action.arguments, "migration leaves the Task action arguments unchanged");
+  equal(migrationJournalAfter.gateway.taskPlan.name, migrationJournalBefore.gateway.taskPlan.name, "migration leaves the Task name unchanged");
+  equal(migrationJournalAfter.gateway.taskPlan.marker, migrationJournalBefore.gateway.taskPlan.marker, "migration leaves Task ownership marker unchanged");
+  equal(migrationJournalAfter.gateway.taskPlan.directory, migrationJournalBefore.gateway.taskPlan.directory, "migration leaves Task working directory unchanged");
+  equal(JSON.stringify(migrationJournalAfter.gateway.taskPlan.restartPolicy), JSON.stringify(migrationJournalBefore.gateway.taskPlan.restartPolicy), "migration leaves Task restart policy unchanged");
+  equal(migrationJournalAfter.gateway.taskSnapshot.priorExists, migrationJournalBefore.gateway.taskSnapshot.priorExists, "migration preserves the Task snapshot priorExists bit");
+  equal(migrationJournalAfter.gateway.taskSnapshot.priorOwned, migrationJournalBefore.gateway.taskSnapshot.priorOwned, "migration preserves the Task snapshot priorOwned bit");
+  equal((await readFile(migrationJournalAfter.gateway.launcher.path)).equals(oldLauncherBytes), false, "migration replaces only the future-launch script path in the launcher");
+  const migrationBackupPath = migrationJournalAfter.gateway.sourceMigration.backupPath;
+  const migrationBackupBytes = await readFile(migrationBackupPath);
+  equal(sha(migrationBackupBytes), migrationJournalAfter.gateway.sourceMigration.backupSha256, "migration keeps an exact private raw-journal backup and digest");
+  equal(migrationBackupBytes.equals(Buffer.from(encodeJournal(migrationJournalBefore))), true, "migration backup contains the original version 1 journal bytes");
+  equal(migration.taskCalls.slice(migrationTaskCalls).some(([operation]) => ["register", "start", "unregister"].includes(operation)), false, "migration does not register, start, or unregister the Task");
+  equal(migration.ensureCalls.length, migrationEnsureCalls, "migration never ensures or starts the gateway process");
+  equal(migration.stopCalls.length, 0, "migration never stops the existing gateway process");
+  const migratedBytesBeforeRepeat = await readFile(migration.journalPath);
+  const migratedLauncherBeforeRepeat = await readFile(migrationJournalAfter.gateway.launcher.path);
+  const idempotentMigration = await migrateActiveGatewaySource({ journalPath: migration.journalPath, envAdapter: migration.envAdapter, taskAdapter: migration.taskAdapter }, {
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+  });
+  equal(idempotentMigration.status, "already_migrated", "repeat migration verifies and reuses the active bundle without plugin cache access");
+  equal((await readFile(migration.journalPath)).equals(migratedBytesBeforeRepeat), true, "idempotent migration leaves journal bytes unchanged");
+  equal((await readFile(migrationJournalAfter.gateway.launcher.path)).equals(migratedLauncherBeforeRepeat), true, "idempotent migration leaves launcher bytes unchanged");
+  // Immutable task-helper fixture from release 0.10.3, commit aab89090305c7ec21cc27107c0a51d615ed49361.
+  // Git blob: a835e514e385cedf47b5dc8fb909b254cfb20b02; raw SHA-256: a7067c8bf5baa496ece83b253a97e710683c89e7176e870c0e576ca448768d09.
+  const oldTaskFixtureBytes = await readFile(fileURLToPath(new URL("./fixtures/native-gateway-task-0.10.3.mjs", import.meta.url)));
+  equal(sha(oldTaskFixtureBytes), "a7067c8bf5baa496ece83b253a97e710683c89e7176e870c0e576ca448768d09", "the pinned 0.10.3 task module fixture matches its published raw hash");
+  let oldClientMutations = 0;
+  const oldClientRestore = await oldTaskClient0103.restoreGatewayTask(migrationJournalAfter.gateway.taskSnapshot, migrationJournalAfter.gateway.taskPlan, {
+    async status() { return { exists: false, owned: false, specMatches: false, enabled: false }; },
+    async unregister() { oldClientMutations += 1; return { removed: true }; },
+  });
+  equal(oldClientRestore.restored, true, "pre-migration task client validates and reads the rebased version 1 snapshot");
+  equal(oldClientRestore.removed, false, "old-client restore leaves an absent prior task absent");
+  equal(oldClientMutations, 0, "old-client compatibility check does not mutate a Task");
+  const priorOwnedPlan = await oldTaskClient0103.snapshotGatewayTask(migrationJournalAfter.gateway.taskPlan, {
+    async status() { return { exists: true, owned: true, specMatches: true, enabled: true }; },
+  });
+  equal(priorOwnedPlan.priorExists, true, "0.10.3 snapshot helper still reads a previously owned Task");
+  equal(priorOwnedPlan.priorOwned, true, "0.10.3 snapshot helper preserves prior ownership semantics");
+  const priorOwnedRestore = await oldTaskClient0103.restoreGatewayTask(priorOwnedPlan, migrationJournalAfter.gateway.taskPlan, {
+    async status() { return { exists: true, owned: true, specMatches: true, enabled: true }; },
+    async unregister() { oldClientMutations += 1; return { removed: true }; },
+  });
+  equal(priorOwnedRestore.preserved, true, "0.10.3 restore preserves a previously owned matching Task");
+  equal(oldClientMutations, 0, "prior-owned compatibility check does not mutate a Task");
+  const migrationConfigPrior = Object.values(migrationJournalBefore.files.files).find((item) => path.basename(item.path).toLowerCase() === "config.toml").prior.bytes;
+  const migrationEnvironmentPrior = migrationJournalBefore.environmentSnapshot.prior;
+  const migrationRollback = await migration.rollbackFixture();
+  equal(migrationRollback.phase, "rolled_back", "normal installer rollback succeeds after gateway-source migration");
+  equal((await readFile(path.join(migration.codexHome, "config.toml"))).equals(migrationConfigPrior), true, "rollback restores exact original config bytes after migration");
+  for (const [key, expected] of Object.entries(migrationEnvironmentPrior)) {
+    equal(JSON.stringify(migration.environment.get(key)), JSON.stringify(expected), `rollback restores the exact pre-activation ${key} state after migration`);
+  }
+
+  const stageFailure = await fixture("migration-stage-failure");
+  await prepare(stageFailure.common);
+  await stageFailure.activateFixture();
+  const stageFailureJournal = await readFile(stageFailure.journalPath);
+  const stageFailureState = decodeJournal(stageFailureJournal.toString("utf8"));
+  const stageFailureLauncher = await readFile(stageFailureState.gateway.launcher.path);
+  const stageFailurePluginRoot = path.join(stageFailure.dir, "plugin-cache");
+  await mkdir(path.join(stageFailurePluginRoot, "scripts"), { recursive: true });
+  for (const name of ["native-credentials.mjs", "native-gateway.mjs", "native-relay.mjs", "native-routing.mjs", "native-usage.mjs"]) {
+    await cp(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", name), path.join(stageFailurePluginRoot, "scripts", name));
+  }
+  await rejects(() => migrateActiveGatewaySource({ journalPath: stageFailure.journalPath, pluginRoot: stageFailurePluginRoot, envAdapter: stageFailure.envAdapter, taskAdapter: stageFailure.taskAdapter }, {
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+    stageSource: async () => { throw new Error("controlled source stage failure"); },
+  }), /controlled source stage failure/, "stage failure retains its original diagnostic without touching active files");
+  equal((await readFile(stageFailure.journalPath)).equals(stageFailureJournal), true, "stage failure leaves the active journal byte-for-byte unchanged");
+  equal((await readFile(stageFailureState.gateway.launcher.path)).equals(stageFailureLauncher), true, "stage failure leaves the future-launch launcher byte-for-byte unchanged");
+
+  const sourceDrift = await activeMigrationFixture("migration-source-drift");
+  await writeFile(path.join(sourceDrift.pluginRoot, "scripts", "native-usage.mjs"), "changed source\n");
+  const sourceDriftJournal = await readFile(sourceDrift.journalPath);
+  const sourceDriftState = decodeJournal(sourceDriftJournal.toString("utf8"));
+  const sourceDriftLauncher = await readFile(sourceDriftState.gateway.launcher.path);
+  await rejects(() => migrateActiveGatewaySource({ journalPath: sourceDrift.journalPath, pluginRoot: sourceDrift.pluginRoot, envAdapter: sourceDrift.envAdapter, taskAdapter: sourceDrift.taskAdapter }, {
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+  }), /differs from the active source/, "migration rejects plugin source bytes that differ from the currently active five-module closure");
+  equal((await readFile(sourceDrift.journalPath)).equals(sourceDriftJournal), true, "source drift leaves the active journal untouched");
+  equal((await readFile(sourceDriftState.gateway.launcher.path)).equals(sourceDriftLauncher), true, "source drift leaves the launcher untouched");
+
+  const stagedSourceDrift = await activeMigrationFixture("migration-staged-source-drift");
+  const stagedSourceDriftJournal = decodeJournal(await readFile(stagedSourceDrift.journalPath, "utf8"));
+  const stagedSourceDriftLauncher = await readFile(stagedSourceDriftJournal.gateway.launcher.path);
+  const alternatePluginRoot = path.join(stagedSourceDrift.dir, "alternate-plugin-cache");
+  await mkdir(path.join(alternatePluginRoot, "scripts"), { recursive: true });
+  for (const name of ["native-credentials.mjs", "native-gateway.mjs", "native-relay.mjs", "native-routing.mjs", "native-usage.mjs"]) {
+    await cp(path.join(stagedSourceDrift.pluginRoot, "scripts", name), path.join(alternatePluginRoot, "scripts", name));
+  }
+  await writeFile(path.join(alternatePluginRoot, "scripts", "native-usage.mjs"), "different but self-consistent staged source\n");
+  await rejects(() => migrateActiveGatewaySource({ journalPath: stagedSourceDrift.journalPath, pluginRoot: stagedSourceDrift.pluginRoot, envAdapter: stagedSourceDrift.envAdapter, taskAdapter: stagedSourceDrift.taskAdapter }, {
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+    stageSource: (options) => stageGatewaySource({ pluginRoot: alternatePluginRoot, runtimeRoot: options.runtimeRoot }),
+  }), /staged gateway source differs from the active source/, "migration rejects a valid self-consistent bundle whose bytes differ from active source");
+  equal(decodeJournal((await readFile(stagedSourceDrift.journalPath, "utf8")).toString("utf8")).phase, "active", "staged source drift leaves the original journal active");
+  equal((await readFile(stagedSourceDriftJournal.gateway.launcher.path)).equals(stagedSourceDriftLauncher), true, "staged source drift leaves the original launcher unchanged");
+
+  const notRunningMigration = await activeMigrationFixture("migration-task-not-running");
+  const notRunningJournal = await readFile(notRunningMigration.journalPath);
+  const notRunningTaskAdapter = {
+    ...notRunningMigration.taskAdapter,
+    async status(plan) { return { ...(await notRunningMigration.taskAdapter.status(plan)), state: "Ready" }; },
+  };
+  await rejects(() => migrateActiveGatewaySource({ journalPath: notRunningMigration.journalPath, pluginRoot: notRunningMigration.pluginRoot, envAdapter: notRunningMigration.envAdapter, taskAdapter: notRunningTaskAdapter }, {
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+  }), /Task Scheduler task is not Running/i, "migration requires an already Running owned Task and never starts it");
+  equal((await readFile(notRunningMigration.journalPath)).equals(notRunningJournal), true, "non-running Task preflight leaves the active journal untouched");
+
+  const lockedMigration = await activeMigrationFixture("migration-lock-conflict");
+  const migrationLockPath = `${lockedMigration.journalPath}.gateway-source-migration.lock`;
+  const preexistingLockBytes = Buffer.from("unowned lock fixture\n");
+  await writeFile(migrationLockPath, preexistingLockBytes, { flag: "wx" });
+  const lockedJournalBefore = await readFile(lockedMigration.journalPath);
+  await rejects(() => migrateActiveGatewaySource({ journalPath: lockedMigration.journalPath, pluginRoot: lockedMigration.pluginRoot, envAdapter: lockedMigration.envAdapter, taskAdapter: lockedMigration.taskAdapter }, {
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+  }), /EEXIST/, "migration refuses a pre-existing independently-owned lock");
+  equal((await readFile(migrationLockPath)).equals(preexistingLockBytes), true, "migration never removes an unowned lock file");
+  equal((await readFile(lockedMigration.journalPath)).equals(lockedJournalBefore), true, "lock conflict leaves the active journal untouched");
+
+  for (const failAt of [1, 2, 3]) {
+    const failedWrite = await activeMigrationFixture(`migration-write-failure-${failAt}`);
+    const journalBeforeFailure = await readFile(failedWrite.journalPath);
+    const stateBeforeFailure = decodeJournal(journalBeforeFailure.toString("utf8"));
+    const launcherBeforeFailure = await readFile(stateBeforeFailure.gateway.launcher.path);
+    let writes = 0;
+    await rejects(() => migrateActiveGatewaySource({ journalPath: failedWrite.journalPath, pluginRoot: failedWrite.pluginRoot, envAdapter: failedWrite.envAdapter, taskAdapter: failedWrite.taskAdapter }, {
+      gatewayAdapter: {
+        readGatewayIdentity,
+        readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+        gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+      },
+      atomicWrite: async (file, bytes) => {
+        writes += 1;
+        if (writes === failAt) throw Object.assign(new Error("injected atomic write failure"), { code: "INJECTED_WRITE_FAILURE" });
+        await writeFile(file, bytes);
+      },
+    }), /injected atomic write failure/, `write failure ${failAt} preserves its originating error`);
+    equal((await readFile(failedWrite.journalPath)).equals(journalBeforeFailure), true, `write failure ${failAt} restores the original journal bytes`);
+    equal((await readFile(stateBeforeFailure.gateway.launcher.path)).equals(launcherBeforeFailure), true, `write failure ${failAt} restores the original launcher bytes`);
+    equal(writes, failAt * 2 - 1, `write failure ${failAt} performs only the necessary owned rollback writes`);
+  }
+
+  const postwriteFailure = await activeMigrationFixture("migration-postwrite-verification-failure");
+  const postwriteJournalBefore = await readFile(postwriteFailure.journalPath);
+  const postwriteStateBefore = decodeJournal(postwriteJournalBefore.toString("utf8"));
+  const postwriteLauncherBefore = await readFile(postwriteStateBefore.gateway.launcher.path);
+  let postwriteReadinessChecks = 0;
+  await rejects(() => migrateActiveGatewaySource({ journalPath: postwriteFailure.journalPath, pluginRoot: postwriteFailure.pluginRoot, envAdapter: postwriteFailure.envAdapter, taskAdapter: postwriteFailure.taskAdapter }, {
+    readinessVerifier: async (...args) => {
+      postwriteReadinessChecks += 1;
+      if (postwriteReadinessChecks === 3) throw new Error("postwrite readiness verification failed");
+      return inspectNativeDeepseekDispatchState(...args);
+    },
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+  }), /postwrite readiness verification failed/, "failed final readiness verification does not report migration success");
+  equal(postwriteReadinessChecks, 3, "postwrite failure is observed only after the final file writes");
+  equal((await readFile(postwriteFailure.journalPath)).equals(postwriteJournalBefore), true, "postwrite failure restores the original journal snapshot");
+  equal((await readFile(postwriteStateBefore.gateway.launcher.path)).equals(postwriteLauncherBefore), true, "postwrite failure restores the original future-launch launcher");
+
+  const thirdPartyDuringWrite = await activeMigrationFixture("migration-third-party-drift");
+  const thirdPartyJournal = await readFile(thirdPartyDuringWrite.journalPath);
+  const thirdPartyState = decodeJournal(thirdPartyJournal.toString("utf8"));
+  const thirdPartyBytes = Buffer.from("third-party launcher update\n");
+  let thirdPartyWrites = 0;
+  await rejects(() => migrateActiveGatewaySource({ journalPath: thirdPartyDuringWrite.journalPath, pluginRoot: thirdPartyDuringWrite.pluginRoot, envAdapter: thirdPartyDuringWrite.envAdapter, taskAdapter: thirdPartyDuringWrite.taskAdapter }, {
+    gatewayAdapter: {
+      readGatewayIdentity,
+      readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+      gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }),
+    },
+    atomicWrite: async (file, bytes) => {
+      thirdPartyWrites += 1;
+      if (thirdPartyWrites === 2) {
+        await writeFile(file, thirdPartyBytes);
+        throw Object.assign(new Error("third-party launcher appeared during migration"), { code: "INJECTED_THIRD_PARTY_DRIFT" });
+      }
+      await writeFile(file, bytes);
+    },
+  }), /requires recovery/, "migration refuses to overwrite third-party launcher bytes after a partial write");
+  equal((await readFile(thirdPartyState.gateway.launcher.path)).equals(thirdPartyBytes), true, "third-party launcher bytes survive a partial-migration recovery");
+  equal(decodeJournal((await readFile(thirdPartyDuringWrite.journalPath)).toString("utf8")).phase, "gateway_source_migration_recovery_failed", "partial migration is left fail-closed when third-party launcher bytes prevent safe restoration");
   const configPath = path.join(success.codexHome, "config.toml");
   const activatedConfig = await readFile(configPath);
   const changedMainConfig = activatedConfig.toString("utf8").replace('model = "gpt-current"', 'model = "new-sol-model"');

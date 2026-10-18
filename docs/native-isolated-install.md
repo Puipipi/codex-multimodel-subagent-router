@@ -4,6 +4,20 @@
 
 `prepare` 要求显式路径、当前主模型/provider（provider 可为 `null`）和 root URL 预期（可为 `null`），并要求 `--gateway-script` 或 `--plugin-root` 指向正式安装位置。使用 `--plugin-root` 时，prepare 将五个固定 gateway 模块写入 `gateway-dir` 的父目录下 `gateway-source/<content-digest>`（标准布局即 `native-isolated/gateway-source/<content-digest>`），并在 journal 中记录 bundle manifest hash 与 source root；因此该路径由明确的 `gateway-dir` 决定，不依赖 runtime 版本目录的布局。之后 Task 直接使用该稳定脚本路径，不再依赖可能被插件刷新清理的版本缓存。bundle 是不可变内容地址目录，完全匹配才会复用，缺失、额外文件、reparse point 或 hash 不一致都会拒绝。显式 `--gateway-script` 继续使用给定文件，不复制其父目录或依赖；调用方须自行保证其相对模块和生命周期稳定。旧 journal 没有 bundle 引用时保持原行为，不会由 dispatch 自动迁移。若旧 role/catalog 残留需纳入迁移，必须显式传入 `--legacy-manifest-path` 指向经验证的旧安装 manifest；工具不会自动发现或认领未知文件。它只准备私有网关身份，不启动服务；随后在临时 Codex home 上运行只读 app-server smoke。临时配置复用完整模型缓存并将 root catalog 指向临时缓存，正式配置仍保持用户主模型/provider/catalog。若迁移旧共享配置，smoke fixture 使用 legacy manifest 恢复旧 root 值。只有 smoke 返回 `status=passed` 才会写入 journal。
 
+### 已激活安装的 gateway source 迁移
+
+对没有 `gateway.sourceBundle` 的 active version 1 journal，可显式运行以下命令，将**下次 Task 启动**使用的脚本重绑到 journal 所属 runtime root 下的不可变五脚本 bundle：
+
+```powershell
+node .\scripts\native-gateway-source-migrate.mjs `
+  --journal-path "<absolute-active-journal-path>" `
+  --plugin-root "<absolute-installed-plugin-root>"
+```
+
+迁移要求当前受管 Task 已 Running 且 gateway health 严格报告 `deepseek_only=true`、`relay_allowed=false`；active source、plugin root 和新 bundle 中五个固定脚本必须逐字节完全一致。迁移只改 launcher 的唯一 gateway-script 路径及 journal，不停止或启动现有 gateway、不修改/重新注册 Task，也不触碰 Codex 配置或环境。health 检查沿用 gateway 现有实现，可能读取本机已有凭据；迁移本身不发模型/API 请求，也不直接复制、修改或输出凭据。
+
+普通捕获到的写入失败会在 launcher/journal 仍精确匹配本次 from/to bytes 时恢复原始 launcher 和 journal，并保留私有原始 journal 备份；不删除已完成的 source bundle。若进程硬终止，可能遗留 `gateway_source_migrating` journal 或 migration lock。当前没有自动恢复入口：应先检查私有备份、journal、launcher 与 lock 的字节状态；不得盲目删除 lock 或重跑迁移。只有确认它们属于同一失败迁移并完成审查后，才可规划恢复步骤。此命令只重绑未来启动路径；必须另行完成 Task 启动后、确认新进程来源于稳定 bundle 的验收，不能仅凭迁移成功断言服务已切换。
+
 smoke 完成后，`prepare` 仅对路径校验通过的本次临时 fixture 删除执行有界 EBUSY 重试：最多 10 次、间隔参数 350 ms，Node 的线性退避总等待上限为 19.25 秒；这不是整个 `prepare` 的硬超时。最终删除仍失败时，`prepare` 保留安全诊断并阻止写入 journal。
 
 `activate` 首先重验 runtime、文件、事务中的环境快照、旧受管 Startup VBS、任务快照和 launcher。之后按顺序写入隐藏同步 VBS launcher、注册或验证精确匹配的当前用户 Task Scheduler 任务、启动并检查独立 gateway，再删除旧受管 Startup VBS，最后应用 Codex 文件与环境变量。Task 使用当前交互用户、Limited 权限、IgnoreNew、隐藏运行且无执行时限；它调用正式安装目录的 `native-gateway.mjs --serve --deepseek-only`。严格模式只接受 DeepSeek 模型，拒绝 GPT/未知模型和加密协作输入，并强制关闭 GPT relay；它不会要求或伪造 GPT 登录成功。dispatch gate 还要求健康响应明确报告 `deepseek_only=true`、`relay_allowed=false`，且受管 Task 状态为 `Running`，因此旧的非严格网关不能满足正式路径。普通 direct/legacy 网关仍保留旧兼容行为。不创建 DSH 会话或工作区。激活失败会尝试按本事务快照恢复；若任何阶段恢复不确定，会将 journal 标为 `activation_recovery_failed` 并列出阶段。

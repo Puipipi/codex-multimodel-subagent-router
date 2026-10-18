@@ -228,6 +228,34 @@ function taskPlanFingerprint(plan) {
   return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
 }
 
+function gatewayPathLiteral(scriptPath) {
+  const resolved = absolutePath(scriptPath, "gateway script path");
+  return windowsQuote(resolved).replaceAll('"', '""');
+}
+
+export function rebaseGatewayTaskSnapshot(snapshot, oldPlan, newPlan, { fromScriptPath, toScriptPath } = {}) {
+  if (snapshot?.version !== 1 || snapshot.taskName !== oldPlan?.name || snapshot.marker !== oldPlan?.marker
+      || snapshot.planFingerprint !== taskPlanFingerprint(oldPlan)) {
+    throw new Error("gateway task snapshot does not match the old task plan");
+  }
+  const unchanged = snapshot.taskName === newPlan?.name
+    && snapshot.marker === newPlan?.marker
+    && oldPlan.directory === newPlan?.directory
+    && JSON.stringify(oldPlan.action) === JSON.stringify(newPlan?.action)
+    && JSON.stringify(oldPlan.restartPolicy) === JSON.stringify(newPlan?.restartPolicy)
+    && oldPlan.launcher?.path === newPlan?.launcher?.path;
+  if (!unchanged) throw new Error("task plan changed outside the gateway script");
+  const oldLiteral = gatewayPathLiteral(fromScriptPath);
+  const newLiteral = gatewayPathLiteral(toScriptPath);
+  const oldContent = oldPlan.launcher?.content;
+  const newContent = newPlan.launcher?.content;
+  const occurrences = typeof oldContent === "string" ? oldContent.split(oldLiteral).length - 1 : 0;
+  if (occurrences !== 1 || newContent !== oldContent.replace(oldLiteral, newLiteral)) {
+    throw new Error("gateway task launcher change is not the exact script-path relocation");
+  }
+  return Object.freeze({ ...snapshot, planFingerprint: taskPlanFingerprint(newPlan) });
+}
+
 export async function snapshotGatewayTask(plan, adapter) {
   const current = await inspect(plan, adapter);
   requireMatchingSpec(current);

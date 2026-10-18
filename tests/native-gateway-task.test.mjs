@@ -11,7 +11,7 @@ const rejects = async (operation, pattern, message) => {
   checks += 1;
 };
 
-const { gatewayTaskPlan, registerOwnedGatewayTask, startOwnedGatewayTask, statusOwnedGatewayTask, unregisterOwnedGatewayTask, snapshotGatewayTask, installOwnedGatewayTask, restoreGatewayTask, windowsTaskSchedulerScript, createWindowsTaskSchedulerAdapter } = lifecycle;
+const { gatewayTaskPlan, rebaseGatewayTaskSnapshot, registerOwnedGatewayTask, startOwnedGatewayTask, statusOwnedGatewayTask, unregisterOwnedGatewayTask, snapshotGatewayTask, installOwnedGatewayTask, restoreGatewayTask, windowsTaskSchedulerScript, createWindowsTaskSchedulerAdapter } = lifecycle;
 const paths = {
   dir: "C:\\Users\\Test User\\AppData\\Local\\Router\\native gateway",
   state: "C:\\Users\\Test User\\AppData\\Local\\Router\\native gateway\\gateway.json",
@@ -35,6 +35,27 @@ ok(plan.launcher.content.includes("native-gateway.mjs") && plan.launcher.content
 ok(plan.launcher.content.includes("gateway.json") && plan.launcher.content.includes("identity.json") && plan.launcher.content.includes("gateway.log"), "launcher passes only gateway paths to the server");
 ok(plan.launcher.content.includes('""C:\\Program Files\\nodejs\\node.exe""'), "launcher escapes Windows paths with spaces and quotes");
 ok(!/api[_-]?key|token|secret|password/i.test(plan.launcher.content), "launcher contains no credential fields");
+const relocatedPlan = gatewayTaskPlan({
+  paths,
+  nodePath: "C:\\Program Files\\nodejs\\node.exe",
+  wscriptPath: "C:\\Windows\\System32\\wscript.exe",
+  gatewayScriptPath: "C:\\Users\\Test User\\AppData\\Local\\Router\\native-isolated\\gateway-source\\digest\\scripts\\native-gateway.mjs",
+});
+const relocationSnapshot = await snapshotGatewayTask(plan, {
+  async status() { return { exists: true, owned: true, specMatches: true, enabled: true }; },
+});
+const rebasedSnapshot = rebaseGatewayTaskSnapshot(relocationSnapshot, plan, relocatedPlan, {
+  fromScriptPath: "C:\\Plugin\\scripts\\native-gateway.mjs",
+  toScriptPath: "C:\\Users\\Test User\\AppData\\Local\\Router\\native-isolated\\gateway-source\\digest\\scripts\\native-gateway.mjs",
+});
+equal(rebasedSnapshot.planFingerprint === relocationSnapshot.planFingerprint, false, "relocation rebases only the snapshot fingerprint for the updated launcher script");
+equal(rebasedSnapshot.priorExists, relocationSnapshot.priorExists, "snapshot rebase preserves prior task existence");
+equal(rebasedSnapshot.priorOwned, relocationSnapshot.priorOwned, "snapshot rebase preserves prior ownership");
+assert.throws(() => rebaseGatewayTaskSnapshot(relocationSnapshot, plan, { ...relocatedPlan, action: { ...relocatedPlan.action, execute: "C:\\\\malicious.exe" } }, {
+  fromScriptPath: "C:\\Plugin\\scripts\\native-gateway.mjs",
+  toScriptPath: "C:\\Users\\Test User\\AppData\\Local\\Router\\native-isolated\\gateway-source\\digest\\scripts\\native-gateway.mjs",
+}), /task plan changed outside the gateway script/i);
+checks += 1;
 ok(windowsTaskSchedulerScript.includes("[Console]::InputEncoding") && windowsTaskSchedulerScript.includes("[Console]::OutputEncoding"), "PowerShell adapter sets UTF-8 stdin and stdout");
 ok(windowsTaskSchedulerScript.includes("IgnoreNew") && windowsTaskSchedulerScript.includes("TimeSpan]::Zero") && windowsTaskSchedulerScript.includes("Interactive"), "task definition is single-instance, interactive, and has no execution limit");
 ok(windowsTaskSchedulerScript.includes("AllowDemandStart") && windowsTaskSchedulerScript.includes("Hidden"), "task allows on-demand startup and hides task UI entry");

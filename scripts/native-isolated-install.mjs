@@ -672,10 +672,8 @@ export async function status({ journalPath } = {}) {
   return stateSummary(await readJournal(journalPath));
 }
 
-// Called only at native DeepSeek dispatch time. It never registers a task or
-// falls back to a child process; a missing/inactive install fails closed.
-export async function ensureNativeDeepseekDispatch({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter({ allowInstallJournal: true }), taskAdapter } = {}, dependencies = {}) {
-  if (typeof journalPath !== "string" || !journalPath) throw new Error("an installed isolation journal path is required for native DeepSeek dispatch");
+export async function inspectNativeDeepseekDispatchState({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter({ allowInstallJournal: true }), taskAdapter, requireRunning = false } = {}, dependencies = {}) {
+  if (typeof journalPath !== "string" || !journalPath) throw new Error("an installed isolation journal path is required for native DeepSeek readiness inspection");
   const journal = await readJournal(journalPath);
   if (journal.phase !== "active" || Object.values(journal.completed || {}).some((value) => value !== true)) {
     throw new Error("isolated native DeepSeek gateway is not fully activated");
@@ -711,6 +709,31 @@ export async function ensureNativeDeepseekDispatch({ journalPath, envAdapter = c
   const tasks = taskAdapter || dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
   const task = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
   if (!task.exists || !task.owned || task.specMatches !== true || !task.enabled) throw new Error("isolated gateway Task Scheduler task is missing, changed, or disabled");
+  const paths = gatewayPaths(journal.paths.gatewayDir);
+  let strictHealth = null;
+  if (requireRunning) {
+    if (task.state !== "Running") throw new Error("isolated gateway Task Scheduler task is not Running");
+    const gateway = dependencies.gatewayAdapter || dependencies;
+    const identity = await (gateway.readGatewayIdentity || readGatewayIdentity)(paths);
+    const state = await (gateway.readGatewayState || readGatewayState)(paths);
+    if (!identity?.token || identity.token !== identityPlan.token || identity.port !== identityPlan.port
+        || !state?.token || state.token !== identity.token || state.port !== identity.port || !Number.isInteger(state.pid)) {
+      throw new Error("isolated gateway health state does not match its private identity");
+    }
+    const live = await (gateway.gatewayHealth || gatewayHealth)(state);
+    if (live?.reachable !== true || live.pid !== state.pid) throw new Error("isolated gateway is not healthy for native DeepSeek readiness inspection");
+    if (live.deepseek_only !== true || live.relay_allowed !== false) throw new Error("isolated gateway does not enforce DeepSeek-only routing");
+    strictHealth = true;
+  }
+  return { ready: true, journal, taskState: task.state, strictHealth };
+}
+
+// Called only at native DeepSeek dispatch time. It never registers a task or
+// falls back to a child process; a missing/inactive install fails closed.
+export async function ensureNativeDeepseekDispatch({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter({ allowInstallJournal: true }), taskAdapter } = {}, dependencies = {}) {
+  const inspected = await inspectNativeDeepseekDispatchState({ journalPath, envAdapter, taskAdapter }, dependencies);
+  const { journal } = inspected;
+  const tasks = taskAdapter || dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
   const paths = gatewayPaths(journal.paths.gatewayDir);
   const launchImpl = createOwnedGatewayTaskLauncher(journal.gateway.taskPlan, tasks);
   const gateway = dependencies.gatewayAdapter || dependencies;
