@@ -124,6 +124,41 @@ try {
   const finished = runCli(["finish", "--workspace", workspaceA, "--task-nonce", "cli-task-nonce", "--child", "cli-child", "--state-dir", cliState]);
   equal(finished.status, 0, "CLI finish releases the reservation");
   equal((await new NativeWriterLease({ stateDir: cliState }).get(workspaceA)), null, "finish releases the workspace lease");
+
+  const readonlyState = path.join(root, "readonly-api-state");
+  const readonlyProfile = "abcdefabcdefabcdefabcdef";
+  const writer = runCli(["reserve", "--workspace", workspaceA, "--task-nonce", "writer-keep-nonce", "--state-dir", readonlyState]);
+  equal(writer.status, 0, "a writer reservation can coexist with read-only API recording");
+  const recordArgs = [
+    "record", "--workspace", workspaceA, "--task-nonce", "api-record-nonce", "--child", "api-readonly-child",
+    "--model", "api-readonly-model", "--executor", "api", "--profile-id", readonlyProfile,
+    "--role", `native_api_${readonlyProfile}`, "--provider-id", `api-native-${readonlyProfile}`,
+    "--state-dir", readonlyState,
+  ];
+  const recorded = runCli(recordArgs);
+  equal(recorded.status, 0, "read-only API child can be recorded without taking the writer lease");
+  const recordedTask = JSON.parse(recorded.stdout).task;
+  equal(recordedTask.binding.profileId, readonlyProfile, "record stores the complete API binding");
+  equal(recordedTask.binding.model, "api-readonly-model", "record stores the exact API model");
+  equal((await new NativeWriterLease({ stateDir: readonlyState }).get(workspaceA)).state, "reserved",
+    "recording a read-only API child leaves the unrelated writer reservation intact");
+  const recordedBinding = runCli(["binding", "--child", "api-readonly-child", "--state-dir", readonlyState]);
+  equal(JSON.parse(recordedBinding.stdout).binding.profileId, readonlyProfile, "binding reads the recorded API profile");
+  const sameChildFollowup = runCli(recordArgs);
+  equal(sameChildFollowup.status, 0, "the same read-only child can continue with its original binding");
+  equal(JSON.parse(sameChildFollowup.stdout).task.binding.profileId, readonlyProfile,
+    "same-child follow-up keeps the original API profile");
+  const crossParent = runCli(recordArgs, { CODEX_THREAD_ID: "trusted-parent-B" });
+  equal(crossParent.status, 1, "another parent cannot overwrite the recorded API child");
+  assert.match(crossParent.stderr, /another parent chat/);
+  const changedModel = runCli(recordArgs.map((value) => value === "api-readonly-model" ? "different-model" : value));
+  equal(changedModel.status, 1, "a recorded API child model is immutable");
+  assert.match(changedModel.stderr, /different model|immutable/i);
+  const completed = runCli(["complete", "--child", "api-readonly-child", "--status", "completed", "--state-dir", readonlyState]);
+  equal(completed.status, 0, "complete finishes only the API task record");
+  equal(JSON.parse(completed.stdout).task.status, "completed", "complete reports the task status");
+  equal((await new NativeWriterLease({ stateDir: readonlyState }).get(workspaceA)).state, "reserved",
+    "complete does not release another writer lease");
 } finally {
   await rm(root, { recursive: true, force: true });
 }

@@ -29,7 +29,7 @@ The source includes the installer orchestration entrypoints `native-isolated-ins
 
 Run the bundled `scripts/route.mjs` before dispatching a new coding task. By default it selects native Luna during DeepSeek weekday peak windows and native DeepSeek during valley time. `Asia/Shanghai` is the default timezone. Peak intervals are 09:00–12:00 and 14:00–18:00 China time on weekdays, excluding official Chinese public holidays. Weekends remain valley even on China make-up workdays. The bundled calendar covers 2026; for other years, known valley hours use DeepSeek and candidate weekday peaks conservatively use Luna.
 
-An explicit one-task choice (`--executor luna|deepseek`) wins. A saved chat override outranks the automatic schedule. Set it with `--set-session-executor luna|deepseek`, clear it with `--set-session-executor auto` or `--reset-session`, and pass `--session $env:CODEX_THREAD_ID` only when that stable chat ID is available. If the host exposes no stable ID, keep the preference in Sol's current-chat context and pass a one-task override; do not invent shared identity.
+An explicit one-task choice (`--executor luna|deepseek|<profileId>|<alias>`) wins. A saved chat override outranks the automatic schedule. Set it with `--set-session-executor luna|deepseek|<profileId>|<alias>`, clear it with `--set-session-executor auto` or `--reset-session`, and pass `--session $env:CODEX_THREAD_ID` only when that stable chat ID is available. If the host exposes no stable ID, keep the preference in Sol's current-chat context and pass a one-task override; do not invent shared identity. An ordinary one-task API choice does not change the global fixed configuration.
 
 ```powershell
 node .\scripts\route.mjs --json
@@ -37,6 +37,20 @@ node .\scripts\route.mjs --json --executor deepseek
 node .\scripts\route.mjs --json --session $env:CODEX_THREAD_ID --set-session-executor luna
 node .\scripts\route.mjs --json --session $env:CODEX_THREAD_ID --reset-session
 ```
+
+For an API profile or alias, resolve and gate it explicitly:
+
+```powershell
+node .\scripts\route.mjs --json --executor <profileId-or-alias>
+node .\scripts\native-agent.mjs --executor <profileId> --json
+```
+
+The gate must pass before spawn. The returned `native_spawn` supplies
+`agent_type: native_api_<profileId>`, `provider_id: api-native-<profileId>`,
+`fork_turns: "none"`, and the exact resolved model; omit `model` in
+`spawn_agent`. If the gate fails because the runtime is the old 6ec build or
+the profile is not installed, report that failure and stop. Do not replace it
+with another executor or a hand-edited journal.
 
 ## Shared native writer and child-message contract
 
@@ -57,6 +71,55 @@ Every `spawn_agent` and every `followup_task` message must end with exactly this
 ```
 
 The selected role supplies backend, model, and reasoning configuration. This route fixes the native DeepSeek role at `high`; it does not inherit the Sol parent’s `xhigh` setting, so an `xhigh` parent request still runs this child at `high`. The current spawn path exposes no per-child effort control. Keep the language instruction in every child message as well, so progress and final output remain predictable across role loading and follow-up turns.
+
+## If the route is a configured API profile
+
+Use the immutable profile ID from the route/gate result, not a mutable label.
+For a write-capable API child, reserve and bind the full executor identity:
+
+```powershell
+$taskNonce = [guid]::NewGuid().ToString()
+node .\scripts\native-state.mjs reserve --workspace (Get-Location).Path --task-nonce $taskNonce --model <exact-model>
+# spawn_agent with the gate result; omit model
+node .\scripts\native-state.mjs bind --workspace (Get-Location).Path --task-nonce $taskNonce `
+  --child CHILD_THREAD_ID --model <exact-model> --executor api `
+  --profile-id <24hex> --role native_api_<24hex> --provider-id api-native-<24hex>
+```
+
+For a read-only API child, record the actual child without taking a writer
+lease, then read the binding and complete only that task record:
+
+```powershell
+node .\scripts\native-state.mjs record --workspace (Get-Location).Path --task-nonce $taskNonce `
+  --child CHILD_THREAD_ID --model <exact-model> --executor api `
+  --profile-id <24hex> --role native_api_<24hex> --provider-id api-native-<24hex>
+node .\scripts\native-state.mjs binding --child CHILD_THREAD_ID
+node .\scripts\native-state.mjs complete --child CHILD_THREAD_ID --status completed
+```
+
+`record` and `complete` use the trusted `CODEX_THREAD_ID`; they never acquire or
+release the workspace writer lease. A different parent is rejected, and a
+different model/profile cannot overwrite the original binding. For every
+follow-up, read `binding`, rerun `native-agent.mjs --executor <profileId>
+--json` against that original profile, and continue the same child with
+`followup_task`. A global profile change affects only new children. Old
+profiles cannot be removed by the settings schema; if the old profile gate
+fails, report the failure and do not silently substitute the new profile.
+
+Only when the user explicitly asks for a global fixed API configuration, update
+`mode` and `fixedExecutor` in one CAS call:
+
+```json
+{
+  "set": {"mode": "fixed", "fixedExecutor": "<24hex>"},
+  "expectedSha256": "<snapshot revision>"
+}
+```
+
+Use the MCP `router_settings_snapshot` revision and `router_settings_update`;
+saving configuration is separate from an explicit Apply and a full Codex
+restart. See [native API executors](docs/native-api-executors.md) and the
+[router settings MCP panel](docs/router-settings-mcp.md).
 
 ## If the route is deepseek
 

@@ -280,6 +280,32 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify({ task, writer })}\n`);
     return;
   }
+  if (command === "record") {
+    if (get("executor") !== "api") throw new Error("record is only for an explicit API read-only child binding");
+    const child = get("child");
+    const task = await new NativeTasks({ stateDir }).begin({
+      parentThreadId: parent,
+      childThreadId: child,
+      model: get("model"),
+      workspace,
+      taskNonce,
+      binding: {
+        executor: "api",
+        profileId: get("profile-id"),
+        role: get("role"),
+        providerId: get("provider-id"),
+        model: get("model"),
+      },
+    });
+    process.stdout.write(`${JSON.stringify({ task })}\n`);
+    return;
+  }
+  if (command === "complete") {
+    const child = get("child");
+    const task = await new NativeTasks({ stateDir }).finish({ parentThreadId: parent, childThreadId: child, status: get("status") || "completed" });
+    process.stdout.write(`${JSON.stringify({ task })}\n`);
+    return;
+  }
   if (command === "finish") {
     const child = get("child");
     const task = await new NativeTasks({ stateDir }).finish({ parentThreadId: parent, childThreadId: child, status: get("status") || "completed" });
@@ -298,7 +324,7 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify({ binding })}\n`);
     return;
   }
-  throw new Error("usage: native-state.mjs <reserve|bind|finish|who|binding> --workspace PATH [--task-nonce ID] [--child ID] [--model MODEL] [--executor NAME --profile-id ID --role ROLE --provider-id ID] [--state-dir PATH]");
+  throw new Error("usage: native-state.mjs <reserve|bind|finish|record|complete|who|binding> --workspace PATH [--task-nonce ID] [--child ID] [--model MODEL] [--executor NAME --profile-id ID --role ROLE --provider-id ID] [--state-dir PATH]");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
