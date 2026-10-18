@@ -224,11 +224,17 @@ web search explicitly.
 ## Verification and current limits
 
 The current runtime approval hash is
-`7f72fee85efecea550249035d2696bf9216cc256b7afc0cabb6ebc0bed0094e0`. Runtime
+`6dc2ded0fc9c17609fc31ab3266a81ddbfe1ed69b0d7e450d48c1ad715b154e5`. Runtime
 manifests built with the older `7a5c...` patch (including the installed 6ec
 binary) are not accepted by the API dispatch gate. The old binary may still be
 used as an adapter-level CLI smoke target, but it is not evidence that a new
 native API role passed end-to-end.
+
+The final patch is 108037 bytes. Its upstream build is recorded in GitHub
+Actions run `39132413744` at head
+`16a00b88c3fd2d511243f3f71bbdfffea7120232`; this is build evidence, not a
+local installation, restart, or desktop API-role acceptance. No new runtime
+was installed in this worktree.
 
 Mocked/free tests cover artifacts, install/rollback, Task namespace, health,
 gate failures, source-bundle stability, immutable state bindings, and CLI
