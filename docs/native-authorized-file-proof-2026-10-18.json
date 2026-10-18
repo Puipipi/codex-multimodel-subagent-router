@@ -1,0 +1,96 @@
+{
+  "schema": "native-authorized-file-proof-v1",
+  "date": "2026-10-18",
+  "scope": {
+    "classification": "staged65 Windows CLI with loopback mock providers",
+    "real_deepseek_api": false,
+    "formal_installation": false,
+    "desktop_ui_acceptance": false,
+    "production_security_settings_changed": false
+  },
+  "build": {
+    "version": "0.163.0-alpha.10.2",
+    "source_commit": "4ebc485ca321243727539187169425fcf972f2c4",
+    "patch_sha256": "65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae",
+    "binary_sha256": "b311c3c365d1a9a5c19a6040428e02d49b10d7bdd766a859f0b842d42c3e3963",
+    "provenance_sha256": "644c27784e4b0de3b17f354c0592f53980ffefa1f03a9ffa52ea765a9c1cd356",
+    "binary_and_provenance_match_published_build": true,
+    "activation_status": "not_activated"
+  },
+  "fixture_and_syntax_exit_codes": {
+    "fixtures": 0,
+    "probe_syntax": 0,
+    "fixture_syntax": 0,
+    "rollout_helper_syntax": 0
+  },
+  "readonly_execution": {
+    "status": "passed",
+    "actual_cli_exit_code": 0,
+    "parent_completed": true,
+    "child_completed": true,
+    "parent_rollout": {
+      "source": "genuine_native_rollout",
+      "session_id_verified": true,
+      "permission_profile_present": true,
+      "permission_profile_type": "disabled"
+    },
+    "child_rollout": {
+      "source": "genuine_native_rollout",
+      "session_id_verified": true,
+      "permission_profile_present": true,
+      "permission_profile_type": "disabled"
+    },
+    "command_execution": { "count": 1, "completed": 1, "exit_code_zero": 1 },
+    "mock_tool_calls": { "function": 1, "custom": 0 },
+    "paired_output": { "call_id_matched": true, "present": true, "marker_present": true, "error_class": "none", "output_bytes": 125 },
+    "http_requests": { "main_loopback_mock": 2, "deepseek_loopback_mock": 2 },
+    "cleanup": true,
+    "receipt_sha256": "5D7D93BC599B13BB496C231F4DC17940FAF96B5C4048340DDF36580F3C8D71F4"
+  },
+  "authorized_file_proof": {
+    "status": "passed",
+    "actual_cli_exit_code": 0,
+    "strict_gate_passed": true,
+    "config_read": { "sandbox_mode": "danger-full-access", "approval_policy": "never", "asserted": true },
+    "parent_completed": true,
+    "child_completed": true,
+    "parent_rollout": {
+      "source": "genuine_native_rollout",
+      "session_id_verified": true,
+      "permission_profile_present": true,
+      "permission_profile_type": "disabled"
+    },
+    "child_rollout": {
+      "source": "genuine_native_rollout",
+      "session_id_verified": true,
+      "permission_profile_present": true,
+      "permission_profile_type": "disabled"
+    },
+    "command_execution": { "count": 1, "completed": 1, "exit_code_zero": 1 },
+    "mock_tool_calls": { "function": 1, "custom": 0 },
+    "paired_output": { "call_id_matched": true, "present": true, "error_class": "none", "output_bytes": 102 },
+    "file_proof": {
+      "exists": true,
+      "byte_length": 60,
+      "sha256": "b762573c11f2d4ed74bd34824d995ef3314691ab3ee14d4cd6bf9c945cb93be5",
+      "utf8_bom": false,
+      "crlf": false,
+      "exact_expected_bytes": true
+    },
+    "http_requests": { "main_loopback_mock": 2, "deepseek_loopback_mock": 2 },
+    "cleanup": true,
+    "receipt_sha256": "CA9C1CC74EA3C9C50970CE5AC33ADA4B90B321E52F79906D3550E94569DD59B8"
+  },
+  "invalid_evidence_and_limitations": {
+    "first_readonly_fixture": "invalid_mock_sequence_final_before_function_call; no tool call occurred; not a runtime failure",
+    "first_wrapper_capture": "PowerShell scalar indexing discarded the safe stdout JSON; process exit 0; not a runtime failure",
+    "direct_readonly_recapture": "passed strict gate",
+    "prior_real_api_file_attempts": {
+      "count": 3,
+      "historical_status": "all remain failed; unchanged",
+      "underlying_cause": "unknown",
+      "historical_profile": "unknown when rollout evidence is unavailable",
+      "workspace_write_vs_full_access": "known harness setup difference; not established as the cause"
+    }
+  }
+}
