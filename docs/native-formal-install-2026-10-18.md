@@ -6,6 +6,8 @@ The single `prepare` run exited successfully: all 9 smoke checks passed, tempora
 
 The status still reports `runtimeObserved=false`, `desktopAccepted=false`, and `restartNeeded=true`. Fully exit and restart Codex before expecting new chats to inherit the updated user environment. This record establishes the formal installation path on this host only. It does not establish desktop acceptance, a real child task failure path, multi-chat behavior, or notification delivery. No model API request was made as part of this installation. Earlier private file-followup, cold-start, and upstream-401 diagnostics are separate evidence and do not substitute for Task or desktop acceptance.
 
+The later [stable gateway source acceptance](native-stable-gateway-acceptance-2026-10-18.md) supersedes this record only for the current gateway source path and the subsequent Task process switch. This document remains the evidence for the initial 0.10.2 prepare and activation.
+
 | Safe receipt | SHA-256 |
 | --- | --- |
 | Prepare | `689e82e5f7455ced912ad77eca18bc2f46f93f6d9803119b148ccd0dd1253345` |

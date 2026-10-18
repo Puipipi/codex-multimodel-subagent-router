@@ -77,7 +77,7 @@ async function fixture(label) {
     return { state: launchedState, started: true };
   };
   const stopCalls = [];
-  const stopGateway = async ({ paths }) => { stopCalls.push({ paths }); await rm(paths.state, { force: true }); };
+  const stopGateway = async ({ paths }) => { const current = JSON.parse(await readFile(paths.state, "utf8").catch(() => "null")); stopCalls.push({ paths, pid: current?.pid ?? null }); await rm(paths.state, { force: true }); return { stopped: Boolean(current), pid: current?.pid ?? null }; };
   const smokeCheck = async ({ preparedHome, exePath, expectedMainModel, expectedMainProvider, expectedRootBaseUrl }) => {
     equal(exePath, path.join(versionDir, "codex.exe"), "smoke receives verified staged executable");
     equal(expectedMainModel, "gpt-current", "smoke receives explicitly selected main model");
@@ -91,9 +91,11 @@ async function fixture(label) {
   const gatewayScriptPath = fileURLToPath(new URL("../scripts/native-gateway.mjs", import.meta.url));
   const common = { versionDir, codexHome, gatewayDir, startupDir, journalPath, gatewayScriptPath, expectedMainModel: "gpt-current", expectedMainProvider: null, expectedRootBaseUrl: null, envAdapter, autostartAdapter, taskAdapter, ensureGateway, stopGateway, smokeCheck };
   const activateFixture = (options = {}, dependencies = {}) => activate({ journalPath, envAdapter, autostartAdapter, taskAdapter, ...options }, { ensureGateway, gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }), stopGateway, ...dependencies });
-  const rollbackFixture = (options = {}) => rollback({ journalPath, envAdapter, autostartAdapter, taskAdapter, ...options }, {
+  const rollbackFixture = (options = {}, dependencies = {}) => rollback({ journalPath, envAdapter, autostartAdapter, taskAdapter, ...options }, {
     gatewayHealth: async (value) => ({ reachable: true, pid: value.pid, deepseek_only: true, relay_allowed: false }), stopGateway,
-    readGatewayIdentity, readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8")),
+    readGatewayIdentity, readGatewayState: async (paths) => JSON.parse(await readFile(paths.state, "utf8").catch(() => "null")),
+    isGatewayProcessAlive: async () => false,
+    ...dependencies,
   });
   return { dir, versionDir, codexHome, gatewayDir, startupDir, journalPath, environment, envAdapter, startup, autostartAdapter, taskAdapter, state, ensureCalls, taskCalls, stopCalls, common, activateFixture, rollbackFixture };
 }
@@ -924,6 +926,198 @@ try {
   equal(success.environment.get("SOL_LUNA_NATIVE_INSTALL_JOURNAL").present, false, "rollback restores original journal environment state");
   equal(success.startup.size, 0, "successful rollback does not restore the retired managed Startup VBS");
   equal(success.stopCalls.length, 1, "rollback stops only the gateway started by this transaction after identity health verification");
+
+  const restartedGateway = await fixture("rollback-after-scheduler-restart");
+  await prepare(restartedGateway.common);
+  await restartedGateway.activateFixture();
+  const restartedIdentity = await readGatewayIdentity(gatewayPaths(restartedGateway.gatewayDir));
+  restartedGateway.state.pid = 23456;
+  await writeFile(gatewayPaths(restartedGateway.gatewayDir).state, JSON.stringify({ pid: 23456, token: restartedIdentity.token, port: restartedIdentity.port }));
+  const restartedRollback = await restartedGateway.rollbackFixture();
+  equal(restartedRollback.phase, "rolled_back", "rollback cleans up the current owned gateway after its Task Scheduler PID changed");
+  equal(restartedGateway.stopCalls.at(-1)?.pid, 23456, "rollback shuts down the current PID rather than the initial journal PID");
+  equal(restartedGateway.taskCalls.some(([action]) => action === "unregister"), true, "rollback restores the Task only after the current child is confirmed exited");
+
+  for (const [label, stopResult, alive] of [
+    ["shutdown-false", { stopped: false, pid: 12345 }, false],
+    ["child-still-alive", { stopped: true, pid: 12345 }, true],
+  ]) {
+    const blocked = await fixture(`rollback-${label}`);
+    await prepare(blocked.common);
+    await blocked.activateFixture();
+    const beforeConfig = await readFile(path.join(blocked.codexHome, "config.toml"));
+    const beforeLauncher = await readFile(path.join(blocked.gatewayDir, "gateway-task.vbs"));
+    const beforeEnvironment = structuredClone(blocked.environment.get("CODEX_CLI_PATH"));
+    const beforeStartupSize = blocked.startup.size;
+    await rejects(() => blocked.rollbackFixture({}, {
+      stopGateway: async () => stopResult,
+      isGatewayProcessAlive: async () => alive,
+      gatewayExitTimeoutMs: 5,
+    }), /shutdown|process exit/i, `${label} prevents rollback from claiming gateway cleanup`);
+    equal((await readFile(path.join(blocked.codexHome, "config.toml"))).equals(beforeConfig), true, `${label} leaves config untouched`);
+    equal((await readFile(path.join(blocked.gatewayDir, "gateway-task.vbs"))).equals(beforeLauncher), true, `${label} leaves launcher untouched`);
+    assert.deepEqual(blocked.environment.get("CODEX_CLI_PATH"), beforeEnvironment, `${label} leaves environment untouched`); checks += 1;
+    equal(blocked.taskCalls.some(([action]) => action === "unregister"), false, `${label} does not unregister the Task`);
+    equal(blocked.startup.size, beforeStartupSize, `${label} leaves autostart state untouched`);
+    equal((await status({ journalPath: blocked.journalPath })).phase, "active", `${label} leaves the journal available for a safe retry`);
+  }
+
+  const throwShutdown = await fixture("rollback-shutdown-throws");
+  await prepare(throwShutdown.common);
+  await throwShutdown.activateFixture();
+  const throwConfigBefore = await readFile(path.join(throwShutdown.codexHome, "config.toml"));
+  const throwLauncherBefore = await readFile(path.join(throwShutdown.gatewayDir, "gateway-task.vbs"));
+  const throwEnvironmentBefore = structuredClone(throwShutdown.environment.get("CODEX_CLI_PATH"));
+  await rejects(() => throwShutdown.rollbackFixture({}, {
+    stopGateway: async () => { throw new Error("fixture shutdown failure"); },
+  }), /shutdown/i, "shutdown exceptions stop rollback before restoring owned state");
+  equal(throwShutdown.taskCalls.some(([action]) => action === "unregister"), false, "shutdown exception does not unregister the Task");
+  equal((await readFile(path.join(throwShutdown.codexHome, "config.toml"))).equals(throwConfigBefore), true, "shutdown exception leaves config untouched");
+  equal((await readFile(path.join(throwShutdown.gatewayDir, "gateway-task.vbs"))).equals(throwLauncherBefore), true, "shutdown exception leaves launcher untouched");
+  assert.deepEqual(throwShutdown.environment.get("CODEX_CLI_PATH"), throwEnvironmentBefore, "shutdown exception leaves environment untouched"); checks += 1;
+  equal((await status({ journalPath: throwShutdown.journalPath })).phase, "active", "shutdown exception leaves the journal available for a safe retry");
+
+  const readyChildAlive = await fixture("rollback-task-ready-child-alive");
+  await prepare(readyChildAlive.common);
+  await readyChildAlive.activateFixture();
+  const readyButAliveAdapter = {
+    ...readyChildAlive.taskAdapter,
+    async status(plan) {
+      const current = await readyChildAlive.taskAdapter.status(plan);
+      return current.state === "Ready" ? current : { ...current, state: "Ready" };
+    },
+  };
+  await rejects(() => readyChildAlive.rollbackFixture({ taskAdapter: readyButAliveAdapter }, {
+    stopGateway: async () => ({ stopped: true, pid: 12345 }),
+    isGatewayProcessAlive: async () => true,
+    gatewayExitTimeoutMs: 5,
+  }), /process exit/i, "Task Ready does not substitute for confirming the owned child exited");
+  equal(readyChildAlive.taskCalls.some(([action]) => action === "unregister"), false, "Task Ready with a live child is not unregistered");
+  equal(readyChildAlive.environment.get("SOL_LUNA_NATIVE_PLAINTEXT_V2").value, "1", "Task Ready with a live child preserves managed environment");
+  equal((await status({ journalPath: readyChildAlive.journalPath })).phase, "active", "Task Ready with a live child leaves the journal recoverable");
+
+  const priorOwnedGateway = await fixture("rollback-preserves-prior-owned-gateway");
+  await prepare(priorOwnedGateway.common);
+  await priorOwnedGateway.activateFixture();
+  const priorOwnedJournal = decodeJournal(await readFile(priorOwnedGateway.journalPath, "utf8"));
+  priorOwnedJournal.gateway.startedByTransaction = false;
+  priorOwnedJournal.gateway.preexistingPid = priorOwnedJournal.gateway.pid;
+  priorOwnedJournal.gateway.taskSnapshot.priorExists = true;
+  priorOwnedJournal.gateway.taskSnapshot.priorOwned = true;
+  await writeFile(priorOwnedGateway.journalPath, encodeJournal(priorOwnedJournal));
+  await priorOwnedGateway.rollbackFixture();
+  equal(priorOwnedGateway.stopCalls.length, 0, "rollback preserves a gateway marked as preexisting and not started by this transaction");
+  equal(priorOwnedGateway.taskCalls.some(([action]) => action === "unregister"), false, "rollback preserves a prior-owned Task snapshot");
+
+  const samePreexistingPid = await fixture("rollback-started-flag-but-preexisting-pid");
+  await prepare(samePreexistingPid.common);
+  await samePreexistingPid.activateFixture();
+  const samePreexistingJournal = decodeJournal(await readFile(samePreexistingPid.journalPath, "utf8"));
+  samePreexistingJournal.gateway.preexistingPid = samePreexistingJournal.gateway.pid;
+  await writeFile(samePreexistingPid.journalPath, encodeJournal(samePreexistingJournal));
+  let protectedPidShutdownCalls = 0;
+  await samePreexistingPid.rollbackFixture({}, { stopGateway: async ({ paths }) => {
+    protectedPidShutdownCalls += 1;
+    await rm(paths.state, { force: true });
+    return { stopped: true, pid: 12345 };
+  } });
+  equal(protectedPidShutdownCalls, 0, "preexisting PID is protected even when startedByTransaction is true");
+
+  const missingStateNoBinding = await fixture("rollback-missing-state-no-cleanup-binding");
+  await prepare(missingStateNoBinding.common);
+  await missingStateNoBinding.activateFixture();
+  await rm(gatewayPaths(missingStateNoBinding.gatewayDir).state, { force: true });
+  await rejects(() => missingStateNoBinding.rollbackFixture({}, { isGatewayProcessAlive: async () => false }), /cleanup PID|identity binding|verified cleanup/i,
+    "missing current state cannot fall back to the original journal PID");
+  equal((await missingStateNoBinding.taskAdapter.status({ name: "disposable" })).state, "Running", "missing state fixture still has a Running Task when rollback is refused");
+  equal(missingStateNoBinding.taskCalls.some(([action]) => action === "unregister"), false, "missing state without cleanup binding does not unregister the Task");
+  equal((await status({ journalPath: missingStateNoBinding.journalPath })).phase, "active", "missing state without cleanup binding leaves the journal active");
+
+  const retryAfterMissingState = await fixture("rollback-retry-keeps-verified-current-pid");
+  await prepare(retryAfterMissingState.common);
+  await retryAfterMissingState.activateFixture();
+  const retryIdentity = await readGatewayIdentity(gatewayPaths(retryAfterMissingState.gatewayDir));
+  retryAfterMissingState.state.pid = 23456;
+  await writeFile(gatewayPaths(retryAfterMissingState.gatewayDir).state, JSON.stringify({ pid: 23456, token: retryIdentity.token, port: retryIdentity.port }));
+  let retryChildAlive = true;
+  let retryStopCalls = 0;
+  const retryDependencies = {
+    stopGateway: async ({ paths }) => {
+      retryStopCalls += 1;
+      await rm(paths.state, { force: true });
+      return { stopped: true, pid: 23456 };
+    },
+    isGatewayProcessAlive: async (pid) => { equal(pid, 23456, "retry liveness checks the last verified current PID"); return retryChildAlive; },
+    gatewayExitTimeoutMs: 0,
+  };
+  await rejects(() => retryAfterMissingState.rollbackFixture({}, retryDependencies), /process exit/i,
+    "a graceful shutdown with an unobserved child exit remains retryable");
+  const cleanupBinding = decodeJournal(await readFile(retryAfterMissingState.journalPath, "utf8")).gateway.cleanupProcess;
+  equal(cleanupBinding?.pid, 23456, "journal records the verified current PID before graceful shutdown");
+  const retryJournal = decodeJournal(await readFile(retryAfterMissingState.journalPath, "utf8"));
+  equal(retryJournal.gateway.pid, 12345, "rollback preserves the original activation PID");
+  equal(cleanupBinding?.identitySha256, retryJournal.gateway.identitySha256,
+    "cleanup PID binding is tied to the journal identity hash");
+  await rejects(() => retryAfterMissingState.rollbackFixture({}, retryDependencies), /process exit/i,
+    "retry after state removal still waits for the recorded current PID");
+  equal(retryStopCalls, 1, "retry does not repeat graceful shutdown when state is absent");
+  retryChildAlive = false;
+  await retryAfterMissingState.rollbackFixture({}, retryDependencies);
+  equal((await status({ journalPath: retryAfterMissingState.journalPath })).phase, "rolled_back", "retry completes only after the recorded current PID exits");
+
+  const postInstallConfig = await fixture("rollback-preserves-post-install-config");
+  await prepare(postInstallConfig.common);
+  await postInstallConfig.activateFixture();
+  const postConfigPath = path.join(postInstallConfig.codexHome, "config.toml");
+  const postOwned = (await readFile(postConfigPath, "utf8"))
+    .replace('model = "gpt-current"', 'model = "gpt-user-selected"')
+    .replace("# sol-luna-native-isolated end", [
+      "# added after install",
+      "[mcp_servers.user_server]",
+      'command = "user-mcp"',
+      "[[plugins]]",
+      'id = "user-plugin"',
+      "[[skills.config]]",
+      'path = "user-skill"',
+      "enabled = true",
+      "# sol-luna-native-isolated end",
+    ].join("\n"));
+  await writeFile(postConfigPath, postOwned);
+  await postInstallConfig.rollbackFixture();
+  const preservedPostConfig = await readFile(postConfigPath, "utf8");
+  for (const text of ['model = "gpt-user-selected"', "# added after install", "[mcp_servers.user_server]", 'id = "user-plugin"', 'path = "user-skill"']) {
+    equal(preservedPostConfig.includes(text), true, `rollback preserves later config text: ${text}`);
+  }
+  equal(preservedPostConfig.includes("sol-luna-native-isolated begin"), false, "rollback removes only the owned isolated provider tables");
+
+  const rootDependsOnPlugin = await fixture("rollback-root-depends-on-plugin");
+  await prepare(rootDependsOnPlugin.common);
+  await rootDependsOnPlugin.activateFixture();
+  const dependentConfigPath = path.join(rootDependsOnPlugin.codexHome, "config.toml");
+  const dependentConfig = (await readFile(dependentConfigPath, "utf8"))
+    .replace('model = "gpt-current"', 'model = "gpt-current"\nmodel_provider = "deepseek-native"');
+  await writeFile(dependentConfigPath, dependentConfig);
+  await rejects(() => rootDependsOnPlugin.rollbackFixture(), /root.*depends|main.*depends/i, "rollback refuses to remove a provider selected by root config");
+  equal(rootDependsOnPlugin.stopCalls.length, 0, "root provider dependency is rejected before gateway shutdown");
+
+  const rootDependsOnGateway = await fixture("rollback-root-depends-on-private-url");
+  await prepare(rootDependsOnGateway.common);
+  await rootDependsOnGateway.activateFixture();
+  const gatewayIdentity = await readGatewayIdentity(gatewayPaths(rootDependsOnGateway.gatewayDir));
+  const rootGatewayConfigPath = path.join(rootDependsOnGateway.codexHome, "config.toml");
+  const rootGatewayConfig = (await readFile(rootGatewayConfigPath, "utf8"))
+    .replace('model = "gpt-current"', `model = "gpt-current"\nopenai_base_url = "http://127.0.0.1:${gatewayIdentity.port}/${gatewayIdentity.token}/v1"`);
+  await writeFile(rootGatewayConfigPath, rootGatewayConfig);
+  await rejects(() => rootDependsOnGateway.rollbackFixture(), /root.*depends|main.*depends/i, "rollback refuses to remove a private gateway selected by the root URL");
+  equal(rootDependsOnGateway.stopCalls.length, 0, "root private URL dependency is rejected before gateway shutdown");
+
+  const preexistingRootProvider = await fixture("rollback-preexisting-root-provider-dependency");
+  const preexistingProviderConfigPath = path.join(preexistingRootProvider.codexHome, "config.toml");
+  await writeFile(preexistingProviderConfigPath, 'model = "gpt-current"\nmodel_provider = "deepseek-native"\n');
+  await prepare(preexistingRootProvider.common);
+  await preexistingRootProvider.activateFixture();
+  await rejects(() => preexistingRootProvider.rollbackFixture(), /root.*depends|main.*depends/i, "rollback checks root dependencies even when config bytes still match the install snapshot");
+  equal(preexistingRootProvider.stopCalls.length, 0, "preexisting root provider dependency is rejected before gateway shutdown");
 
   const absentConfigWithForeignSkill = await fixture("absent-config-with-foreign-skill");
   await rm(path.join(absentConfigWithForeignSkill.codexHome, "config.toml"));

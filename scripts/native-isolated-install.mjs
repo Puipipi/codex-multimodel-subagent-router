@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { apply as applyFiles, plan as planFiles, rollback as rollbackFiles } from "./native-isolated-files.mjs";
 import { autostartFile } from "./native-autostart.mjs";
-import { composeIsolatedConfig, hasLegacyGatewayConfigMarker, hasOnlyAddedForeignSkillTables, removeIsolatedConfig, withTemporaryRootModelCatalog } from "./native-isolated-config.mjs";
+import { composeIsolatedConfig, hasLegacyGatewayConfigMarker, removeIsolatedConfig, rootRoutesThroughIsolatedProvider, withTemporaryRootModelCatalog } from "./native-isolated-config.mjs";
 import { runIsolatedConfigSmoke } from "./native-isolated-smoke.mjs";
 import { ensureGateway, gatewayHealth, gatewayPaths, prepareGatewayIdentity, readGatewayIdentity, readGatewayState, stopGateway } from "./native-gateway-manager.mjs";
 import { createWindowsTaskSchedulerAdapter, gatewayTaskPlan, registerOwnedGatewayTask, restoreGatewayTask, snapshotGatewayTask, statusOwnedGatewayTask, createOwnedGatewayTaskLauncher } from "./native-gateway-task.mjs";
@@ -573,6 +573,96 @@ export async function activate({ journalPath, envAdapter = createWindowsUserEnvi
   }
 }
 
+function gatewayProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error("isolated gateway process identity is invalid");
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw new Error("isolated gateway process liveness could not be verified");
+  }
+}
+
+async function waitForGatewayProcessExit(pid, dependencies) {
+  const isAlive = dependencies.isGatewayProcessAlive || gatewayProcessAlive;
+  const timeoutMs = Number.isFinite(dependencies.gatewayExitTimeoutMs) && dependencies.gatewayExitTimeoutMs >= 0
+    ? dependencies.gatewayExitTimeoutMs : 10_000;
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    if (!(await isAlive(pid))) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now()))));
+  }
+}
+
+async function stopTransactionGatewayForRollback(journal, journalPath, tasks, dependencies, paths) {
+  if (!journal.completed.gateway || !journal.gateway.startedByTransaction) return false;
+  const identityBytes = await regularOrAbsent(journal.gateway.identityFile, "gateway identity");
+  if (!identityBytes || sha256(identityBytes) !== journal.gateway.identitySha256) {
+    throw new Error("isolated gateway identity changed; refusing rollback while ownership is unverified");
+  }
+  const identity = await (dependencies.readGatewayIdentity || readGatewayIdentity)(paths);
+  if (!identity?.token || !Number.isInteger(identity.port)) throw new Error("isolated gateway identity is invalid");
+  const task = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
+  if (!task.exists || !task.owned || task.specMatches !== true || !task.enabled) {
+    throw new Error("isolated gateway Task ownership changed; refusing rollback");
+  }
+  const state = await (dependencies.readGatewayState || readGatewayState)(paths);
+  const isAlive = dependencies.isGatewayProcessAlive || gatewayProcessAlive;
+  let pid;
+  if (state) {
+    if (state.token !== identity.token || state.port !== identity.port) {
+      throw new Error("isolated gateway state no longer matches its private identity");
+    }
+    const previousCleanup = journal.gateway.cleanupProcess;
+    if (previousCleanup && (previousCleanup.identitySha256 !== journal.gateway.identitySha256 ||
+        !Number.isInteger(previousCleanup.pid) || previousCleanup.pid <= 0)) {
+      throw new Error("recorded gateway cleanup identity is invalid; refusing rollback");
+    }
+    if (previousCleanup && previousCleanup.pid !== state.pid && await isAlive(previousCleanup.pid)) {
+      throw new Error("previously verified gateway PID is still alive; refusing rollback");
+    }
+    if (state.pid === journal.gateway.preexistingPid) {
+      journal.gateway.startedByTransaction = false;
+      journal.gateway.cleanup = "preserved_preexisting";
+      journal.completed.gateway = false;
+      delete journal.gateway.cleanupProcess;
+      return false;
+    }
+    const live = await (dependencies.gatewayHealth || gatewayHealth)(state);
+    if (!Number.isInteger(state.pid) || state.pid <= 0 || live?.reachable !== true || live.pid !== state.pid ||
+        live.deepseek_only !== true || live.relay_allowed !== false) {
+      throw new Error("isolated gateway strict health is not verified; refusing rollback");
+    }
+    pid = state.pid;
+    journal.gateway.cleanupProcess = { pid, identitySha256: journal.gateway.identitySha256 };
+    await writeJournal(journalPath, journal);
+    const stopped = await (dependencies.stopGateway || stopGateway)({ paths });
+    if (stopped?.stopped !== true || stopped.pid !== pid) {
+      throw new Error("isolated gateway graceful shutdown was not confirmed");
+    }
+  } else {
+    const previousCleanup = journal.gateway.cleanupProcess;
+    if (!previousCleanup || previousCleanup.identitySha256 !== journal.gateway.identitySha256 ||
+        !Number.isInteger(previousCleanup.pid) || previousCleanup.pid <= 0) {
+      throw new Error("gateway state is missing and no identity-bound cleanup PID was recorded; refusing rollback");
+    }
+    pid = previousCleanup.pid;
+  }
+  if (!(await waitForGatewayProcessExit(pid, { ...dependencies, isGatewayProcessAlive: isAlive }))) {
+    throw new Error("isolated gateway process exit was not observed; refusing remaining rollback steps");
+  }
+  const after = await (dependencies.readGatewayState || readGatewayState)(paths);
+  if (after !== null) throw new Error("isolated gateway state reappeared after shutdown; refusing remaining rollback steps");
+  journal.gateway.cleanupEligible = true;
+  journal.gateway.startedByTransaction = false;
+  journal.completed.gateway = false;
+  journal.gateway.cleanup = "stopped";
+  return true;
+}
+
 export async function rollback({ journalPath, envAdapter = createWindowsUserEnvironmentAdapter({ allowInstallJournal: true }), autostartAdapter, taskAdapter } = {}, dependencies = {}) {
   if (typeof journalPath !== "string" || !journalPath) throw new Error("journalPath must be provided explicitly");
   const journal = await readJournal(journalPath);
@@ -606,8 +696,11 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
     const overrides = {};
     for (const [name, item] of Object.entries(journal.files.files)) {
       const current = await regularOrAbsent(item.path, "managed file");
-      if (current && current.equals(Buffer.from(item.next, "utf8"))) continue;
-      if (name !== "config.toml" || !current) throw new Error(`file changed since activation: ${item.path}`);
+      if (name !== "config.toml") {
+        if (current && current.equals(Buffer.from(item.next, "utf8"))) continue;
+        throw new Error(`file changed since activation: ${item.path}`);
+      }
+      if (!current) throw new Error(`file changed since activation: ${item.path}`);
       const identityBytes = await regularOrAbsent(journal.gateway.identityFile, "gateway identity");
       if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) {
         throw new Error("isolated gateway identity changed after activation");
@@ -616,16 +709,21 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
       const expectedBaseUrl = `http://127.0.0.1:${identityPlan.port}/${identityPlan.token}/v1`;
       const expectedRolePath = path.join(journal.paths.codexHome, "agents", "native_deepseek.toml");
       const currentConfig = current.toString("utf8");
-      if (!hasOnlyAddedForeignSkillTables(currentConfig, item.next, {
-        baseUrl: expectedBaseUrl,
-        agentConfigPath: expectedRolePath,
-      })) throw new Error(`file changed since activation: ${item.path}`);
+      const configOptions = { baseUrl: expectedBaseUrl, agentConfigPath: expectedRolePath };
+      if (composeIsolatedConfig(currentConfig, configOptions) !== currentConfig) {
+        throw new Error(`file changed since activation: ${item.path}`);
+      }
+      if (rootRoutesThroughIsolatedProvider(currentConfig, { baseUrl: expectedBaseUrl })) {
+        throw new Error("root config depends on the isolated DeepSeek provider; refusing to remove it");
+      }
+      if (current.equals(Buffer.from(item.next, "utf8"))) continue;
       const restoredConfig = Buffer.from(removeIsolatedConfig(currentConfig), "utf8");
+      const restoredExists = restoredConfig.length > 0;
       overrides[name] = {
         ...item,
         next: currentConfig,
-        prior: { exists: true, bytes: restoredConfig },
-        uninstallPrior: { exists: true, bytes: restoredConfig },
+        prior: { exists: restoredExists, bytes: restoredExists ? restoredConfig : null },
+        uninstallPrior: { exists: restoredExists, bytes: restoredExists ? restoredConfig : null },
       };
     }
     if (Object.keys(overrides).length) {
@@ -634,30 +732,25 @@ export async function rollback({ journalPath, envAdapter = createWindowsUserEnvi
   }
 
   const paths = gatewayPaths(journal.paths.gatewayDir);
-  if (journal.completed.gateway && journal.gateway.startedByTransaction) {
-    const identityBytes = await regularOrAbsent(journal.gateway.identityFile, "gateway identity");
-    if (identityBytes !== null && sha256(identityBytes) === journal.gateway.identitySha256) {
-      const [identity, state] = await Promise.all([(dependencies.readGatewayIdentity || readGatewayIdentity)(paths), (dependencies.readGatewayState || readGatewayState)(paths)]);
-      if (state?.pid === journal.gateway.pid && state.token === identity?.token && state.port === identity?.port) {
-        const live = await (dependencies.gatewayHealth || gatewayHealth)(state);
-        if (live.reachable && live.pid === state.pid) journal.gateway.cleanupEligible = true;
-      }
-    }
-  }
-
+  await stopTransactionGatewayForRollback(journal, journalPath, tasks, dependencies, paths);
   const errors = [];
   journal.phase = "rolling_back"; await writeJournal(journalPath, journal);
   const indeterminate = [];
-  if (journal.gateway.cleanupEligible) try {
-    await (dependencies.stopGateway || stopGateway)({ paths }); journal.gateway.startedByTransaction = false; journal.completed.gateway = false; journal.gateway.cleanup = "stopped";
-  } catch (error) { journal.gateway.cleanup = "failed"; errors.push(error); }
+  if (journal.completed.task) try {
+    await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks); journal.completed.task = false;
+  } catch (error) {
+    journal.completed.task = null; indeterminate.push("task"); errors.push(error);
+    journal.indeterminateStages = [...new Set([...(journal.indeterminateStages || []), ...indeterminate])];
+    journal.phase = "rollback_failed"; journal.recoveryErrors = errors.map((item) => item.message);
+    await writeJournal(journalPath, journal).catch((writeError) => errors.push(writeError));
+    throw new AggregateError(errors, "rollback could not restore the gateway Task; remaining owned state was preserved");
+  }
   if (journal.completed.environment) try { await rollbackEnvironment(journal.environmentSnapshot, envAdapter); journal.completed.environment = false; } catch (error) { journal.completed.environment = null; indeterminate.push("environment"); errors.push(error); }
   if (journal.completed.files) try { await rollbackFiles(filesForRollback, { target: legacyMigration ? "uninstall" : "prior" }); journal.completed.files = false; } catch (error) { journal.completed.files = null; indeterminate.push("files"); errors.push(error); }
   if (journal.completed.autostart) try {
     if (!retiredLegacyStartup) await restoreStartupChecked(journal.autostart, startup);
     journal.completed.autostart = false;
   } catch (error) { journal.completed.autostart = null; indeterminate.push("autostart"); errors.push(error); }
-  if (journal.completed.task) try { await restoreGatewayTask(journal.gateway.taskSnapshot, journal.gateway.taskPlan, tasks); journal.completed.task = false; } catch (error) { journal.completed.task = null; indeterminate.push("task"); errors.push(error); }
   if (journal.completed.launcher) try { await restoreLauncherChecked(journal.gateway.launcher); journal.completed.launcher = false; } catch (error) { journal.completed.launcher = null; indeterminate.push("launcher"); errors.push(error); }
   journal.indeterminateStages = [...new Set([...(journal.indeterminateStages || []), ...indeterminate])];
   journal.phase = errors.length ? "rollback_failed" : "rolled_back";

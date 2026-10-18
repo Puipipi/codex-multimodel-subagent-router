@@ -4,6 +4,7 @@ import {
   hasOnlyAddedForeignSkillTables,
   isolatedAgentToml,
   removeIsolatedConfig,
+  rootRoutesThroughIsolatedProvider,
   withTemporaryRootModelCatalog,
 } from "../scripts/native-isolated-config.mjs";
 
@@ -16,6 +17,15 @@ const opts = {
   baseUrl: "http://127.0.0.1:1234/v1",
   agentConfigPath: "C:\\Users\\23825\\.codex\\agents\\native_deepseek.toml",
 };
+equal(rootRoutesThroughIsolatedProvider('model = "gpt-6.1-sol"\nmodel_provider = "deepseek-native"\n', opts), true, "root provider selection is recognized as depending on the isolated provider");
+equal(rootRoutesThroughIsolatedProvider(`openai_base_url = "${opts.baseUrl}"\n`, opts), true, "root base URL is recognized as depending on the private gateway");
+const routeUrl = new URL(opts.baseUrl);
+equal(rootRoutesThroughIsolatedProvider(`openai_base_url = "http://localhost:${routeUrl.port}${routeUrl.pathname}/"\n`, opts), true, "localhost alias and trailing slash still identify the private gateway");
+equal(rootRoutesThroughIsolatedProvider(`openai_base_url = "http://localhost:${routeUrl.port}/${routeUrl.pathname.split("/").filter(Boolean)[0]}"\n`, opts), true, "the token-root path still identifies the private gateway");
+equal(rootRoutesThroughIsolatedProvider(`openai_base_url = "http://127.0.0.1:${routeUrl.port}/another-token/v1"\n`, opts), false, "a different first token segment is an independent route");
+equal(rootRoutesThroughIsolatedProvider(`[mcp_servers.user]\nopenai_base_url = "${opts.baseUrl}"\n`, opts), false, "nested server configuration is not mistaken for root routing");
+equal(rootRoutesThroughIsolatedProvider('model_provider = "other"\nopenai_base_url = "https://api.example/v1"\n', opts), false, "unrelated root routing is preserved without a false dependency");
+throws(() => rootRoutesThroughIsolatedProvider('openai_base_url = "http://[invalid"\n', opts), /cannot be safely checked/i, "an unparseable root URL fails closed rather than being treated as independent");
 const marker = (body) => `# sol-luna-native-gateway begin\n${body}\n# sol-luna-native-gateway end\n`;
 
 const fresh = [

@@ -365,6 +365,59 @@ export function removeIsolatedConfig(content) {
     : content;
 }
 
+export function rootRoutesThroughIsolatedProvider(content, { baseUrl, providerId = "deepseek-native" } = {}) {
+  if (typeof content !== "string") throw new TypeError("content must be a string");
+  let rootProvider;
+  let rootBaseUrl;
+  let inRoot = true;
+  for (const record of scanTomlLines(content)) {
+    if (record.insideAtStart) continue;
+    const line = record.visible.trim();
+    if (!line) continue;
+    if (/^\[/.test(line)) {
+      inRoot = false;
+      continue;
+    }
+    if (!inRoot) continue;
+    const equalsAt = findUnquotedEquals(line);
+    if (equalsAt < 0) continue;
+    const key = parseDottedKeys(line.slice(0, equalsAt).trim());
+    if (!key || key.length !== 1 || !["model_provider", "openai_base_url"].includes(key[0])) continue;
+    const raw = line.slice(equalsAt + 1).trim();
+    let value;
+    if (raw.startsWith('"')) {
+      try { value = JSON.parse(raw); } catch { throw new Error(`root ${key[0]} cannot be safely checked for isolated provider removal`); }
+    } else if (raw.startsWith("'")) {
+      if (!raw.endsWith("'") || raw.length < 2) throw new Error(`root ${key[0]} cannot be safely checked for isolated provider removal`);
+      value = raw.slice(1, -1);
+    } else throw new Error(`root ${key[0]} cannot be safely checked for isolated provider removal`);
+    if (key[0] === "model_provider") rootProvider = value;
+    else rootBaseUrl = value;
+  }
+  if (rootProvider === providerId) return true;
+  if (rootBaseUrl === undefined) return false;
+  let current;
+  let isolated;
+  try {
+    current = new URL(rootBaseUrl);
+    isolated = new URL(baseUrl);
+  } catch {
+    throw new Error("root openai_base_url cannot be safely checked for isolated provider removal");
+  }
+  const loopbackAliases = new Set(["127.0.0.1", "localhost"]);
+  const segments = (url) => url.pathname.split("/").filter(Boolean).map((segment) => {
+    try { return decodeURIComponent(segment); } catch { return null; }
+  });
+  const currentPath = segments(current);
+  const isolatedPath = segments(isolated);
+  return current.protocol === "http:" && isolated.protocol === "http:"
+    && loopbackAliases.has(current.hostname.toLowerCase())
+    && loopbackAliases.has(isolated.hostname.toLowerCase())
+    && current.port === isolated.port
+    && currentPath.length > 0 && isolatedPath.length > 0
+    && currentPath[0] !== null && currentPath[0] === isolatedPath[0];
+}
+
 export function hasOnlyAddedForeignSkillTables(current, planned, options) {
   if (typeof current !== "string" || typeof planned !== "string") return false;
   try {

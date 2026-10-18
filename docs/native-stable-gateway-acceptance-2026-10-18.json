@@ -1,0 +1,77 @@
+{
+  "schema": "sol-luna-native-stable-gateway-acceptance/v1",
+  "source_commit": "67f841cbd63c05a42c3c3b264b6f1a8a52948272",
+  "installed_plugin_version": "0.10.3",
+  "scope": "host_specific_formal_task_stable_gateway_source_switch",
+  "receipts": {
+    "disposable_task_stop_probe_sha256": "4c79d373034f4a24712d89e07dfbf1da83386246f6a4fba10a483d613ba63446",
+    "formal_source_binding_sha256": "29f090f3752a9db9cd414dd4fca40048d7f06c6f7196c416f716d9383199bb02",
+    "formal_source_switch_sha256": "e6dc364078e92c1fb9943300ed223ad3b175bac1901ce10b6e16e31c8b7a010a"
+  },
+  "bundle": {
+    "content_digest": "f3896c385f90239986020efe12a305467971cf53902c463a6c35af3d67bbf193",
+    "manifest_sha256": "9655c1e0ccdd3a12f434001d37b288bb5a4d3e87d1ca1e07a7d0f899f41bd946",
+    "plugin_cache_bytes_match": true,
+    "files": [
+      { "path": "scripts/native-credentials.mjs", "sha256": "68b089912a8b0d7bd2eabf63514093f4c035cf6d1267e88a8b1b9298048b0519" },
+      { "path": "scripts/native-gateway.mjs", "sha256": "664d1771c6ea0a949c2f93579a6b01c00ba7d9f9a9130af34335d667e65aa587" },
+      { "path": "scripts/native-relay.mjs", "sha256": "80cc113bf0cc28f0543ba612f58ff365cd77ad71c731432ace59737155eef89a" },
+      { "path": "scripts/native-routing.mjs", "sha256": "cef5726dae3e6f4b8aef8f6ee2815a70e2291edf35a9d3305957647148fb7a4f" },
+      { "path": "scripts/native-usage.mjs", "sha256": "f44a5c57c4a987dda159fa2529373029d196c4aec6a6e077a690507878911b38" }
+    ]
+  },
+  "formal_source_binding": {
+    "migration_succeeded": true,
+    "gateway_restarted_during_binding": false,
+    "config_sha256": "9ddcdec8aeed1fbd6e956b8c2f61ac8801ea5788d68fe61d1c30711a1303171f",
+    "identity_sha256": "46766f4e5d2f1fbddd16d01f3ad7d13a863ad51b8856aca1d6c1cbfedbee2387",
+    "config_unchanged": true,
+    "identity_unchanged": true,
+    "task_running": true,
+    "strict_health": true,
+    "requests_before_after": [0, 0],
+    "relay_calls_before_after": [0, 0]
+  },
+  "formal_source_switch": {
+    "source_switch_succeeded": true,
+    "task_plan_unchanged": true,
+    "old_process_creation_exited": true,
+    "new_process_creation_different": true,
+    "new_process_argv_matches_stable_bundle": true,
+    "task_running": true,
+    "strict_health": true,
+    "elapsed_ms_for_entire_observation": 20701,
+    "elapsed_is_startup_latency": false,
+    "config_sha256_before_after": "9ddcdec8aeed1fbd6e956b8c2f61ac8801ea5788d68fe61d1c30711a1303171f",
+    "identity_sha256_before_after": "46766f4e5d2f1fbddd16d01f3ad7d13a863ad51b8856aca1d6c1cbfedbee2387",
+    "journal_sha256": "11abcd84d2f722dc95c5cb48dc8096eb30cce52dc54cc5f6c032cd2a4cde96a7",
+    "launcher_sha256": "0760c6af52f0a0c32694634e544271442555fb4fd372ac0bd7c2c1d18e105c0b",
+    "requests_before_after": [0, 0],
+    "relay_calls_before_after": [0, 0],
+    "model_api_requests_dispatched": false
+  },
+  "root_config": {
+    "model": "gpt-6.1-sol",
+    "provider_absent": true,
+    "base_url_absent": true,
+    "catalog_absent": true
+  },
+  "managed_environment": {
+    "planned_user_values_match": 3,
+    "managed_values_count": 3,
+    "current_process_values_match": 0,
+    "running_app_process_remains_alive": true,
+    "full_codex_restart_needed_for_future_chat_inheritance": true
+  },
+  "fixed_rust_backend_sha256": "b311c3c365d1a9a5c19a6040428e02d49b10d7bdd766a859f0b842d42c3e3963",
+  "fixed_rust_backend_rebuilt": false,
+  "runtime_observed": false,
+  "desktop_accepted": false,
+  "pending": [
+    "hook delivery acceptance",
+    "multi-chat environment inheritance after full app restart",
+    "desktop and UI acceptance",
+    "complete fault-recovery matrix"
+  ],
+  "claims_zero_overall_codex_usage": false
+}

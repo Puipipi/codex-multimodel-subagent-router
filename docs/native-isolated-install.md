@@ -1,5 +1,9 @@
 # 隔离 CLI 安装编排
 
+## 0.10.4 发布说明
+
+0.10.4 将 gateway 五脚本绑定到 `native-isolated` 下的内容寻址 bundle，使受管 Task 的后续启动不依赖会被插件刷新清理的 cache；停止网关时按已验证的 PID/身份确认进程退出，不能仅凭 `Stop-ScheduledTask` 成功推断 Node 已结束。配置回滚会先验证受管 provider、role 三表及 gateway identity 仍与本事务一致，并拒绝会使 root provider 或 root URL 依赖该隔离 provider 的配置；通过后只移除本插件受管表，保留当前其他配置原文。受管字段漂移仍会拒绝回滚。此版本说明源码行为与回滚边界，不代表正式 Task 故障验收或桌面/UI 验收已通过；这些仍待单独验证。
+
 `native-isolated-install.mjs` 提供 `prepare`、`activate`、`rollback`、`status` 源码入口，并由 mock 测试覆盖。它将已验证的 CLI、child-only 配置、三项受管环境变量、独立网关目录、Task Scheduler 任务和旧受管 Startup VBS 作为一个可审计事务编排。一次正式安装已在单一主机通过，详见[主机安装记录](native-formal-install-2026-10-18.md)；其他主机仍须本地核验，桌面验收仍待完成。第三项 `SOL_LUNA_NATIVE_INSTALL_JOURNAL` 保存本事务 journal 的绝对路径，供之后新建的 DeepSeek child 使用。
 
 `prepare` 要求显式路径、当前主模型/provider（provider 可为 `null`）和 root URL 预期（可为 `null`），并要求 `--gateway-script` 或 `--plugin-root` 指向正式安装位置。使用 `--plugin-root` 时，prepare 将五个固定 gateway 模块写入 `gateway-dir` 的父目录下 `gateway-source/<content-digest>`（标准布局即 `native-isolated/gateway-source/<content-digest>`），并在 journal 中记录 bundle manifest hash 与 source root；因此该路径由明确的 `gateway-dir` 决定，不依赖 runtime 版本目录的布局。之后 Task 直接使用该稳定脚本路径，不再依赖可能被插件刷新清理的版本缓存。bundle 是不可变内容地址目录，完全匹配才会复用，缺失、额外文件、reparse point 或 hash 不一致都会拒绝。显式 `--gateway-script` 继续使用给定文件，不复制其父目录或依赖；调用方须自行保证其相对模块和生命周期稳定。旧 journal 没有 bundle 引用时保持原行为，不会由 dispatch 自动迁移。若旧 role/catalog 残留需纳入迁移，必须显式传入 `--legacy-manifest-path` 指向经验证的旧安装 manifest；工具不会自动发现或认领未知文件。它只准备私有网关身份，不启动服务；随后在临时 Codex home 上运行只读 app-server smoke。临时配置复用完整模型缓存并将 root catalog 指向临时缓存，正式配置仍保持用户主模型/provider/catalog。若迁移旧共享配置，smoke fixture 使用 legacy manifest 恢复旧 root 值。只有 smoke 返回 `status=passed` 才会写入 journal。
@@ -24,9 +28,9 @@ smoke 完成后，`prepare` 仅对路径校验通过的本次临时 fixture 删�
 
 `rollback` 先检查所有受管值仍等于本事务写入内容，再恢复文件、环境、Startup、任务和 launcher。它只会在网关由本事务启动且当前 PID、身份与健康检查仍匹配时停止网关；既有受管任务/网关会保留。用户后续修改会导致回滚拒绝覆盖。成功迁移时，journal 的 `autostart.retiredLegacy` 单独记录旧受管 Startup 是否已退役；因此即使 root config 已无旧 marker、但 manifest 证明存在旧 role/catalog 残留，成功 rollback 也不会重建旧 Startup。此标记不扩大 `files.legacyMigration`。激活失败发生在旧安装退役完成前，仍逐字恢复 prior Startup。旧 journal 未包含该标记时，rollback 仍按旧 `legacyMigration` 判断兼容行为。迁移事务还保留两种配置快照：激活失败时恢复原始字节；用户主动 rollback 时恢复经过 manifest 验证的 `prior_root` 干净配置并移除隔离配置。`prior_root` 若本来就是用户的 localhost 设置，则按原值保留。首次安装无 config 迁移时，config 文件仍逐字恢复 prior；已退役的受管 Startup 不恢复。缺少迁移卸载快照的旧 journal 会在更改状态前明确拒绝卸载。`status` 的 `configured=true`、`restartNeeded=true` 只表示配置已写入并需要重启；`runtimeObserved=false` 和 `desktopAccepted=false` 仍为真实桌面验收前的状态。需要桌面重启后单独验收，不能由 mock、配置 smoke 或 task health 推断 UI 接受。
 
-配置合并只识别精确的三个受管 TOML 表；marker 范围内后来加入的 `[[skills.config]]` 表会按原文、顺序及相邻空行/注释保留。dispatch 与回滚仍严格验证受管 provider、role 等字段，真正的受管字段漂移或 marker 外变更不会被当作可合并修改。主动 rollback 仅在受管表仍匹配且 marker 外内容未变时，保留后来新增的 skill 表并移除本插件配置；这不表示其他后续配置改动都可合并。
+配置合并只识别精确的三个受管 TOML 表。dispatch 与 rollback 均要求这三表、role 路径及 gateway identity 与事务计划匹配；受管字段漂移会被拒绝。rollback 还会拒绝 root provider 或 root URL 依赖隔离 provider 的情形。验证通过后，rollback 仅删除本插件受管表及 marker，保留当前其他 TOML 配置（包括后来新增的 skills、MCP、设置和外部注释）原文；这不放宽对受管字段或 root 路由依赖的检查。
 
-本次已激活主机的 0.10.3 客户端升级不会重新注册或改指向当前受管 Task。该主机的当前 journal 仍指向 0.10.2 cache 中的 gateway 脚本；升级后须保留该旧 cache。对应 gateway 服务代码在 0.10.3 中未变，因此本次无需迁移 Task 或重新激活。已暂存的 runtime 文件和 Sol 的根配置连接也不变。
+后续稳定 source binding 与实际 Task source-switch 的主机记录见[稳定网关验收](native-stable-gateway-acceptance-2026-10-18.md)；部分 Task 故障与本机 TCP 结果见[故障验收记录](native-formal-fault-acceptance-2026-10-18.md)。后者明确区分通过的恢复/transport 场景与尚未通过的自动 Task restart，不代表完整故障矩阵或桌面验收。稳定记录所述主机当前 Task 已指向 `native-isolated` 下的内容寻址 bundle，不再从 0.10.2 或 0.10.3 plugin cache 加载 gateway 模块；五个 bundle 文件与 0.10.3 插件源码逐字节一致。此结论仅适用于该主机的当前 Task，不能单独作为删除旧 cache 的依据。root Sol 配置连接和已暂存 runtime 文件未变。HKCU 计划值均匹配，但仍运行的 CLI 进程继承值未刷新；未来新 chat 继承环境前仍须完全退出并重启 Codex。该记录不代表 desktop acceptance。
 
 所有命令均要求显式路径；以下值是占位符，不含凭据。主模型/provider/URL 应填写当前实际值，不要将包含凭据的 URL 写入 shell 历史、journal 或任务参数。`--plugin-root` 应是正式安装目录，不能指向工作区源码目录。
 
