@@ -1,6 +1,6 @@
 {
   "name": "sol-luna-deepseek-router",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Sol-led routing to native Luna and an isolated native DeepSeek child role, with explicit DSH compatibility, per-chat ownership, and writer leases.",
   "author": {
     "name": "Puipipi",

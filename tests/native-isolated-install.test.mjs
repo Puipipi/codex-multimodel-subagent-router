@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -188,8 +189,8 @@ try {
     smokeCheck: async () => ({ status: "failed", stage: "model_list", failure: { stage: "model_list", code: -32602 }, checks: { app_server_closed: false } }),
   }, {
     removeSmokeFixture: async (fixtureHome, options) => {
-      equal(options.maxRetries, 3, "smoke fixture removal has three bounded retries");
-      equal(options.retryDelay, 100, "smoke fixture removal uses the bounded retry delay");
+      equal(options.maxRetries, 10, "smoke fixture removal has ten bounded retries");
+      equal(options.retryDelay, 350, "smoke fixture removal uses the bounded retry delay");
       await rm(fixtureHome, { recursive: true, force: true });
     },
   }), (error) => {
@@ -261,6 +262,49 @@ try {
   equal(formattedCleanupFailure.includes('"appServerClosed":true'), true, "CLI diagnostic preserves successful close check");
   equal(cleanupFailure.message.includes("private capability"), false, "cleanup-only diagnostic does not leak raw error text");
   equal(await readFile(passedSmokeAndCleanup.journalPath).catch(() => null), null, "passed smoke with cleanup failure leaves no journal");
+
+  if (process.platform === "win32") {
+    const lockedFixture = await fixture("locked-smoke-cleanup");
+    let lockChild;
+    let lockChildExit;
+    let lockedHome;
+    try {
+      const preparedWithLock = await prepare({
+        ...lockedFixture.common,
+        smokeCheck: async ({ preparedHome }) => {
+          lockedHome = preparedHome;
+          lockChild = spawn(process.execPath, [
+            "-e",
+            'process.chdir(process.argv[1]);process.stdout.write("ready\\n");setTimeout(()=>process.exit(0),1500)',
+            preparedHome,
+          ], { cwd: preparedHome, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+          lockChildExit = new Promise((resolve, reject) => {
+            lockChild.once("error", reject);
+            lockChild.once("exit", (code, signal) => resolve({ code, signal }));
+          });
+          await new Promise((resolve, reject) => {
+            let output = "";
+            lockChild.stdout.setEncoding("utf8");
+            lockChild.stdout.on("data", (chunk) => {
+              output += chunk;
+              if (output.includes("ready\n")) resolve();
+            });
+            lockChild.once("error", reject);
+            lockChild.once("exit", (code) => reject(new Error(`cwd lock child exited before ready (${code})`)));
+          });
+          return { status: "passed", stage: "complete", checks: { app_server_closed: true } };
+        },
+      });
+      equal(preparedWithLock.phase, "prepared", "prepare waits for an owned Windows cwd lock to release before writing its journal");
+      equal((await status({ journalPath: lockedFixture.journalPath })).phase, "prepared", "Windows cwd lock regression leaves a prepared journal");
+      equal(await lstat(lockedHome).then(() => true, () => false), false, "Windows cwd lock fixture is removed after the child exits");
+    } finally {
+      if (lockChild) {
+        const exit = await lockChildExit;
+        equal(exit.code, 0, "owned Windows cwd lock child exits successfully");
+      }
+    }
+  }
 
   const setupAndCleanupFailure = await fixture("setup-cleanup-failure");
   const setupFailureTaskAdapter = {

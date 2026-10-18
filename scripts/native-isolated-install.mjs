@@ -364,8 +364,8 @@ export async function prepare(options = {}, dependencies = {}) {
       await (dependencies.removeSmokeFixture ?? ((target, options) => rm(target, options)))(resolvedFixture, {
         recursive: true,
         force: true,
-        maxRetries: 3,
-        retryDelay: 100,
+        maxRetries: 10,
+        retryDelay: 350,
       });
     } catch (error) {
       cleanupError = error;
