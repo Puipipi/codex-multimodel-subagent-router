@@ -420,10 +420,9 @@ index 70cf8b7..69aa9ab 100644
 +    }
 +}
 diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/control_tests.rs
-index 6d97ece..4b03c00 100644
 --- a/codex-rs/core/src/agent/control_tests.rs
 +++ b/codex-rs/core/src/agent/control_tests.rs
-@@ -3,6 +3,10 @@ use crate::CodexThread;
+@@ -3,6 +3,10 @@
  use crate::StateDbHandle;
  use crate::ThreadManager;
  use crate::agent::agent_status_from_event;
@@ -434,7 +433,7 @@ index 6d97ece..4b03c00 100644
  use crate::agent::api::AgentControl;
  use crate::agent::api::AgentInfo;
  use crate::agent::api::AgentInput;
-@@ -21,6 +25,7 @@ use crate::agent_communication::AgentCommunicationKind;
+@@ -21,6 +25,7 @@
  use crate::config::AgentRoleConfig;
  use crate::config::Config;
  use crate::config::ConfigBuilder;
@@ -442,7 +441,7 @@ index 6d97ece..4b03c00 100644
  use crate::context::ContextualUserFragment;
  use crate::context::ManagedDeveloperInstructions;
  use crate::context::MultiAgentRoleInstructions;
-@@ -41,6 +46,9 @@ use codex_extension_api::LoadedUserInstructions;
+@@ -41,6 +46,9 @@
  use codex_extension_api::ThreadInstructionsProvider;
  use codex_extension_api::empty_extension_registry;
  use codex_features::Feature;
@@ -452,7 +451,7 @@ index 6d97ece..4b03c00 100644
  use codex_history::CompactedItem;
  use codex_history::InitialHistory;
  use codex_history::ResumedHistory;
-@@ -56,6 +64,7 @@ use codex_protocol::config_types::CollaborationMode;
+@@ -56,6 +64,7 @@
  use codex_protocol::config_types::ModeKind;
  use codex_protocol::config_types::ReasoningSummary;
  use codex_protocol::config_types::Settings;
@@ -460,7 +459,7 @@ index 6d97ece..4b03c00 100644
  use codex_protocol::error::AgentErrorContext;
  use codex_protocol::error::CodexErrKind;
  use codex_protocol::error::CodexErrorDetails;
-@@ -74,7 +83,9 @@ use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+@@ -74,7 +83,9 @@
  use codex_protocol::models::MessagePhase;
  use codex_protocol::models::PermissionProfile;
  use codex_protocol::models::ResponseItem;
@@ -470,7 +469,7 @@ index 6d97ece..4b03c00 100644
  use codex_protocol::protocol::AskForApproval;
  use codex_protocol::protocol::EnvironmentConfigState;
  use codex_protocol::protocol::ErrorEvent;
-@@ -1214,17 +1225,18 @@ enum V2ReloadRoute {
+@@ -1214,17 +1225,18 @@
      NestedParent,
  }
  
@@ -491,10 +490,12 @@ index 6d97ece..4b03c00 100644
          Some(task_name.to_string()),
      )
      .expect("child source");
-@@ -1242,6 +1254,16 @@ async fn spawn_v2_reload_test_child(
+@@ -1240,6 +1252,16 @@
+         )
+         .await
          .expect("spawn_agent should succeed")
- }
- 
++}
++
 +async fn spawn_v2_reload_test_child(
 +    control: &LocalAgentControl,
 +    config: Config,
@@ -503,12 +504,10 @@ index 6d97ece..4b03c00 100644
 +) -> LiveAgent {
 +    spawn_v2_reload_test_child_with_role(control, config, parent, task_name, /*agent_role*/ None)
 +        .await
-+}
-+
+ }
+ 
  async fn check_v2_agent_reload(route: V2ReloadRoute) {
-     let (home, mut config) = test_config().await;
-     let _ = config.features.enable(Feature::MultiAgentV2);
-@@ -6051,3 +6073,527 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails()
+@@ -6051,3 +6073,559 @@
          .await
          .expect("tree shutdown after partial subtree resume should succeed");
  }
@@ -610,8 +609,15 @@ index 6d97ece..4b03c00 100644
 +    (role, provider_id, catalog, provider)
 +}
 +
-+#[tokio::test]
-+async fn native_api_prepare_agent_spawn_config_resets_effort_and_service_tier() {
++#[test]
++fn native_api_prepare_agent_spawn_config_resets_effort_and_service_tier() -> anyhow::Result<()> {
++    core_test_support::test_codex::run_test_with_large_stack(
++        "native_api_prepare_agent_spawn_config_resets_effort_and_service_tier",
++        native_api_prepare_agent_spawn_config_resets_effort_and_service_tier_impl,
++    )
++}
++
++async fn native_api_prepare_agent_spawn_config_resets_effort_and_service_tier_impl() -> anyhow::Result<()> {
 +    let (home, mut config) = test_config().await;
 +    let _ = config.features.enable(Feature::MultiAgentV2);
 +    config.model = Some("gpt-5.6-sol".to_string());
@@ -723,10 +729,18 @@ index 6d97ece..4b03c00 100644
 +    );
 +    assert_eq!(root_after.service_tier, root_before.service_tier);
 +    assert_eq!(root_after.web_search_mode.value(), WebSearchMode::Cached);
++    Ok(())
 +}
 +
-+#[tokio::test]
-+async fn native_api_cold_resume_keeps_stored_profile_and_clears_sender_service_tier() {
++#[test]
++fn native_api_cold_resume_keeps_stored_profile_and_clears_sender_service_tier() -> anyhow::Result<()> {
++    core_test_support::test_codex::run_test_with_large_stack(
++        "native_api_cold_resume_keeps_stored_profile_and_clears_sender_service_tier",
++        native_api_cold_resume_keeps_stored_profile_and_clears_sender_service_tier_impl,
++    )
++}
++
++async fn native_api_cold_resume_keeps_stored_profile_and_clears_sender_service_tier_impl() -> anyhow::Result<()> {
 +    let (home, mut config) = test_config().await;
 +    let _ = config.features.enable(Feature::MultiAgentV2);
 +    let _ = config.features.enable(Feature::Sqlite);
@@ -853,11 +867,19 @@ index 6d97ece..4b03c00 100644
 +    );
 +    assert_eq!(root_after.service_tier, root_before.service_tier);
 +    assert_eq!(root_after.web_search_mode.value(), WebSearchMode::Cached);
++    Ok(())
 +}
 +
 +
-+#[tokio::test]
-+async fn native_api_none_reasoning_profile_clears_parent_effort() {
++#[test]
++fn native_api_none_reasoning_profile_clears_parent_effort() -> anyhow::Result<()> {
++    core_test_support::test_codex::run_test_with_large_stack(
++        "native_api_none_reasoning_profile_clears_parent_effort",
++        native_api_none_reasoning_profile_clears_parent_effort_impl,
++    )
++}
++
++async fn native_api_none_reasoning_profile_clears_parent_effort_impl() -> anyhow::Result<()> {
 +    let (home, mut config) = test_config().await;
 +    let _ = config.features.enable(Feature::MultiAgentV2);
 +    config.model = Some("gpt-5.6-sol".to_string());
@@ -926,11 +948,19 @@ index 6d97ece..4b03c00 100644
 +        root_after.model_reasoning_effort,
 +        Some(ReasoningEffort::XHigh)
 +    );
++    Ok(())
 +}
 +
 +
-+#[tokio::test]
-+async fn native_api_none_reasoning_cold_resume_keeps_effort_empty() {
++#[test]
++fn native_api_none_reasoning_cold_resume_keeps_effort_empty() -> anyhow::Result<()> {
++    core_test_support::test_codex::run_test_with_large_stack(
++        "native_api_none_reasoning_cold_resume_keeps_effort_empty",
++        native_api_none_reasoning_cold_resume_keeps_effort_empty_impl,
++    )
++}
++
++async fn native_api_none_reasoning_cold_resume_keeps_effort_empty_impl() -> anyhow::Result<()> {
 +    let (home, mut config) = test_config().await;
 +    let _ = config.features.enable(Feature::MultiAgentV2);
 +    let _ = config.features.enable(Feature::Sqlite);
@@ -1035,7 +1065,9 @@ index 6d97ece..4b03c00 100644
 +        Some(ReasoningEffort::XHigh)
 +    );
 +    assert_eq!(root_after.service_tier, root_before.service_tier);
++    Ok(())
 +}
+
 diff --git a/codex-rs/core/src/agent/mod.rs b/codex-rs/core/src/agent/mod.rs
 index c9a1547..a602cdb 100644
 --- a/codex-rs/core/src/agent/mod.rs
