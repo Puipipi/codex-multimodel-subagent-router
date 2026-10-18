@@ -75,6 +75,9 @@ async function verifyManifestBundle(directory, ref) {
   if (manifest.files.some((item) => !/^[a-f0-9]{64}$/.test(item?.sha256 ?? "")) || contentDigest(manifest.files) !== ref.contentDigest) {
     throw new Error("gateway source bundle digest is invalid");
   }
+  if (Array.isArray(ref.files) && JSON.stringify(manifest.files) !== JSON.stringify(ref.files)) {
+    throw new Error("gateway source bundle file list changed from its reference");
+  }
   const expected = new Set([...manifest.files.map((item) => item.path), MANIFEST_NAME]);
   const found = new Set();
   async function walk(current, relative = "") {
