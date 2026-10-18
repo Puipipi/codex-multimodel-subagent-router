@@ -70,7 +70,7 @@ function validateProfile(profile, profileId) {
     throw new NativeApiProtocolError("Configured profile baseUrl must be HTTPS, or loopback HTTP, without embedded credentials or query parameters.", { status: 500, code: "invalid_profile" });
   }
   if (profile.credential?.type === "dsh_account"
-      && (profile.protocol !== "responses" || base.origin !== "https://api.deepseek.com" || !["", "/"].includes(base.pathname))) {
+      && (profile.protocol !== "responses" || base.origin !== "https://api.deepseek.com" || !["", "/", "/v1"].includes(base.pathname))) {
     throw new NativeApiProtocolError("DSH account credentials are restricted to the official DeepSeek Responses endpoint.", { status: 403, code: "credential_endpoint_restricted" });
   }
   return base;
