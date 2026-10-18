@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { isOfficialDeepSeekProfile } from "./native-api-settings.mjs";
+
 export class NativeApiProtocolError extends Error {
   constructor(message, { status = 400, code = "invalid_request_error" } = {}) {
     super(message);
@@ -159,7 +161,9 @@ function mapReasoning(body, profile, chat) {
   }
   let effort = requested ?? config.default;
   if (effort === undefined) return;
-  if (effort === "xhigh" && profile.credential?.type === "dsh_account" && config.supported?.includes("high")) effort = "high";
+  if (effort === "xhigh"
+      && (isOfficialDeepSeekProfile(profile) || profile.credential?.type === "dsh_account")
+      && config.supported?.includes("high")) effort = "high";
   if (!Array.isArray(config.supported) || !config.supported.includes(effort)) {
     invalid(`Reasoning effort ${String(requested ?? effort)} is not supported by profile ${profile.profileId}.`, "unsupported_parameter");
   }

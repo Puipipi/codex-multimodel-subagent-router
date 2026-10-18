@@ -99,6 +99,46 @@ test("ignores Codex's optional encrypted-reasoning include, but rejects other no
   assert.throws(() => responsesRequestToChat({ model: "mimo-model", input: "x", include: ["web_search_call.action.sources"] }, profile), /include/);
 });
 
+test("DeepSeek account effort normalization is local to the API adapter", () => {
+  const deepseek = {
+    ...profile,
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-flash",
+    reasoning: { supported: ["none", "low", "high", "max"], default: "high", parameter: "reasoning_effort" },
+    credential: { type: "dsh_account" },
+  };
+  const request = effort => responsesRequestToChat({
+    model: "deepseek-flash",
+    input: "x",
+    reasoning: { effort },
+  }, deepseek).body;
+  assert.equal(request("xhigh").reasoning_effort, "high");
+  assert.equal(request("max").reasoning_effort, "max");
+  assert.equal(request("none").reasoning_effort, "none");
+  assert.equal(request("low").reasoning_effort, "low");
+  assert.throws(() => request("medium"), /not supported/);
+
+  const manualDeepSeek = {
+    ...deepseek,
+    credential: { type: "env", name: "DEEPSEEK_API_KEY" },
+  };
+  assert.equal(responsesRequestToChat({
+    model: "deepseek-flash",
+    input: "x",
+    reasoning: { effort: "xhigh" },
+  }, manualDeepSeek).body.reasoning_effort, "high", "manual official DeepSeek keeps the same local normalization");
+
+  const generic = {
+    ...profile,
+    reasoning: { supported: ["medium", "xhigh"], default: "medium", parameter: "reasoning_effort" },
+  };
+  assert.equal(responsesRequestToChat({
+    model: "mimo-model",
+    input: "x",
+    reasoning: { effort: "xhigh" },
+  }, generic).body.reasoning_effort, "xhigh", "non-DeepSeek API profiles keep their declared effort");
+});
+
 test("maps the standard Responses prompt_cache_key to the standard Chat field", () => {
   const converted = responsesRequestToChat({ model: "mimo-model", input: "x", prompt_cache_key: "test-only-key" }, profile);
   assert.equal(converted.body.prompt_cache_key, "test-only-key");

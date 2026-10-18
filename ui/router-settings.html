@@ -273,6 +273,7 @@ footer p + p { margin-top: 3px; }
     </div>
   </section>
   <p id="executor-status-detail" class="status-detail" aria-live="polite">生命周期状态未接入；未启动服务或模型，未验证 API。</p>
+  <p id="restart-adoption-note" class="status-detail">新增角色应用后需要完整重启；当前采用状态无法自动确认。</p>
 
   <div id="host-warning" class="warning" role="alert" hidden></div>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
@@ -875,7 +876,7 @@ footer p + p { margin-top: 3px; }
     byId("credential-name-field").hidden = type !== "env";
     byId("credential-path-field").hidden = type !== "file";
     if (type === "dsh_account" && !byId("profile-base-url").value.trim()) {
-      byId("profile-base-url").value = "https://api.deepseek.com/v1";
+      byId("profile-base-url").value = "https://api.deepseek.com";
       byId("profile-protocol").value = "responses";
     }
   }

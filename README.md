@@ -209,7 +209,15 @@ npx --yes dsh-subagent-mcp@0.7.0 setup --no-skill --service background
 
 This registers the upstream MCP server and may prepare its managed background service/dependencies. Reload Codex once after this MCP configuration change so the server is discovered; do not open a new chat just to change the route. Do not run the upstream installer with its default skill installation when this router is active. On Windows, apply the optional console-hide patch only at a maintenance point if you need it.
 
-The generic OpenAI-compatible API executor backend is documented in [docs/native-api-executors.md](docs/native-api-executors.md). Its panel, README/SKILL onboarding, and desktop acceptance are a separate next stage; the currently installed 0.10.5/6ec runtime predates the new API role patch and is not evidence of a ready generic API executor.
+The generic OpenAI-compatible API executor backend is documented in [docs/native-api-executors.md](docs/native-api-executors.md). The panel source and this product guidance are integrated; desktop acceptance and final runtime installation remain separate. The currently installed 0.10.5/6ec runtime predates the new API role patch and is not evidence of a ready generic API executor.
+
+The default remains peak Luna / valley DeepSeek. A user-selected API profile is fixed and does not consult the clock; an explicit scheduled plan may use API peak and DeepSeek valley or two API profiles. One-time and sticky selections take precedence, and a failed selected executor is reported without falling back to Luna, DeepSeek, another API, or another DeepSeek account. Local credential availability is not authentication proof.
+
+Saving an API profile only writes router JSON. A compatible, already-staged runtime must be present before the explicit Apply action can install the owned role/provider/catalog/Task transaction; a newly applied role requires a full Codex restart. Existing children keep their original immutable profile. Chat Completions profiles cannot use Codex's built-in web search, and the adapter does not claim to enforce a provider grammar. The installed 6ec runtime reports `runtimeCompatible:false`; generic API readiness awaits the final runtime and a real role acceptance run.
+
+Official DeepSeek API profiles (account or manual env/file credentials) use the known `none/low/high/max` reasoning levels; `xhigh` is normalized to `high` in the API adapter and a valid `max` is preserved. The adapter does not guess an `off` wire value for `none`, and non-DeepSeek profiles keep their declared efforts. Historical DeepSeek routing behavior is unchanged.
+
+The canonical routing skill remains `sol-luna-deepseek-router`; do not add a second skill or delete old cache/backup directories. A future display name such as “Sol Luna DeepSeek Router — Native API” is a naming suggestion only and does not change registry IDs or folders.
 
 ## Privacy and state
 

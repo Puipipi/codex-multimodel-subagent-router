@@ -1,6 +1,6 @@
 # 路由设置 MCP 面板
 
-该面板把 `native-api-settings` 的路由 JSON 暴露为可点击的 MCP App，并在插件设置页提供结构化设置。它只修改固定位置的路由设置文件；默认不安装角色、不启动服务或模型，也不发起真实 API 请求。安装/应用能力必须由显式注入的生命周期接口提供。
+该面板把 `native-api-settings` 的路由 JSON 暴露为可点击的 MCP App，并在插件设置页提供结构化设置。保存只修改固定位置的路由文件；stdio 入口 `plugin-mcp.mjs` 显式注入生产生命周期函数。`createPluginMcp` 工厂仍允许测试注入 mock，但 mock 结果不代表生产 API 可用。
 
 ## 入口与元数据
 
@@ -45,8 +45,8 @@
 | `router_settings_save` | 用 `{settings, expectedSha256}` 保存完整配置；stale revision 被拒绝。 |
 | `router_settings_save_profile` | 新增或编辑 API 配置；编辑生成新不可变版本，旧版本保留。 |
 | `router_settings_check_credential` | 只检查本地 env/file/DSH 账号引用是否可用；返回 boolean，不返回密钥。 |
-| `router_settings_executor_status` | 调用注入的只读生命周期状态；默认全部未知，不启动服务或模型。 |
-| `router_settings_apply` | 仅在用户点击后调用注入的应用接口；默认明确 unsupported/not installed。 |
+| `router_settings_executor_status` | 调用只读生命周期状态；生产入口显示真实安装/兼容/网关状态，不启动服务或模型。 |
+| `router_settings_apply` | 仅在用户点击后调用生产或注入的应用接口；不兼容 runtime 明确返回 unsupported。 |
 
 所有设置工具都不接受文件路径参数。生产路径由 `defaultRouterSettingsPath()` 固定为本机 `LocalAppData` 下的 `sol-luna-deepseek-router/native-api/router.json`；测试通过隔离的 `LOCALAPPDATA` 注入临时目录。
 
@@ -55,6 +55,7 @@
 - 模式：自动峰谷、固定执行器、自定义峰谷。固定模式不使用峰谷选择；自定义峰谷只读取一组成对的高峰/低谷选择器。
 - API 配置：名称、Base URL、Responses 或 Chat Completions、精确模型名、推理支持/默认值/参数名、凭据引用。
 - 凭据来源：DSH 自动账号、环境变量名、绝对文件路径。界面没有 API key 输入框，也不会把 key 文件内容送到页面。
+- DSH 自动账号的验收默认使用官方 origin 和默认路径 `https://api.deepseek.com`；旧 `/v1` 配置可继续加载但不等同于端点已验证，任意未被现有 gateway 验证的 path 也不应被描述为可用。凭据本地可用不等于认证通过。
 - 环境变量凭据只检查当前 MCP 进程可见的环境。若宿主使用 `env_vars` 白名单启动插件，需要确认所选变量已被转发；面板不会读取或显示变量值。
 - 编辑配置：以原配置为基准生成新 profile ID；旧 profile 保留给已运行的 child 续问。当前生效的固定/峰谷选择器会迁移到新 profile ID。
 - 同名 alias：只能从被编辑的旧版本安全迁移；若 alias 已被另一配置占用，保存失败且不写入。
@@ -71,13 +72,13 @@ API 编辑表单的“高级”区提供可选的“上下文预算（tokens）�
 - 新配置默认填 128000。用户应按所选模型的上下文上限设置；这是工作预算，不是对模型真实上限的探测或声明。
 - 编辑缺少该字段的旧 profile 时输入保持为空；留空表示不写入该字段。
 
-当前 worktree 的 `native-api-settings` 校验器尚未合并 `contextWindow` 字段。UI、MCP 输入 schema、范围校验和测试接口已经预埋；在字段 commit 集成前，保存带该字段的 profile 会明确返回“当前设置核心尚未支持 contextWindow；配置未保存”，不会静默丢弃。集成后同一路径会原样传递该字段。
+`native-api-settings` 已支持 `contextWindow`。UI、MCP 输入 schema、范围校验和成功保存路径共享同一字段；测试必须实际走成功分支，不用动态跳过把未集成当成通过。
 
 `router_settings_snapshot` 的 `capabilities.contextWindow` 会报告当前核心是否支持该字段；面板据此显示内联提示，避免用户把失败误解为保存成功。
 
-安装、重启、网关健康和 API 验证是独立状态。面板显示“已保存”“角色已安装”“需重启”“本地网关”“API 调用”。默认未注入生命周期时安装、重启和网关未知，API 调用未验证；注入 `getExecutorStatus` 后显示真实只读结果。写入 JSON 不会被说成已安装或可调用。
+安装、角色采用、网关健康和 API 验证是独立状态。面板显示“已保存”“角色已安装”“需重启”“本地网关”“API 调用”。生产入口注入 `getExecutorStatus` 后显示真实只读结果；写入 JSON 不会被说成已安装或可调用。
 
-## 生命周期状态注入
+## 生命周期状态绑定
 
 `createRouterSettingsService` 和 `createPluginMcp` 接受两个异步 seam：
 
@@ -86,10 +87,11 @@ getExecutorStatus({settings, profileId?})
 applyApiConfiguration({settings, expectedSha256?})
 ```
 
-- `getExecutorStatus` 默认返回 `installed/runtimeCompatible/restartRequired/gatewayRunning/localHealthy/credentialAvailable = "unknown"`、`apiVerified = false`，并说明状态未接入。它不启动服务或模型。
-- 注入结果可返回上述字段的 boolean 或 `"unknown"`。`apiVerified` 在本阶段强制为 `false`；本地网关健康或凭据可用不会被当作模型/认证已验证。
-- `applyApiConfiguration` 默认返回 `applied:false, supported:false`，并明确说明当前 runtime 未提供应用接口。只有注入函数明确返回 `applied:true` 才显示已应用。
-- `createPluginMcp` 将 options 原样透传给 `createRouterSettingsService`；后续由 root 接入 production lifecycle module。
+- 生产 `plugin-mcp.mjs` 显式注入 `native-api-install.mjs` 的同名函数；`createPluginMcp` 工厂仍可注入 mock 供隔离测试。
+- 结果可返回上述字段的 boolean 或 `"unknown"`。`apiVerified` 在本阶段强制为 `false`；本地网关健康或凭据可用不会被当作模型/认证已验证。
+- 已安装角色时 `restartRequired` 返回 `"unknown"`：新增角色应用后需要完整重启，但当前采用状态无法自动确认。面板不会把 unknown 永久显示成“必须再重启”，也不会通过手改 journal 伪造 accepted。
+- `applyApiConfiguration` 返回 `applied:false, supported:false` 时，面板明确显示当前 runtime 未支持应用；只有 `applied:true` 才显示已应用。
+- 工厂未注入时保留明确的 unsupported 默认，但 stdio 生产入口不使用该默认。
 
 状态工具是只读的，且不会因本地健康推断 API 验证。状态详情会做常见凭据模式脱敏。
 
@@ -97,12 +99,12 @@ applyApiConfiguration({settings, expectedSha256?})
 
 面板的“应用 API 配置”按钮是显式用户动作，工具为 app-visible 的 `router_settings_apply`：
 
-- 未注入应用接口时，快照的 `capabilities.applyApiConfiguration` 为 `false`，按钮默认禁用，并显示“当前 runtime 未提供 API 配置应用接口”。
+- 生产入口注入应用接口后，按钮可用；不兼容 runtime 会在点击时返回明确 unsupported。工厂未注入时 `capabilities.applyApiConfiguration` 为 `false`，按钮禁用。
 - 点击后使用当前保存的 `sha256` revision；stale revision 在调用注入接口前被拒绝，提示重新载入。
 - 同一服务内并发应用只允许一个请求进入生命周期接口；重复点击显示正在进行，不会双重应用。UI 在请求期间禁用按钮。
-- 当前代码不执行安装、下载、启动或重启。它只把 `{settings, expectedSha256}` 交给注入接口。
+- 生产 apply 只把 `{settings, expectedSha256}` 交给生命周期模块；不下载或替换 runtime、不启动或重启 Codex、不调用模型。
 
-未来在已安装且兼容的 runtime 下，lifecycle 的 apply 只应应用 owned API profile roles/catalog/provider/Task；不得自动下载或安装 runtime，不得关闭或重启 Codex，也不得调用模型。新增角色需要提示完整重启 Codex 后生效。
+在已安装且兼容的 runtime 下，lifecycle 的 apply 只应用 owned API profile roles/catalog/provider/Task；不自动下载或安装 runtime，不关闭或重启 Codex，也不调用模型。新增角色需要提示完整重启 Codex 后生效；当前状态读取只报告采用未知。
 
 ## UI bridge
 
@@ -122,6 +124,6 @@ node .\tests\plugin-router-settings.test.mjs
 node .\tests\plugin-mcp.test.mjs
 ```
 
-测试使用真实 stdio MCP 子进程完成 `initialize`、`tools/list`、`resources/list`、`resources/read`、设置读取/更新/重读、CAS 冲突、非法 profile、alias 迁移、`resourceProvided`、默认未知状态、默认 unsupported apply 与旧 DSH 工具 ownership guard。另用注入 mock 覆盖 installed/healthy 状态、`apiVerified` 强制 false、状态详情脱敏、并发 apply 锁和 stale apply CAS。
+测试使用真实 stdio MCP 子进程完成 `initialize`、`tools/list`、`resources/list`、`resources/read`、设置读取/更新/重读、CAS 冲突、非法 profile、alias 迁移、`resourceProvided`、生产只读状态、旧 runtime unsupported apply 与旧 DSH 工具 ownership guard。另用注入 mock 覆盖 installed/healthy 状态、`apiVerified` 强制 false、状态详情脱敏、并发 apply 锁和 stale apply CAS。`contextWindow` 成功保存分支必须实际执行。
 
 宿主实际是否把入口显示为永久侧栏或线程侧面板，仍需要在目标桌面版本中人工验收；静态测试和模拟宿主不能证明该显示行为。

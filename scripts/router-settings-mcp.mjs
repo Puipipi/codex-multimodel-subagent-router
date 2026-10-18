@@ -527,7 +527,7 @@ function credentialProfile(definition) {
 
 const CONTEXT_WINDOW_PROBE = {
   protocol: 'responses',
-  baseUrl: 'https://api.deepseek.com/v1',
+  baseUrl: 'https://api.deepseek.com',
   model: 'context-window-probe',
   reasoning: {supported: ['none'], default: 'none', parameter: 'none'},
   credential: {type: 'dsh_account'},

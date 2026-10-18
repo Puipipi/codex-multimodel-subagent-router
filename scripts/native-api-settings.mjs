@@ -7,6 +7,8 @@ import { withFileLock, writeJsonAtomic } from "./plugin-state.mjs";
 
 const PROFILE_ID = /^[a-f0-9]{24}$/;
 const REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
+const DEEPSEEK_ACCOUNT_EFFORTS = new Set(["none", "low", "high", "max"]);
+const DEEPSEEK_WIRE_MODEL = "deepseek-flash";
 const PROFILE_FIELDS = new Set(["profileId", "protocol", "baseUrl", "model", "reasoning", "credential", "label", "aliases", "contextWindow"]);
 const ROOT_FIELDS = new Set(["schemaVersion", "mode", "fixedExecutor", "schedule", "profiles"]);
 const SELECTORS = new Set(["luna", "deepseek"]);
@@ -71,10 +73,19 @@ function validateCredential(credential, baseUrl, protocol) {
     exactKeys(credential, new Set(["type"]), "credential");
     const url = new URL(baseUrl);
     if (url.origin !== "https://api.deepseek.com" || protocol !== "responses") {
-      throw new Error("dsh_account is restricted to the official DeepSeek origin and Responses protocol");
+      throw new Error("dsh_account is restricted to the official DeepSeek origin and Responses protocol; only the default path is verified");
     }
   } else {
     throw new Error("profile credential type must be env, file, or dsh_account");
+  }
+}
+
+export function isOfficialDeepSeekProfile(profile) {
+  if (!profile || typeof profile.baseUrl !== "string" || profile.model !== DEEPSEEK_WIRE_MODEL) return false;
+  try {
+    return new URL(profile.baseUrl).origin === "https://api.deepseek.com";
+  } catch {
+    return false;
   }
 }
 
@@ -102,6 +113,10 @@ function validateProfile(profile, key) {
   if (!reasoning.supported.includes(reasoning.default)) throw new Error("reasoning.default must be in reasoning.supported");
   if (!new Set(["none", "reasoning_effort", "reasoning"]).has(reasoning.parameter)) throw new Error("reasoning.parameter is invalid");
   validateCredential(profile.credential, profile.baseUrl, profile.protocol);
+  if ((profile.credential.type === "dsh_account" || isOfficialDeepSeekProfile(profile))
+      && reasoning.supported.some((effort) => !DEEPSEEK_ACCOUNT_EFFORTS.has(effort))) {
+    throw new Error("official DeepSeek API profiles support only none, low, high, and max reasoning; xhigh is normalized to high by the API adapter");
+  }
   if (profile.contextWindow !== undefined
       && (!Number.isSafeInteger(profile.contextWindow) || profile.contextWindow < 1_024 || profile.contextWindow > 2_000_000)) {
     throw new Error("contextWindow must be an integer from 1024 to 2000000");

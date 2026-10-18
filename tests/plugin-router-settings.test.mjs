@@ -216,6 +216,7 @@ try {
   match(html, /id="profile-context-window"[^>]*type="number"/, "the context budget is a numeric input");
   match(html, /id="profile-context-window"[^>]*min="1024"/, "the context budget input advertises the minimum");
   match(html, /id="profile-context-window"[^>]*max="2000000"/, "the context budget input advertises the maximum");
+  match(html, /https:\/\/api\.deepseek\.com"/, "the DeepSeek account helper keeps the known default path");
   match(html, /128000/, "the new-profile default context budget is 128000");
   match(html, /按所选模型的上下文上限设置/, "the hint asks the user to follow the selected model's context limit");
   match(html, /id="context-window-note"/, "the UI has an inline contextWindow capability note");
@@ -230,6 +231,8 @@ try {
   match(html, /applyApiConfiguration/, "the UI consumes the apply capability seam");
   match(html, /角色已安装/, "the status surface distinguishes installed roles");
   match(html, /需重启/, "the status surface distinguishes restart requirements");
+  match(html, /新增角色应用后需要完整重启；当前采用状态无法自动确认/,
+    "the status surface explains that adoption cannot be confirmed automatically");
   match(html, /本地网关/, "the status surface distinguishes local gateway health");
   match(html, /API 调用/, "the status surface distinguishes API verification");
   match(html, /id="apply-api"[^>]*disabled/, "the apply button is disabled until a runtime seam supports it");
@@ -260,14 +263,14 @@ try {
   doesNotMatch(text(opened), /已打开|opened/i, "the entrypoint never claims a visible screen");
 
   const defaultStatus = payload(await toolCall("router_settings_executor_status", {}));
-  equal(defaultStatus.installed, "unknown", "the default lifecycle status is unknown");
-  equal(defaultStatus.runtimeCompatible, "unknown", "the default runtime compatibility is unknown");
-  equal(defaultStatus.restartRequired, "unknown", "the default restart status is unknown");
-  equal(defaultStatus.gatewayRunning, "unknown", "the default gateway status is unknown");
-  equal(defaultStatus.localHealthy, "unknown", "the default local health is unknown");
-  equal(defaultStatus.credentialAvailable, "unknown", "the default credential status is unknown");
+  equal(defaultStatus.installed, false, "the production lifecycle reports no installed profile");
+  equal(defaultStatus.runtimeCompatible, false, "the production lifecycle reports the old runtime as incompatible");
+  equal(defaultStatus.restartRequired, false, "no installed role requires a restart");
+  equal(defaultStatus.gatewayRunning, false, "the status does not start a gateway");
+  equal(defaultStatus.localHealthy, false, "the status does not claim local health");
+  equal(defaultStatus.credentialAvailable, false, "no profile is selected, so no credential is claimed");
   equal(defaultStatus.apiVerified, false, "the default status never claims API verification");
-  match(defaultStatus.detail, /未接入|未启动|未验证/, "the default status explains the missing lifecycle");
+  match(defaultStatus.detail, /no API profile|未选择|selected/i, "the production status explains that no API profile is selected");
 
   const updated = await toolCall("router_settings_update", {
     set: {mode: "scheduled", peak: "deepseek", valley: "luna"},
@@ -469,30 +472,25 @@ try {
     label: "Context Budget",
     definition: {...contextDefinition, contextWindow: 128000},
   });
-  if (isError(contextProfile)) {
-    match(text(contextProfile), /尚未支持 contextWindow|unsupported field/i,
-      "the current core rejects contextWindow explicitly before integration");
-    match(text(contextProfile), /未保存/, "the pending field never pretends to save");
-  } else {
-    const contextResult = payload(contextProfile);
-    ok(contextResult.profileId !== first.profileId,
-      "an explicit context budget creates a distinct profile identity");
-    equal(contextResult.settings.profiles[contextResult.profileId].contextWindow, 128000,
-      "the explicit context budget is persisted after the integration field lands");
-    equal(contextResult.settings.profiles[first.profileId].contextWindow, undefined,
-      "the old profile without a context budget remains unchanged");
-    const withoutContext = await toolCall("router_settings_save_profile", {
-      expectedSha256: contextResult.sha256,
-      label: "No Context Budget",
-      definition: contextDefinition,
-    });
-    ok(!isError(withoutContext), "a profile without a context budget remains saveable");
-    const withoutResult = payload(withoutContext);
-    ok(withoutResult.profileId !== contextResult.profileId,
-      "an explicitly present contextWindow participates in the profile identity");
-    equal(withoutResult.settings.profiles[withoutResult.profileId].contextWindow, undefined,
-      "an absent contextWindow keeps the old profile definition shape");
-  }
+  ok(!isError(contextProfile), "the integrated core saves an explicit contextWindow");
+  const contextResult = payload(contextProfile);
+  ok(contextResult.profileId !== first.profileId,
+    "an explicit context budget creates a distinct profile identity");
+  equal(contextResult.settings.profiles[contextResult.profileId].contextWindow, 128000,
+    "the explicit context budget is persisted");
+  equal(contextResult.settings.profiles[first.profileId].contextWindow, undefined,
+    "the old profile without a context budget remains unchanged");
+  const withoutContext = await toolCall("router_settings_save_profile", {
+    expectedSha256: contextResult.sha256,
+    label: "No Context Budget",
+    definition: contextDefinition,
+  });
+  ok(!isError(withoutContext), "a profile without a context budget remains saveable");
+  const withoutResult = payload(withoutContext);
+  ok(withoutResult.profileId !== contextResult.profileId,
+    "an explicitly present contextWindow participates in the profile identity");
+  equal(withoutResult.settings.profiles[withoutResult.profileId].contextWindow, undefined,
+    "an absent contextWindow keeps the old profile definition shape");
 
   const withoutIdentity = await toolCall("dsh_status", {agent_id: "missing"});
   ok(isError(withoutIdentity), "legacy DSH tools still require trusted identity");

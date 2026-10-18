@@ -291,7 +291,9 @@ try {
   });
   equal(executorStatus.installed, true, "status reports installed artifacts");
   equal(executorStatus.runtimeCompatible, true, "status reports the approved runtime");
-  equal(executorStatus.restartRequired, true, "status keeps the conservative restart marker");
+  equal(executorStatus.restartRequired, "unknown", "status cannot prove whether the running app adopted the role");
+  assert.match(executorStatus.detail, /完整重启|无法自动确认/);
+  checks += 1;
   equal(executorStatus.gatewayRunning, true, "status reads the running owned task");
   equal(executorStatus.localHealthy, true, "status reads api_only/relay_allowed health");
   equal(executorStatus.credentialAvailable, true, "status checks credential presence in memory");
@@ -305,7 +307,7 @@ try {
   });
   equal(incompatibleStatus.installed, true, "status still reports installed files for an old runtime");
   equal(incompatibleStatus.runtimeCompatible, false, "status rejects the old runtime instead of claiming ready");
-  assert.match(incompatibleStatus.detail, /approved runtime unavailable/);
+  assert.match(incompatibleStatus.detail, /不兼容|runtime/);
   checks += 1;
 
   const sourceRoot = path.join(tempRoot, "source-root");
@@ -355,7 +357,8 @@ try {
   equal(notInstalled.runtimeCompatible, true, "status reports a compatible staged runtime without installing");
   equal(notInstalled.apiVerified, false, "status keeps apiVerified false before any real probe");
   const applied = await applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps);
-  equal(applied.applied.length, 1, "explicit Apply installs the saved API profile");
+  equal(applied.applied, true, "explicit Apply reports success");
+  equal(applied.appliedProfiles.length, 1, "explicit Apply installs the saved API profile");
   equal(applied.restartRequired, true, "Apply reports the restart requirement");
   equal(applyTasks.registers, 1, "Apply registers the owned API task");
   equal(applyTasks.starts, 0, "Apply never starts a gateway or model request");
@@ -363,12 +366,16 @@ try {
   equal(secondApply.alreadyInstalled.length, 1, "repeated Apply is idempotent");
   equal(applyTasks.registers, 1, "repeated Apply does not duplicate the task");
   await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: "0".repeat(64) }, applyDeps), /changed since/);
-  await rejects(() => applyApiConfiguration({ settings: applySettings }, {
+  const unsupported = await applyApiConfiguration({ settings: applySettings }, {
     ...applyDeps,
     apiDir: path.join(tempRoot, "unsupported-api"),
     settingsPath: applyPaths.settings,
     verifyRuntimeVersion: async () => { throw new Error("runtime patch mismatch"); },
-  }), /unsupported/);
+  });
+  equal(unsupported.applied, false, "Apply fails closed without a compatible runtime");
+  equal(unsupported.supported, false, "Apply reports unsupported instead of claiming ready");
+  assert.match(unsupported.detail, /未支持|unsupported/);
+  checks += 1;
   statusHealthServer.close();
   await once(statusHealthServer, "close");
 

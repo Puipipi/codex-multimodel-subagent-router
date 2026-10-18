@@ -88,10 +88,44 @@ throws(() => createApiProfile({ ...apiDefinition, credential: { type: "env", nam
 
 const accountProfile = createApiProfile({
   ...apiDefinition,
-  baseUrl: "https://api.deepseek.com/v1",
+  baseUrl: "https://api.deepseek.com",
+  model: "deepseek-flash",
+  reasoning: { supported: ["none", "low", "high", "max"], default: "high", parameter: "reasoning_effort" },
   credential: { type: "dsh_account" },
 });
 ok(accountProfile.profileId, "official DeepSeek account-backed profile can be identified");
+throws(() => createApiProfile({
+  ...apiDefinition,
+  baseUrl: "https://api.deepseek.com",
+  reasoning: { supported: ["low", "medium"], default: "medium", parameter: "reasoning_effort" },
+  credential: { type: "dsh_account" },
+}), /none, low, high, and max/, "official account profiles use the known DeepSeek effort levels");
+throws(() => createApiProfile({
+  ...apiDefinition,
+  baseUrl: "https://api.deepseek.com",
+  reasoning: { supported: ["high", "xhigh"], default: "high", parameter: "reasoning_effort" },
+  credential: { type: "dsh_account" },
+}), /xhigh is normalized to high/, "xhigh is not advertised as a DeepSeek account effort");
+const versionedAccount = createApiProfile({
+  ...apiDefinition,
+  baseUrl: "https://api.deepseek.com/v1",
+  model: "deepseek-flash",
+  reasoning: { supported: ["none", "low", "high", "max"], default: "high", parameter: "reasoning_effort" },
+  credential: { type: "dsh_account" },
+});
+ok(versionedAccount.profileId, "legacy account profiles with /v1 remain loadable; endpoint availability is not claimed");
+const manualDeepSeek = createApiProfile({
+  ...apiDefinition,
+  baseUrl: "https://api.deepseek.com",
+  model: "deepseek-flash",
+  reasoning: { supported: ["none", "low", "high", "max"], default: "high", parameter: "reasoning_effort" },
+  credential: { type: "env", name: "DEEPSEEK_API_KEY" },
+});
+ok(manualDeepSeek.profileId, "manual official DeepSeek API profiles share the known effort levels");
+throws(() => createApiProfile({
+  ...manualDeepSeek,
+  reasoning: { supported: ["high", "xhigh"], default: "high", parameter: "reasoning_effort" },
+}), /xhigh is normalized to high/, "manual DeepSeek profiles do not advertise xhigh");
 throws(() => createApiProfile({ ...apiDefinition, credential: { type: "dsh_account" } }), /official DeepSeek origin/, "DSH account grants cannot be sent to third-party providers");
 
 const root = await mkdtemp(path.join(os.tmpdir(), "native-api-settings-"));

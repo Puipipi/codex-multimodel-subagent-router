@@ -692,7 +692,7 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
       localHealthy: false,
       credentialAvailable: false,
       apiVerified: false,
-      detail: "no API profile is selected; choose a profile before checking or applying it",
+      detail: "尚未选择 API 配置；请先保存并选择一个 profile。",
     };
   }
   let journal = null;
@@ -753,14 +753,14 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
   } catch { gatewayRunning = false; localHealthy = false; }
 
   const detail = !runtime.versionDir
-    ? `approved runtime unavailable: ${runtime.error}`
+    ? `当前 runtime 与已批准补丁不兼容：${runtime.error}；不会启动服务或冒充 ready。`
     : !installed
-      ? "profile artifacts are not installed; an explicit Apply action is required"
-      : "profile artifacts are installed; restartRequired is a conservative static value and local health does not verify authentication or model output";
+      ? "配置已保存但尚未安装角色；需要显式点击“应用 API 配置”。"
+      : "角色文件已安装；新增角色应用后需要完整重启 Codex，但当前采用状态无法自动确认。本地健康不代表认证或模型调用通过。";
   return {
     installed,
     runtimeCompatible: Boolean(runtime.versionDir),
-    restartRequired: installed,
+    restartRequired: installed ? "unknown" : false,
     gatewayRunning,
     localHealthy,
     credentialAvailable,
@@ -787,7 +787,16 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
     env: dependencies.env || process.env,
     verifyRuntime: dependencies.verifyRuntimeVersion || verifyRuntimeVersion,
   });
-  if (!runtime.versionDir) throw new Error(`the approved native API runtime is unsupported: ${runtime.error}`);
+  if (!runtime.versionDir) {
+    return {
+      applied: false,
+      supported: false,
+      restartRequired: "unknown",
+      detail: `当前 runtime 未支持 API 配置应用（unsupported/not installed）：${runtime.error}；不会下载、安装、启动或重启任何组件。`,
+      appliedProfiles: [],
+      alreadyInstalled: [],
+    };
+  }
   const applied = [];
   const alreadyInstalled = [];
   for (const profileId of Object.keys(validated.profiles)) {
@@ -812,7 +821,16 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
     await activate({ journalPath }, dependencies);
     applied.push(profileId);
   }
-  return { applied, alreadyInstalled, runtimeCompatible: true, restartRequired: applied.length > 0 };
+  return {
+    applied: applied.length > 0,
+    supported: true,
+    restartRequired: applied.length > 0,
+    detail: applied.length > 0
+      ? "API role/catalog/provider 与 Task 事务已应用；新增角色需要完整重启 Codex。"
+      : "API 配置已安装；没有新增角色。",
+    appliedProfiles: applied,
+    alreadyInstalled,
+  };
 }
 
 async function main(argv) {

@@ -110,17 +110,21 @@ const applied = await applyApiConfiguration({ settings, expectedSha256 });
 model, download a runtime, or mutate settings. `gatewayRunning` and
 `localHealthy` are local Task/health observations; `localHealthy` does not
 prove provider authentication or model output. `apiVerified` stays `false`
-until a separate real probe exists. `restartRequired` is a conservative static
-value while installed artifacts exist; this backend has no recorded
-application-restart observation.
+until a separate real probe exists. When artifacts are installed,
+`restartRequired` is `"unknown"`: a newly applied role needs a full restart,
+but this backend has no reliable observation that the running application has
+adopted it. Do not turn that unknown into a permanent “must restart” banner or
+edit a journal to manufacture an accepted state.
 
 `applyApiConfiguration` is the explicit Apply-button path. It verifies that
 the supplied settings were already saved (and the optional `expectedSha256`
 still matches), requires an already staged compatible runtime, then applies
 the owned role/catalog/provider/Task transaction for the saved profiles. It
 does not download or replace the runtime, change the root Sol connection,
-restart the application, or call a model. It reports `restartRequired` for a
-new role.
+restart the application, or call a model. Its successful apply result reports
+`restartRequired: true` for a newly applied role; a later status read reports
+adoption as `"unknown"` because the application-restart observation is not
+available.
 
 Saving JSON never installs by itself. With the 6ec/old-patch runtime,
 `runtimeCompatible` is `false` and Apply fails as unsupported rather than
@@ -158,10 +162,22 @@ sticky choices retain their existing precedence.
 ## Credentials and protocol limits
 
 `env` and `file` credentials are references; `dsh_account` is allowed only for
-the official DeepSeek origin with the Responses protocol. Credential values
+the known official DeepSeek origin with the Responses protocol. The verified
+acceptance path is the existing default `https://api.deepseek.com` →
+`/responses`; a `/v1` account profile may remain loadable for compatibility,
+but a known origin does not prove that path works. Local credential status is
+not authentication proof. Credential values
 are never written to settings, journals, config, roles, catalogs, argv,
 prompts, logs, or public receipts. Existing account/manual-key precedence in
 the DeepSeek path is unchanged, and no third-party probe is performed.
+
+For official DeepSeek API profiles (account or manual env/file credentials),
+reasoning is limited to the known `none/low/high/max` levels. The API adapter
+maps a requested `xhigh` to `high` and preserves a valid `max`; it does not
+infer an `off` wire value for `none`, because that mapping needs provider
+evidence. Other API profiles retain their declared effort levels. The
+historical DeepSeek gateway effort folding is a separate path and is not reused
+for generic roles.
 
 Chat Completions profiles are adapted to a stateless Chat request. Codex's
 built-in web search is not representable by that adapter; the gateway reports

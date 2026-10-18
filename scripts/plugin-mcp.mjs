@@ -11,6 +11,10 @@ import {fileURLToPath} from 'node:url';
 import {runClient} from './dsh-mcp-client.mjs';
 import {createTraceService} from './plugin-trace.mjs';
 import {
+  applyApiConfiguration as applyNativeApiConfiguration,
+  getExecutorStatus as getNativeApiExecutorStatus,
+} from './native-api-install.mjs';
+import {
   ROUTER_SETTINGS_TOOL_NAMES,
   ROUTER_SETTINGS_TOOLS,
   createRouterSettingsService,
@@ -663,7 +667,10 @@ export function createPluginMcp({
 }
 
 async function main() {
-  const server = createPluginMcp();
+  const server = createPluginMcp({
+    getExecutorStatus: getNativeApiExecutorStatus,
+    applyApiConfiguration: applyNativeApiConfiguration,
+  });
   const write = value => process.stdout.write(`${JSON.stringify(value)}\n`);
   const lines = createInterface({input: process.stdin});
   let pending = 0;
