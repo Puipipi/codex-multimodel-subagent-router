@@ -209,6 +209,8 @@ npx --yes dsh-subagent-mcp@0.7.0 setup --no-skill --service background
 
 This registers the upstream MCP server and may prepare its managed background service/dependencies. Reload Codex once after this MCP configuration change so the server is discovered; do not open a new chat just to change the route. Do not run the upstream installer with its default skill installation when this router is active. On Windows, apply the optional console-hide patch only at a maintenance point if you need it.
 
+The generic OpenAI-compatible API executor backend is documented in [docs/native-api-executors.md](docs/native-api-executors.md). Its panel, README/SKILL onboarding, and desktop acceptance are a separate next stage; the currently installed 0.10.5/6ec runtime predates the new API role patch and is not evidence of a ready generic API executor.
+
 ## Privacy and state
 
 - Route override state: `%LOCALAPPDATA%\sol-luna-deepseek-router\session-overrides`; hook state: `%LOCALAPPDATA%\sol-luna-deepseek-router\hook-state`; plugin state: `%LOCALAPPDATA%\sol-luna-deepseek-router\plugin`.

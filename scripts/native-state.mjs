@@ -28,6 +28,32 @@ function nonce(value) {
   return value;
 }
 
+function normalizeBinding(binding) {
+  if (binding === null || binding === undefined) return null;
+  if (typeof binding !== "object" || Array.isArray(binding)) throw new Error("child executor binding must be an object");
+  const executor = binding.executor;
+  if (!["luna", "deepseek", "api"].includes(executor)) throw new Error("child executor binding must be luna, deepseek, or api");
+  const model = typeof binding.model === "string" && binding.model.trim() ? binding.model.trim() : null;
+  if (!model) throw new Error("child executor binding requires an exact model");
+  if (executor === "api") {
+    const profileId = binding.profileId;
+    if (typeof profileId !== "string" || !/^[a-f0-9]{24}$/.test(profileId)) throw new Error("API child binding requires a 24-character lowercase profile id");
+    if (binding.role !== `native_api_${profileId}`) throw new Error("API child role must match its immutable profile id");
+    if (binding.providerId !== `api-native-${profileId}`) throw new Error("API child provider must match its immutable profile id");
+    return { executor, profileId, model, role: binding.role, providerId: binding.providerId };
+  }
+  if (executor === "deepseek") {
+    if (binding.role !== undefined && binding.role !== "native_deepseek") throw new Error("DeepSeek child role must be native_deepseek");
+    return { executor, profileId: null, model, role: "native_deepseek", providerId: null };
+  }
+  if (binding.profileId !== undefined && binding.profileId !== null) throw new Error("Luna child binding cannot carry an API profile");
+  return { executor, profileId: null, model, role: null, providerId: null };
+}
+
+function sameBinding(left, right) {
+  return JSON.stringify(normalizeBinding(left)) === JSON.stringify(normalizeBinding(right));
+}
+
 export class NativeTasks {
   constructor({ stateDir } = {}) {
     this.stateDir = resolveStateDir(stateDir);
@@ -55,20 +81,33 @@ export class NativeTasks {
     });
   }
 
-  async begin({ parentThreadId, childThreadId, model, workspace = null, taskNonce = null }) {
+  async begin({ parentThreadId, childThreadId, model, workspace = null, taskNonce = null, binding = null }) {
     const parent = parentId(parentThreadId);
     const child = childId(childThreadId);
+    const normalizedBinding = normalizeBinding(binding);
     return this._mutate((data) => {
       const existing = data.tasks[child];
       if (existing && existing.owner !== hashThread(parent)) {
         throw new Error("This child thread belongs to another parent chat");
       }
+      const immutable = existing?.binding ? normalizeBinding(existing.binding) : null;
+      if (immutable && normalizedBinding && !sameBinding(immutable, normalizedBinding)) {
+        throw new Error("This child's executor/profile binding is immutable and cannot be changed");
+      }
+      const bound = immutable || normalizedBinding;
+      if (immutable && typeof model === "string" && model !== immutable.model) {
+        throw new Error("This child's model binding is immutable and cannot be changed");
+      }
+      if (existing?.task_nonce && taskNonce && existing.task_nonce !== taskNonce) {
+        throw new Error("This child's task nonce cannot be changed");
+      }
       const at = new Date().toISOString();
       data.tasks[child] = {
         child_thread_id: child,
         owner: hashThread(parent),
-        task_nonce: taskNonce,
-        model: typeof model === "string" ? model : existing?.model ?? null,
+        task_nonce: existing?.task_nonce || taskNonce,
+        model: bound ? bound.model : (typeof model === "string" ? model : existing?.model ?? null),
+        ...(bound ? { binding: bound } : {}),
         workspace,
         status: "running",
         created_at: existing?.created_at ?? at,
@@ -103,6 +142,11 @@ export class NativeTasks {
     return Object.values(data.tasks)
       .filter((task) => task.owner === owner)
       .map((task) => ({ ...task, owner: undefined }));
+  }
+
+  async binding({ parentThreadId, childThreadId }) {
+    const task = await this.assertOwner(childThreadId, parentThreadId);
+    return task.binding ? normalizeBinding(task.binding) : null;
   }
 }
 
@@ -213,8 +257,23 @@ async function main(argv) {
   }
   if (command === "bind") {
     const child = get("child");
+    const bindingValues = {
+      executor: get("executor"),
+      profileId: get("profile-id"),
+      role: get("role"),
+      providerId: get("provider-id"),
+      model: get("model"),
+    };
+    const hasBinding = ["executor", "profile-id", "role", "provider-id"].some((name) => bindingValues[name] !== undefined);
     const writer = await new NativeWriterLease({ stateDir }).bind({ workspace, parentThreadId: parent, taskNonce, childThreadId: child });
-    const task = await new NativeTasks({ stateDir }).begin({ parentThreadId: parent, childThreadId: child, model: get("model"), workspace, taskNonce });
+    const task = await new NativeTasks({ stateDir }).begin({
+      parentThreadId: parent,
+      childThreadId: child,
+      model: get("model"),
+      workspace,
+      taskNonce,
+      binding: hasBinding ? bindingValues : null,
+    });
     process.stdout.write(`${JSON.stringify({ task, writer })}\n`);
     return;
   }
@@ -230,7 +289,13 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify({ owned })}\n`);
     return;
   }
-  throw new Error("usage: native-state.mjs <reserve|bind|finish|who> --workspace PATH [--task-nonce ID] [--child ID] [--model MODEL] [--state-dir PATH]");
+  if (command === "binding") {
+    const child = get("child");
+    const binding = await new NativeTasks({ stateDir }).binding({ parentThreadId: parent, childThreadId: child });
+    process.stdout.write(`${JSON.stringify({ binding })}\n`);
+    return;
+  }
+  throw new Error("usage: native-state.mjs <reserve|bind|finish|who|binding> --workspace PATH [--task-nonce ID] [--child ID] [--model MODEL] [--executor NAME --profile-id ID --role ROLE --provider-id ID] [--state-dir PATH]");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

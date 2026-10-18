@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { PICKER_SLUG } from "./native-routing.mjs";
 import { ensureNativeDeepseekDispatch } from "./native-isolated-install.mjs";
 import { loadRouterSettings } from "./native-api-settings.mjs";
+import { ensureNativeApiDispatch } from "./native-api-install.mjs";
+import { defaultNativeApiDir } from "./native-api-manager.mjs";
 
 const LUNA_MAP = {
   "gpt-6.1-sol": "gpt-6-luna",
@@ -86,8 +88,17 @@ async function main(argv) {
     return;
   }
   if (executor !== "luna") {
-    const settings = await loadRouterSettings(get("settings"));
+    const apiDir = get("api-dir") || defaultNativeApiDir();
+    const settingsPath = get("settings") || path.join(apiDir, "router.json");
+    const settings = await loadRouterSettings(settingsPath);
     const result = resolveNativeAgent({ executor, mainModel, apiProfiles: settings.profiles });
+    const apiJournal = get("api-journal");
+    await ensureNativeApiDispatch({
+      profileId: result.profile_id,
+      apiDir,
+      settingsPath: settingsPath || undefined,
+      journalPath: apiJournal || undefined,
+    });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }

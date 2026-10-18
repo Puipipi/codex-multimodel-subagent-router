@@ -39,6 +39,7 @@ function localPath(pathname, token) {
   const parts = pathname.split("/");
   if (parts.length < 3 || !tokenMatches(parts[1], token)) return null;
   if (parts.length === 3 && parts[2] === "_health") return { kind: "health" };
+  if (parts.length === 3 && parts[2] === "_shutdown") return { kind: "shutdown" };
   if (parts.length === 6 && parts[2] === "profiles" && PROFILE_ID_RE.test(parts[3]) && parts[4] === "v1" && parts[5] === "responses") {
     return { kind: "responses", profileId: parts[3] };
   }
@@ -113,6 +114,8 @@ export function createNativeApiGateway({
   timeoutMs = 120_000,
   maxRequestBytes = 64 * 1024 * 1024,
   logger = console,
+  health = null,
+  onShutdown = null,
 } = {}) {
   if (typeof resolveProfile !== "function") throw new TypeError("resolveProfile is required");
   if (typeof resolveAuth !== "function") throw new TypeError("resolveAuth is required");
@@ -120,6 +123,8 @@ export function createNativeApiGateway({
   if (typeof token !== "string" || token.length < 8) throw new TypeError("token must contain at least 8 characters");
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new RangeError("timeoutMs must be a positive safe integer");
   if (!Number.isSafeInteger(maxRequestBytes) || maxRequestBytes < 1) throw new RangeError("maxRequestBytes must be a positive safe integer");
+  if (health !== null && (typeof health !== "object" || Array.isArray(health))) throw new TypeError("health must be an object");
+  if (onShutdown !== null && typeof onShutdown !== "function") throw new TypeError("onShutdown must be a function");
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -127,7 +132,18 @@ export function createNativeApiGateway({
     if (!route) { json(res, 404, errorBody("Not found.", "not_found")); return; }
     if (route.kind === "health") {
       if (req.method !== "GET") { json(res, 405, errorBody("GET only.", "method_not_allowed")); return; }
+      json(res, 200, { ok: true, pid: process.pid, ...(health || {}) });
+      return;
+    }
+    if (route.kind === "shutdown") {
+      if (req.method !== "POST") { json(res, 405, errorBody("POST only.", "method_not_allowed")); return; }
+      if (typeof onShutdown !== "function") { json(res, 404, errorBody("Not found.", "not_found")); return; }
+      if (!tokenMatches(req.headers["x-sol-luna-token"], token)) {
+        json(res, 403, errorBody("Shutdown token is invalid.", "forbidden"));
+        return;
+      }
       json(res, 200, { ok: true, pid: process.pid });
+      setImmediate(() => onShutdown());
       return;
     }
     if (req.method !== "POST") { json(res, 405, errorBody("POST only.", "method_not_allowed")); return; }

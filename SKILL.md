@@ -104,6 +104,8 @@ Use native `wait` and `thread/read` for the same child. A timeout means the task
 
 The historical native evidence is recorded in `docs/native-deepseek-acceptance-2026-10-17.md`; it used the earlier shared-provider call contract and does not verify the isolated-role route. The current source includes prepare/activate/rollback/status orchestration, with one host-specific installation in `docs/native-formal-install-2026-10-18.md`, a stable gateway source switch in `docs/native-stable-gateway-acceptance-2026-10-18.md`, and later 0.10.5 desktop observations in `docs/native-desktop-acceptance-0.10.5-2026-10-18.md`. Those observations describe tested host-specific behavior and limits; other hosts require local verification. Package/skill synchronization and publication status are tracked separately from desktop behavior. Do not treat a prepared/configured journal or its static `runtimeObserved=false` diagnostic as the latest runtime observation; consult the dated desktop evidence. Do not treat preparation or configuration alone as desktop acceptance.
 
+The generic OpenAI-compatible API executor backend is described in `docs/native-api-executors.md`. Its UI/panel, full routing-skill onboarding, and desktop acceptance remain the next stage. The installed 0.10.5/6ec runtime predates the new API role patch; do not describe a generic API profile as ready until a matching runtime, restart, and real probe have separate evidence.
+
 ## Price and calendar sources
 
 - [DeepSeek API pricing](https://api-docs.deepseek.com/quick_start/pricing/)

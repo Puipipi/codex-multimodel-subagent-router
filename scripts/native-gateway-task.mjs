@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const OWNERSHIP_PREFIX = "sol-luna-native-gateway-task:v1:";
 const TASK_NAME_PREFIX = "SolLunaNativeGateway-";
+const API_OWNERSHIP_PREFIX = "sol-luna-native-api-task:v1:";
+const API_TASK_NAME_PREFIX = "SolLunaNativeApi-";
 const POWERSHELL_TIMEOUT_MS = 10_000;
 const RESTART_COUNT = 3;
 const RESTART_INTERVAL_MINUTES = 1;
@@ -65,12 +67,13 @@ switch ($request.operation) {
   'register' {
     if ($record.exists -and -not $record.owned) { throw 'task ownership conflict' }
     $action = New-ScheduledTaskAction -Execute $request.execute -Argument $request.arguments -WorkingDirectory $request.workingDirectory
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
     $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount ${RESTART_COUNT} -RestartInterval (New-TimeSpan -Minutes ${RESTART_INTERVAL_MINUTES}) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     $settings.AllowDemandStart = $true
     $settings.Hidden = $true
-    Register-ScheduledTask -TaskName $request.name -Description $request.marker -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    $registerParams = @{ TaskName = $request.name; Description = $request.marker; Action = $action; Principal = $principal; Settings = $settings; Force = $true }
+    if ($request.autoStart) { $registerParams.Trigger = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name) }
+    Register-ScheduledTask @registerParams | Out-Null
     $result = Get-TaskRecord $request
   }
   'start' {
@@ -108,7 +111,7 @@ function taskHash(directory) {
   return createHash("sha256").update(path.resolve(directory).toLowerCase()).digest("hex").slice(0, 20);
 }
 
-export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPath, gatewayScriptPath } = {}) {
+export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPath, gatewayScriptPath, service = null } = {}) {
   if (!paths || typeof paths !== "object") throw new Error("gateway paths are required");
   const dir = absolutePath(paths.dir, "gateway directory");
   const state = absolutePath(paths.state, "gateway state path");
@@ -117,12 +120,15 @@ export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPat
   const node = absolutePath(nodePath, "Node executable");
   const wscript = absolutePath(wscriptPath || path.join(process.env.SystemRoot || "C:\\Windows", "System32", "wscript.exe"), "wscript executable");
   const gateway = absolutePath(gatewayScriptPath || path.join(SCRIPT_DIRECTORY, "native-gateway.mjs"), "gateway script");
+  const api = service === "api";
+  if (service !== null && !api) throw new Error("unsupported native gateway service");
   const hash = taskHash(dir);
-  const name = `${TASK_NAME_PREFIX}${hash}`;
-  const marker = `${OWNERSHIP_PREFIX}${hash}`;
-  const launcherPath = path.join(dir, "gateway-task.vbs");
+  const name = `${api ? API_TASK_NAME_PREFIX : TASK_NAME_PREFIX}${hash}`;
+  const marker = `${api ? API_OWNERSHIP_PREFIX : OWNERSHIP_PREFIX}${hash}`;
+  const launcherPath = path.join(dir, api ? "api-task.vbs" : "gateway-task.vbs");
+  const serveArgs = api ? ["--serve", "--api-only"] : ["--serve", "--deepseek-only"];
   const command = [
-    windowsQuote(node), windowsQuote(gateway), "--serve", "--deepseek-only",
+    windowsQuote(node), windowsQuote(gateway), ...serveArgs,
     "--state", windowsQuote(state), "--identity", windowsQuote(identity), "--log", windowsQuote(log),
   ].join(" ");
   const launcherContent = [
@@ -147,6 +153,7 @@ export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPat
     restartPolicy: Object.freeze({ count: RESTART_COUNT, intervalSeconds: RESTART_INTERVAL_MINUTES * 60 }),
     launcher: Object.freeze({ path: launcherPath, content: launcherContent }),
     action: Object.freeze({ execute: wscript, arguments: arguments_, workingDirectory: dir }),
+    autoStart: !api,
   });
 }
 
@@ -159,6 +166,7 @@ function requestFor(operation, plan) {
     execute: plan.action.execute,
     arguments: plan.action.arguments,
     workingDirectory: plan.action.workingDirectory,
+    autoStart: plan.autoStart !== false,
   };
 }
 
@@ -224,6 +232,7 @@ function taskPlanFingerprint(plan) {
     launcherPath: plan.launcher?.path,
     launcherContent: plan.launcher?.content,
   };
+  if (plan.autoStart === false) fingerprint.autoStart = false;
   if (plan.restartPolicy) fingerprint.restartPolicy = plan.restartPolicy;
   return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
 }
