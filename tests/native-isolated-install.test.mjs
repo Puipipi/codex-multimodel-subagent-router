@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import { NATIVE_RUNTIME_PATCH_SHA256, NATIVE_RUNTIME_SOURCE_COMMIT, NATIVE_RUNTIME_TARGET, NATIVE_RUNTIME_VERSION } from "../scripts/native-runtime.mjs";
 import { gatewayPaths, readGatewayIdentity } from "../scripts/native-gateway-manager.mjs";
 import { autostartFile, autostartScript } from "../scripts/native-autostart.mjs";
@@ -111,8 +112,59 @@ try {
     await rejects(() => prepare({ ...missingSmoke.common, gatewayDir: upperDefault, smokeCheck: () => ({ status: "passed" }) }), /separate from the legacy\/default gateway directory/i, "Windows case-only path alias cannot target the old gateway directory");
   }
 
+  const durableSource = await fixture("durable-gateway-source");
+  const pluginRoot = path.join(durableSource.dir, "plugin-cache");
+  const nonstandardVersionDir = path.join(durableSource.dir, "custom-layout", "nested", "versions", "approved");
+  await mkdir(path.join(pluginRoot, "scripts"), { recursive: true });
+  await mkdir(path.dirname(nonstandardVersionDir), { recursive: true });
+  await cp(durableSource.versionDir, nonstandardVersionDir, { recursive: true });
+  const gatewayModules = ["native-credentials.mjs", "native-gateway.mjs", "native-relay.mjs", "native-routing.mjs", "native-usage.mjs"];
+  for (const name of gatewayModules) await cp(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", name), path.join(pluginRoot, "scripts", name));
+  await prepare({
+    ...durableSource.common,
+    versionDir: nonstandardVersionDir,
+    gatewayScriptPath: undefined,
+    pluginRoot,
+    smokeCheck: async ({ preparedHome, exePath, expectedMainModel, expectedMainProvider, expectedRootBaseUrl }) => {
+      equal(exePath, path.join(nonstandardVersionDir, "codex.exe"), "nonstandard runtime layout is used for the verified smoke executable");
+      equal(expectedMainModel, "gpt-current", "smoke receives explicitly selected main model");
+      equal(expectedMainProvider, null, "smoke receives an explicit unset provider");
+      equal(expectedRootBaseUrl, null, "smoke explicitly verifies the root URL remains unset");
+      ok(await readFile(path.join(preparedHome, "agents/native_deepseek.toml"), "utf8"), "smoke fixture contains generated role file");
+      const fixtureConfig = await readFile(path.join(preparedHome, "config.toml"), "utf8");
+      ok(fixtureConfig.includes(JSON.stringify(path.join(preparedHome, "models_cache.json"))), "smoke root catalog points at temporary model cache");
+      return { status: "passed", checks: ["fixture"] };
+    },
+  });
+  const durableJournal = decodeJournal(await readFile(durableSource.journalPath, "utf8"));
+  equal(durableJournal.gateway.sourceBundle.files.length, 5, "plugin-root prepare journals the fixed five-module source manifest");
+  equal(durableJournal.paths.gatewaySourceRoot, path.dirname(durableSource.gatewayDir), "journal records the managed gateway source root");
+  equal(durableJournal.paths.gatewayScript, path.join(durableSource.gatewayDir, "..", durableJournal.gateway.sourceBundle.relativeDirectory, "scripts", "native-gateway.mjs"), "Task script resolves inside the immutable bundle");
+  const bundleDirectory = path.resolve(durableJournal.paths.gatewaySourceRoot, ...durableJournal.gateway.sourceBundle.relativeDirectory.split("/"));
+  const bundleEntry = path.join(bundleDirectory, "scripts", "native-gateway.mjs");
+  const originalBundleEntry = await readFile(bundleEntry);
+  await rm(pluginRoot, { recursive: true });
+  await import(`${pathToFileURL(bundleEntry).href}?integration=${Date.now()}`);
+  equal(await readFile(bundleEntry).then((bytes) => bytes.equals(originalBundleEntry)), true, "real gateway entry imports with its relative modules after plugin cache removal");
+
+  await writeFile(bundleEntry, "tampered\n");
+  const taskCallsBeforeTamperedActivation = durableSource.taskCalls.length;
+  await rejects(() => durableSource.activateFixture(), /gateway source module hash changed/i, "activate verifies the immutable bundle before side effects");
+  equal(durableSource.taskCalls.length, taskCallsBeforeTamperedActivation, "tampered bundle is rejected before Task operations");
+  await writeFile(bundleEntry, originalBundleEntry);
+  await durableSource.activateFixture();
+  const ensureBeforeTamperedDispatch = durableSource.ensureCalls.length;
+  await writeFile(bundleEntry, "tampered again\n");
+  await rejects(() => ensureNativeDeepseekDispatch({ journalPath: durableSource.journalPath, envAdapter: durableSource.envAdapter, taskAdapter: durableSource.taskAdapter }), /gateway source module hash changed/i, "dispatch verifies the bundle and does not migrate or stage it");
+  equal(durableSource.ensureCalls.length, ensureBeforeTamperedDispatch, "tampered dispatch bundle is rejected before gateway checks");
+  await writeFile(bundleEntry, originalBundleEntry);
+  await durableSource.rollbackFixture();
+  equal(await readFile(bundleEntry).then((bytes) => bytes.equals(originalBundleEntry)), true, "rollback leaves the completed immutable bundle intact");
+
   const f = await fixture("startup-failure");
   const prepared = await prepare(f.common);
+  const explicitJournal = decodeJournal(await readFile(f.journalPath, "utf8"));
+  equal(Object.hasOwn(explicitJournal.gateway, "sourceBundle"), false, "explicit gateway-script mode does not copy or claim a source bundle");
   equal(f.ensureCalls.length, 0, "prepare does not start a gateway process");
   const preparedText = JSON.stringify(prepared);
   equal(preparedText.includes(f.state.token), false, "prepare output does not expose gateway token");

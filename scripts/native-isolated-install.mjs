@@ -11,6 +11,7 @@ import { ensureGateway, gatewayHealth, gatewayPaths, prepareGatewayIdentity, rea
 import { createWindowsTaskSchedulerAdapter, gatewayTaskPlan, registerOwnedGatewayTask, restoreGatewayTask, snapshotGatewayTask, statusOwnedGatewayTask, createOwnedGatewayTaskLauncher } from "./native-gateway-task.mjs";
 import { createWindowsUserEnvironmentAdapter, apply as applyEnvironment, plan as planEnvironment, rollback as rollbackEnvironment } from "./native-runtime-env.mjs";
 import { verifyRuntimeVersion } from "./native-runtime.mjs";
+import { gatewaySourceEntry, stageGatewaySource, verifyGatewaySource } from "./native-gateway-source.mjs";
 
 const JOURNAL_VERSION = 1;
 const SMOKE_STAGES = new Set(["preflight", "app_server_start", "initialize", "config_read", "model_list", "provider_config", "role_config", "cleanup", "complete"]);
@@ -150,14 +151,30 @@ async function requireExplicitPaths({ versionDir, codexHome, gatewayDir, startup
   if (normalize(isolatedGateway) === normalize(legacyGateway)) throw new Error("gatewayDir must be separate from the legacy/default gateway directory");
 }
 
-async function canonicalGatewayScript({ gatewayScriptPath, pluginRoot }) {
+async function canonicalGatewayScript({ gatewayScriptPath, pluginRoot, runtimeRoot }) {
   if (Boolean(gatewayScriptPath) === Boolean(pluginRoot)) throw new Error("provide exactly one of gatewayScriptPath or pluginRoot explicitly");
+  if (pluginRoot) {
+    const sourceBundle = await stageGatewaySource({ pluginRoot, runtimeRoot });
+    return { gatewayScriptPath: gatewaySourceEntry(sourceBundle, runtimeRoot), sourceBundle };
+  }
   const input = gatewayScriptPath || path.join(pluginRoot, "scripts", "native-gateway.mjs");
   if (typeof input !== "string" || !path.isAbsolute(input)) throw new Error("gateway script path or plugin root must be absolute");
   const candidate = path.resolve(input);
   const info = await lstat(candidate);
   if (!info.isFile() || info.isSymbolicLink()) throw new Error(`gateway script must be an installed regular file: ${candidate}`);
-  return await realpath(candidate);
+  return { gatewayScriptPath: await realpath(candidate), sourceBundle: null };
+}
+
+async function verifyJournalGatewaySource(journal) {
+  const sourceBundle = journal.gateway?.sourceBundle;
+  if (sourceBundle === undefined) return false;
+  const runtimeRoot = journal.paths?.gatewaySourceRoot;
+  if (typeof runtimeRoot !== "string" || !path.isAbsolute(runtimeRoot)) throw new Error("gateway source runtime root is missing from install journal");
+  await verifyGatewaySource(sourceBundle, { runtimeRoot });
+  if (path.resolve(journal.paths.gatewayScript) !== gatewaySourceEntry(sourceBundle, runtimeRoot)) {
+    throw new Error("gateway Task script does not match its immutable source bundle");
+  }
+  return true;
 }
 
 function taskLauncherBytes(taskPlan) {
@@ -288,11 +305,13 @@ export async function prepare(options = {}, dependencies = {}) {
   const autostartAdapter = dependencies.autostartAdapter || options.autostartAdapter || await defaultAutostartAdapter();
   const taskAdapter = dependencies.taskAdapter || options.taskAdapter || createWindowsTaskSchedulerAdapter();
   const prepareIdentity = dependencies.prepareGatewayIdentity || options.prepareGatewayIdentity || prepareGatewayIdentity;
-  const gatewayScript = await canonicalGatewayScript({ gatewayScriptPath: options.gatewayScriptPath, pluginRoot: options.pluginRoot });
   const paths = gatewayPaths(gatewayDir);
   const journal = path.resolve(journalPath);
   const startupFile = autostartFile(startupDir);
   if (await regularOrAbsent(journal, "install journal") !== null) throw new Error(`install journal already exists: ${journal}`);
+  const gatewaySourceRoot = path.dirname(paths.dir);
+  const gatewaySource = await canonicalGatewayScript({ gatewayScriptPath: options.gatewayScriptPath, pluginRoot: options.pluginRoot, runtimeRoot: gatewaySourceRoot });
+  const gatewayScript = gatewaySource.gatewayScriptPath;
 
   // Prepare only the private identity. The service is started later by the owned Task Scheduler task.
   const identity = await prepareIdentity({ paths });
@@ -377,7 +396,7 @@ export async function prepare(options = {}, dependencies = {}) {
   const journalData = {
     version: JOURNAL_VERSION,
     phase: "prepared",
-    paths: { versionDir: path.resolve(versionDir), codexHome: path.resolve(codexHome), gatewayDir: paths.dir, gatewayScript, startupDir: path.resolve(startupDir), journalPath: journal },
+    paths: { versionDir: path.resolve(versionDir), codexHome: path.resolve(codexHome), gatewayDir: paths.dir, gatewayScript, ...(gatewaySource.sourceBundle ? { gatewaySourceRoot } : {}), startupDir: path.resolve(startupDir), journalPath: journal },
     files: realFiles,
     environment: envPlan,
     autostart: {
@@ -386,7 +405,7 @@ export async function prepare(options = {}, dependencies = {}) {
       next: null,
       retiredLegacy: startupPrior !== null && isManagedOldStartup(startupPrior),
     },
-    gateway: { taskPlan, taskSnapshot, launcher: { path: taskPlan.launcher.path, prior: launcherPrior, next: launcherNext }, identityFile: paths.identity, identitySha256: sha256(identityBytes), preexistingPid: previousGatewayState?.pid ?? null, startedByTransaction: false, pid: null },
+    gateway: { taskPlan, taskSnapshot, ...(gatewaySource.sourceBundle ? { sourceBundle: gatewaySource.sourceBundle } : {}), launcher: { path: taskPlan.launcher.path, prior: launcherPrior, next: launcherNext }, identityFile: paths.identity, identitySha256: sha256(identityBytes), preexistingPid: previousGatewayState?.pid ?? null, startedByTransaction: false, pid: null },
     smoke: smokeEvidence,
     completed: { launcher: false, task: false, gateway: false, files: false, environment: false, autostart: false },
   };
@@ -430,6 +449,7 @@ export async function activate({ journalPath, envAdapter = createWindowsUserEnvi
   const ensure = dependencies.ensureGateway || ensureGateway;
   const writer = dependencies.writeLauncherAtomic || atomicWrite;
   const paths = gatewayPaths(journal.paths.gatewayDir);
+  await verifyJournalGatewaySource(journal);
   await assertPreparedState(journal, { envAdapter, startup, taskAdapter: tasks });
 
   const attempted = { launcher: false, task: false, gateway: false, autostart: false, files: false, environment: false };
@@ -661,6 +681,7 @@ export async function ensureNativeDeepseekDispatch({ journalPath, envAdapter = c
     throw new Error("isolated native DeepSeek gateway is not fully activated");
   }
   await verifyRuntimeVersion(journal.paths.versionDir);
+  await verifyJournalGatewaySource(journal);
   for (const key of Object.keys(journal.environment.next)) {
     const current = await envAdapter.get(key);
     const expected = journal.environment.next[key];
