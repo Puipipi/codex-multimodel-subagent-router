@@ -997,7 +997,7 @@ diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/
 +        &control,
 +        child_config,
 +        &root_thread,
-+        "non-reasoning-worker",
++        "non_reasoning_worker",
 +        Some(&role),
 +    )
 +    .await;
