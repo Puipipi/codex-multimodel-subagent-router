@@ -174,7 +174,7 @@ The plugin tests use a fake backend and fake MCP children. They do not require a
 
 ### Standalone skill
 
-Copy this folder to `~/.codex/skills/sol-luna-deepseek-router`, or install the root skill through your configured skill workflow. If that skill directory already exists, update it in place; do not add a second routing-skill copy.
+Copy the canonical skill bundle from this repository into `~/.codex/skills/sol-luna-deepseek-router`, or install it through your configured skill workflow. Keep `SKILL.md`, the bundled `scripts/` directory, and the referenced local `docs/` resources together; update the existing skill directory in place and keep exactly one routing-skill copy. The scripts use relative imports within `scripts/`, so copying only `SKILL.md` is incomplete.
 
 ### Plugin
 
@@ -185,9 +185,11 @@ codex plugin marketplace add <repo-root>
 codex plugin add sol-luna-deepseek-router@sol-luna
 ```
 
+When the configured `sol-luna` marketplace points to a local repository, refresh an already installed plugin after updating the source by running `codex plugin add sol-luna-deepseek-router@sol-luna` again. This reinstalls the complete plugin package in the Codex plugin cache from that marketplace. `codex plugin marketplace upgrade` refreshes configured Git marketplace snapshots only; it is not the update command for this local source. Update the standalone skill bundle separately from the canonical root `SKILL.md`, `scripts/`, and referenced local `docs/` resources above.
+
 `.agents/plugins/marketplace.json` is portable: its plugin source is `./`, inside the marketplace root, so both a local checkout and a GitHub clone resolve without an absolute path. The plugin manifest is `.codex-plugin/plugin.json`; the MCP companion is `.mcp.json`; hooks are auto-discovered from `hooks/hooks.json`. No manifest `hooks` pointer is required, and the plugin contributes no skill. Keep the standalone root skill as the only routing skill.
 
-After this initial plugin installation or a plugin update, reload plugins or restart Codex so the new MCP tools and hooks are discovered. Do not open a new chat merely to switch peak/valley routes; preserve the current conversation. Codex lists the hooks as untrusted until you review and approve them in `/hooks`.
+After this initial plugin installation or a plugin update, reload plugins or restart Codex so the new MCP tools and hooks are discovered. This reload only exposes the plugin package; it does not prepare or activate the isolated native CLI or gateway. Keep that separate lifecycle on the documented `native-isolated-install.mjs prepare` → `status` → `activate` path. The formal native DeepSeek dispatch follows the contract above, while Sol and Luna continue using their normal direct provider/catalog. Do not open a new chat merely to switch peak/valley routes; preserve the current conversation. Codex lists the hooks as untrusted until you review and approve them in `/hooks`.
 
 ### Isolated native DeepSeek setup
 

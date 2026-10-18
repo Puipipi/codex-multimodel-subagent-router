@@ -1,0 +1,138 @@
+{
+  "schema": "native-isolated-real-acceptance-v1",
+  "date": "2026-10-18",
+  "evidence_source": "main_controller_reviewed_raw_receipts_redacted_projection",
+  "scope": {
+    "classification": "staged65 Windows CLI with real API traffic",
+    "status": "passed",
+    "stage": "complete",
+    "failure": null,
+    "real_api": true,
+    "formal_installation": false,
+    "scheduled_task_restored": false,
+    "desktop_ui_acceptance": false,
+    "user_click_history_acceptance": false,
+    "real_multi_chat_concurrency": false,
+    "production_security_settings_changed": false
+  },
+  "build": {
+    "version": "0.163.0-alpha.10.2",
+    "source_commit": "4ebc485ca321243727539187169425fcf972f2c4",
+    "patch_sha256": "65add65b454f29e9c16726b27993f58176a99b0bd6bb73355fc72a32836774ae",
+    "binary_sha256": "b311c3c365d1a9a5c19a6040428e02d49b10d7bdd766a859f0b842d42c3e3963",
+    "provenance_sha256": "644c27784e4b0de3b17f354c0592f53980ffefa1f03a9ffa52ea765a9c1cd356",
+    "matches_published_staged65_record": true,
+    "activated": false
+  },
+  "acceptance": {
+    "top_level_checks": { "total": 14, "passed": 14 },
+    "parent": {
+      "completed": true,
+      "model": "gpt-6.1-sol",
+      "provider": "openai",
+      "rollout_session_id_verified": true,
+      "permission_profile_present": true,
+      "permission_profile_type": "disabled"
+    },
+    "child": {
+      "completed": true,
+      "role": "native_deepseek",
+      "provider": "deepseek-native",
+      "model": "deepseek/deepseek-flash",
+      "rollout_session_id_verified": true,
+      "permission_profile_present": true,
+      "permission_profile_type": "disabled",
+      "context_count": 3
+    },
+    "parent_rollout": {
+      "permission_profile_present": true,
+      "permission_profile_type": "disabled"
+    },
+    "test_configuration": {
+      "filesystem_access": "full",
+      "approval_policy": "never"
+    },
+    "cold_restart_same_child": {
+      "app_server_restart_verified": true,
+      "same_parent_and_child_resumed": true,
+      "resume_started_model_turn": false,
+      "followup_started_new_model_turn": true,
+      "first_two_lines_completed": true,
+      "same_child_third_line_completed": true,
+      "followup_completed": true,
+      "fourth_line_exact_match": true
+    },
+    "proof_file": {
+      "created_by_child": true,
+      "byte_length": 186,
+      "line_count": 4,
+      "encoding": "UTF-8",
+      "bom": false,
+      "line_ending": "LF",
+      "sha256": "3fdc4a7df8f92e10e8b1a58bc6d1f6b27bdabdfe860f2cc2aa53a3c068e763df"
+    },
+    "cleanup": {
+      "all_passed": true,
+      "auth_copy_removed": true,
+      "app_server_closed": true,
+      "gateway_closed": true,
+      "run_directory_removed": true
+    },
+    "validation_projection": {
+      "total": 74,
+      "true": 70,
+      "expected_false": 2,
+      "expected_false_checks": [
+        "parent_wrote_proof",
+        "parent_spawn_model_override"
+      ],
+      "integer_valued": 2,
+      "numeric_count": 2,
+      "null": 0
+    }
+  },
+  "model_traffic": {
+    "attempts": 6,
+    "fetch_started": 6,
+    "responses": 6,
+    "http_200": 6,
+    "usage_completed": 6,
+    "relay_count": 0,
+    "budget_events": 0,
+    "harness_request_cap": 12
+  },
+  "token_counters": {
+    "parent_coordination": {
+      "total": 255063,
+      "input": 253781,
+      "cached_input": 244992,
+      "output": 1282,
+      "reasoning": 12
+    },
+    "deepseek_provider": {
+      "total": 771283,
+      "input": 767242,
+      "output": 4041,
+      "relay": 0
+    },
+    "scope_note": "run_level_provider_counters_not_total_development_usage_or_codex_quota_percentages"
+  },
+  "validation_artifacts": {
+    "fixture_count": 47,
+    "fixture_exit_code": 0,
+    "syntax_exit_code": 0,
+    "syntax_check_count": 3,
+    "harness_sha256": "cf2bd374ec1290f6142f4d16caf40d69c9bb280590c2d7f4cafb7e1696e800c3",
+    "focused_test_sha256": "b09a84d81a7c75fd8af15b59a3e2d1fe859b99545e6aa98aed557f29875b3367",
+    "rollout_helper_sha256": "689edc2618612037b4232c2e40d91912029839357be4bfe26373b040775881d8",
+    "successful_stdout_receipt_sha256": "39949879EC83E9DA4FE9BB8CCA268587D11577F39849A6D7F2BA9CC422F05E7F"
+  },
+  "historical_attempts": {
+    "attempts": [1, 2, 3, 4, 5],
+    "attempt_5_request_cap": 8,
+    "statuses_rewritten": false,
+    "underlying_failure_cause": "unknown",
+    "test_profile_or_harness_difference_cause_established": false,
+    "attempt_5_specific_event_cause_recorded": false
+  }
+}
