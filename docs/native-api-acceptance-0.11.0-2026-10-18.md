@@ -37,15 +37,17 @@
   `prepare_agent_spawn_config` 两项均 `STATUS_STACK_OVERFLOW`，没有 release
   artifact。不能写 GREEN，也不能声称新 binary 已存在。
 - 旧 run `39134187187` 也失败于 none cold-resume
-  `STATUS_STACK_OVERFLOW`；失败记录不能被后续文本覆盖。第四次 build 为
+  `STATUS_STACK_OVERFLOW`；失败记录不能被后续文本覆盖。第四次 run 为
   run `39138841194`，head
   `45a3bd343c4bf4fc99115e7d68ee74d685429c01`，ref
   `fix/native-deepseek-bounded-retries`：native API 8 项全部跑完，7 项
   passed、1 项 failed；唯一失败是 none cold-resume fixture 使用非法原生
   `task_name`（`non-reasoning-worker`），large-stack 修正已解决先前栈问题，
-  后续修正改为 `non_reasoning_worker`。该 run 在当前 checkpoint 仍处于
-  cache-save 步骤，没有 release artifact binary，第五次 build 尚未 dispatch，
-  不能写 GREEN。
+  后续修正改为 `non_reasoning_worker`。该 run 已 completed FAILURE、cache
+  SUCCESS，没有 release artifact binary。第五次、也是唯一新 corrective
+  dispatch 为 run `39140584735`，head
+  `51381b729d383beab91e778a6639f907e2f9ba7b`，branch
+  `fix/native-deepseek-bounded-retries`，当前 `in_progress`，不能写 GREEN。
 
 ## 原目标八组
 
@@ -112,6 +114,7 @@ hidden launcher 与 lease 行为有既有历史证据；0.11 的 generic API 目
 candidate。0.11 尚未正式安装，MCP 侧栏尚无 human 确认，MiMo 实际 API 尚无
 已配置凭据。Rust run `39136590575` 已 completed FAILURE（cache SUCCESS，
 无 release artifact），不能写 GREEN；旧失败 `39134187187` 不能改写成成功；
-第四次 run `39138841194` 的 8 项 API 结果为 7 通过、1 个 fixture 命名失败；
-该 run 当前仍在 cache-save，第五次 build 未 dispatch，不能提前写 GREEN。本文不包含内部 token、
+第四次 run `39138841194` 已 completed FAILURE/cache SUCCESS，8 项 API 结果为
+7 通过、1 个 fixture 命名失败；第五次 run `39140584735`（head `51381b7`）
+当前 in_progress，不能提前写 GREEN。本文不包含内部 token、
 local gateway URL、temporary journal 路径、完整 journal 或任何密钥。

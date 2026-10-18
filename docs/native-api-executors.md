@@ -295,15 +295,18 @@ SUCCESS: eight native API tests were running, two lightweight tests passed,
 and both the none cold-resume and `prepare_agent_spawn_config` tests hit
 `STATUS_STACK_OVERFLOW`; no release artifact was produced. It is not GREEN.
 The fourth run `39138841194` at head
-`45a3bd343c4bf4fc99115e7d68ee74d685429c01` completed the native API suite:
-all eight tests ran, seven passed, and the only failure was the none
-cold-resume fixture using an invalid native `task_name`
+`45a3bd343c4bf4fc99115e7d68ee74d685429c01` completed as a FAILURE with cache
+SUCCESS: all eight native API tests ran, seven passed, and the only failure was
+the none cold-resume fixture using an invalid native `task_name`
 (`non-reasoning-worker`). The large-stack change resolved the earlier stack
-problem; the separate correction uses `non_reasoning_worker`. At this
-checkpoint the run was still in its cache-save step, no release artifact
-binary had been produced, and a fifth build had not been dispatched. It is not
-claimed GREEN. This is build evidence, not a local installation, restart, or
-desktop API-role acceptance. No new runtime was installed in this worktree.
+problem; the separate correction uses `non_reasoning_worker`. No release
+artifact binary was produced. The fifth and only new corrective build is run
+`39140584735` at head
+`51381b729d383beab91e778a6639f907e2f9ba7b`, branch
+`fix/native-deepseek-bounded-retries`; at this checkpoint it was `in_progress`
+and is not claimed GREEN. This is build evidence, not a local installation,
+restart, or desktop API-role acceptance. No new runtime was installed in this
+worktree.
 
 The four same-source large-fixture tests now use a same-name `#[test]` wrapper
 and `async_impl` through the pinned
