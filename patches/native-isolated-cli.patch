@@ -1048,10 +1048,10 @@ index c9a1547..a602cdb 100644
  pub(crate) mod status;
 diff --git a/codex-rs/core/src/agent/native_deepseek.rs b/codex-rs/core/src/agent/native_deepseek.rs
 new file mode 100644
-index 0000000..2b86152
+index 0000000..f5036df
 --- /dev/null
 +++ b/codex-rs/core/src/agent/native_deepseek.rs
-@@ -0,0 +1,511 @@
+@@ -0,0 +1,512 @@
 +use crate::config::Config;
 +use crate::config::Constrained;
 +use codex_protocol::config_types::WebSearchMode;
@@ -1310,6 +1310,7 @@ index 0000000..2b86152
 +
 +#[cfg(test)]
 +mod tests {
++    use super::NATIVE_API_CATALOG_PREFIX;
 +    use super::apply_native_deepseek_child_config;
 +    use crate::config::Constrained;
 +    use crate::config::{Config, ConfigBuilder};
