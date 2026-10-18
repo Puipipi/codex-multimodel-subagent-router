@@ -342,7 +342,9 @@ proves the adapter paths with search off; it does not prove the root
 `cached`/`auto` web-search inheritance case. Keeping that tool out of every API
 child belongs to the runtime/provider boundary, not to this adapter smoke.
 
-New-role end-to-end acceptance must wait for a build of the current Rust patch,
-a full application restart, and a real desktop run. README/SKILL product
-guidance is integrated; this backend does not claim that UI or desktop
-acceptance is complete.
+The matching runtime build `39140584735` succeeded and was reused for the
+formal 0.11.1 installation (see [the 0.11.1 installation record](native-api-msix-path-fix-0.11.1-2026-10-19.md)).
+New API-role end-to-end acceptance still awaits a full application restart and
+a real desktop task. Paid tests remain paused under the user's Luna-only budget
+instruction; this backend does not claim that UI or desktop acceptance is
+complete.
