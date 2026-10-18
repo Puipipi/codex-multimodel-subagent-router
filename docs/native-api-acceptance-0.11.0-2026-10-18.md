@@ -23,8 +23,9 @@
 - 公开普通 Node Tests：run `39136777449`，head `895d05e`，
   Linux `route` 与 Windows `windows-helper` 均成功；
   [run](https://github.com/Puipipi/sol-luna-deepseek-router/actions/runs/39136777449)。
-- 后续 stack-test 集成在 `0a04684` 本地通过 40 个 Node 入口；这不自动构成
-  新的公开 CI 证据。0.11 尚未正式安装。
+- stack-test 集成 `0a04684` 已包含在 `895d05e`，上述公开 CI 覆盖该代码；
+  本文新增验收记录仅运行 `docs.test`，不将文档新增等同桌面验收。
+  0.11 尚未正式安装。
 - Rust 构建 run `39136590575`，head `1155c51`，ref
   `fix/native-deepseek-bounded-retries`：wire 与旧 native DS 测试已通过，
   但 native API profile tests 再次失败。随后处于“Save Cargo dependencies
@@ -66,7 +67,7 @@
 | 唯一 skill/plugin、稳定 registry/目录、公开发布 | 部分 | metadata、marketplace、single-skill docs、public Node run | root 合一发布，确认 registry 不出现两个 enabled skills |
 | 升级可 adopt managed 旧 journal；先完成 DS workers 再 owned stop 旧 gateway | 待真实 0.11 验收 | installer journals/rollback docs；当前未执行真实升级 | 按 root 顺序：停止 DS worker→owned stop→adopt/new install |
 | 保留 6ec 与新 journal 的回滚路径 | 待真实 0.11 验收 | 0.10.5 install/runtime records、installer rollback tests | 安装前保留旧 runtime/journal，验证可回滚 |
-| 设置保存一次完整重启：save_profile + CAS | Node/模拟已验证；真实桌面待验收 | router settings save_profile/CAS tests、API guide | 在真实侧栏保存新 role 后只做一次完整重启 |
+| 设置保存一次完整重启：save_profile + CAS | Node/模拟已验证；真实桌面待验收 | router settings save_profile/CAS tests、API guide | 通过同一设置 service 预存 save_profile+CAS 并 Apply，随后统一完整重启；再由 human 验证侧栏 |
 
 ## 真实 API role 的待验收项
 
