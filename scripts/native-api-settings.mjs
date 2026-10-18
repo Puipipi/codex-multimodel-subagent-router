@@ -8,7 +8,7 @@ import { withFileLock, writeJsonAtomic } from "./plugin-state.mjs";
 const PROFILE_ID = /^[a-f0-9]{24}$/;
 const REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
 const DEEPSEEK_ACCOUNT_EFFORTS = new Set(["none", "low", "high", "max"]);
-const DEEPSEEK_WIRE_MODEL = "deepseek-flash";
+const DEEPSEEK_WIRE_MODELS = new Set(["deepseek-flash", "deepseek-v4-pro"]);
 const PROFILE_FIELDS = new Set(["profileId", "protocol", "baseUrl", "model", "reasoning", "credential", "label", "aliases", "contextWindow"]);
 const ROOT_FIELDS = new Set(["schemaVersion", "mode", "fixedExecutor", "schedule", "profiles"]);
 const SELECTORS = new Set(["luna", "deepseek"]);
@@ -81,7 +81,7 @@ function validateCredential(credential, baseUrl, protocol) {
 }
 
 export function isOfficialDeepSeekProfile(profile) {
-  if (!profile || typeof profile.baseUrl !== "string" || profile.model !== DEEPSEEK_WIRE_MODEL) return false;
+  if (!profile || typeof profile.baseUrl !== "string" || !DEEPSEEK_WIRE_MODELS.has(profile.model)) return false;
   try {
     return new URL(profile.baseUrl).origin === "https://api.deepseek.com";
   } catch {

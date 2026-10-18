@@ -211,6 +211,57 @@ preserves a valid `max`, and passes `none` through without inventing an
 historical DeepSeek gateway effort folding is a separate path and is not reused
 for generic roles.
 
+The profile's `reasoning.parameter` selects how an adapter expresses effort;
+it is not a promise about whether a provider thinks. `parameter: "none"` sends
+no reasoning field at all and leaves the provider default in effect. In
+particular, official MiMo Chat defaults to thinking enabled, so a
+`parameter: "none"` profile can still return `reasoning_content`. Turning
+DeepSeek thinking off is the separate combination of
+`parameter: "reasoning_effort"` (or `"reasoning"`) with `effort: "none"`.
+
+The current official DeepSeek wire models (`deepseek-flash`,
+`deepseek-v4-pro`) and the verified MiMo Chat models (`mimo-v2.5`,
+`mimo-v2.5-pro`) return `reasoning_content` next to assistant content or tool
+calls. The
+[MiMo reasoning_content guide](https://platform.xiaomimimo.com/docs/en-US/usage-guide/passing-back-reasoning_content)
+and [Chat compatibility page](https://platform.xiaomimimo.com/docs/api/chat/openai-api)
+document the pass-back rule. While a request carries tools, the Chat adapter maps
+every previously adapter-produced `reasoning_content` back onto the matching
+assistant message, including assistant turns without tool calls. The
+provenance marker lives in the Responses reasoning item id
+(`rs_deepseek_...` / `rs_mimo_...`), so unrelated reasoning items or summaries
+are never translated into vendor reasoning. The marker is stored in the Codex
+rollout; a resumed process replays it. Opaque encrypted reasoning fails
+explicitly, and unknown Chat vendors receive no guessed `reasoning_content`
+field. Profile configuration is not limited to these known models; only the
+documented models receive the vendor replay. Other or newer model names are
+left to their declared vendor behavior; the adapter does not guess.
+
+MiMo also offers a
+[Responses endpoint](https://mimo.mi.com/docs/en-US/api/chat/responses).
+Prefer it when available; the Chat path
+above remains a supported adapter path and its documented pass-back
+requirement is covered by the loopback smoke.
+
+For a profile identified as the official DeepSeek Responses endpoint
+(`https://api.deepseek.com`, model `deepseek-flash` or `deepseek-v4-pro`), the
+gateway applies a narrow compatibility normalization before forwarding. It
+keeps the exact model
+and the documented `none/low/high/max` efforts, maps a requested `xhigh` to
+`high`, and removes Codex-only or unsupported transport fields:
+`store: false`, `include: ["reasoning.encrypted_content"]`, `client_metadata`,
+`prompt_cache_key`, empty `metadata`, null `service_tier` / `stream_options` /
+`access_programs`, and `reasoning.summary`. It fails closed when a
+non-default value would lose real state or would include encrypted history:
+`store: true`, non-empty `metadata`, `previous_response_id`, `conversation`,
+`background: true`, non-null `service_tier`, non-empty `stream_options`,
+non-empty `access_programs`, unsupported `include` entries, or any non-empty
+`encrypted_content` in input. The official compatibility table currently says
+unsupported parameters are silently ignored; the adapter still removes them so
+the forwarded shape is the documented one. Unknown Responses vendors remain
+unchanged. End-to-end use of a real DeepSeek credential still waits for the
+matching runtime and a formal installation run.
+
 These are documented wire rules. They do not prove that a real generic API
 role, account credential, gateway, and model endpoint have completed
 end-to-end acceptance.
@@ -246,10 +297,21 @@ opt-in:
 node tests/native-api-cli-smoke.mjs --binary <codex.exe> --sha256 <64-hex>
 ```
 
-It uses temporary loopback servers, a fail-closed HTTP proxy, and
-`windowsHide: true`. It makes no real provider request and does not install or
-activate anything. The hosted workflow's opt-in step fails rather than silently
-skipping when enabled without both values.
+The binary and its SHA-256 are both required, and a mismatch fails before any
+server or CLI starts. The default `all` scenarios cover an official DeepSeek
+Chat tool round with `reasoning_content` replay, an official MiMo Chat
+`parameter: "none"` round that still returns reasoning plus a cold resumed
+process, and an official DeepSeek Responses round whose mock rejects
+`store`/`include`/`metadata` and validates the normalized shape. It uses
+temporary loopback servers, a fail-closed HTTP proxy, and `windowsHide: true`.
+It makes no real provider request, reads no real credential, and does not
+install, activate, or start a Task. The hosted workflow's opt-in step fails
+rather than silently skipping when enabled without both values.
+
+The smoke's private `CODEX_HOME` sets `web_search = "disabled"`. It therefore
+proves the adapter paths with search off; it does not prove the root
+`cached`/`auto` web-search inheritance case. Keeping that tool out of a Chat
+child belongs to the runtime/provider fix, not to this adapter smoke.
 
 New-role end-to-end acceptance must wait for a build of the current Rust patch,
 a full application restart, and a real desktop run. README/SKILL product

@@ -6,9 +6,11 @@ import {
   NativeApiProtocolError,
   chatCompletionToResponse,
   chatSseToResponses,
+  normalizeOfficialDeepSeekResponsesRequest,
   responseErrorEvent,
   responsesRequestToChat,
 } from "./native-api-protocol.mjs";
+import { isOfficialDeepSeekProfile } from "./native-api-settings.mjs";
 
 const HOP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -178,8 +180,12 @@ export function createNativeApiGateway({
 
       let outgoing;
       let toolMap = new Map();
-      if (profile.protocol === "responses") outgoing = raw;
-      else {
+      if (profile.protocol === "responses") {
+        const normalized = isOfficialDeepSeekProfile(profile)
+          ? normalizeOfficialDeepSeekResponsesRequest(body, profile)
+          : body;
+        outgoing = Buffer.from(JSON.stringify(normalized));
+      } else {
         const converted = responsesRequestToChat(body, profile);
         outgoing = Buffer.from(JSON.stringify(converted.body));
         toolMap = converted.toolMap;
@@ -231,7 +237,7 @@ export function createNativeApiGateway({
         let completion;
         try { completion = await upstream.json(); }
         catch { throw new NativeApiProtocolError("Chat upstream returned invalid JSON.", { status: 502, code: "invalid_upstream_response" }); }
-        const response = chatCompletionToResponse(completion, { requestId: completion.id, model: profile.model, toolMap });
+        const response = chatCompletionToResponse(completion, { requestId: completion.id, model: profile.model, profile, toolMap });
         const payload = Buffer.from(`${JSON.stringify(response)}\n`);
         res.writeHead(200, { "content-type": "application/json; charset=utf-8", "content-length": payload.length });
         res.end(payload);
@@ -242,7 +248,7 @@ export function createNativeApiGateway({
       streamStarted = true;
       const requestId = `api_${Date.now().toString(36)}`;
       try {
-        for await (const event of chatSseToResponses(upstream.body, { requestId, model: profile.model, toolMap })) {
+        for await (const event of chatSseToResponses(upstream.body, { requestId, model: profile.model, profile, toolMap })) {
           if (timedOut) {
             const timeoutEvent = responseErrorEvent({ requestId, model: profile.model, message: "Upstream request timed out.", code: "timeout" });
             if (!res.destroyed) res.write(sse(timeoutEvent));

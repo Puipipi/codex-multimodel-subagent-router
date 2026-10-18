@@ -180,24 +180,73 @@ function mapReasoning(body, profile, chat) {
   else invalid(`Unknown reasoning parameter mapping: ${config.parameter}.`);
 }
 
-function mapHistory(input, messages, toolMap) {
+const MIMO_CHAT_MODELS = new Set([
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+]);
+
+function officialChatVendor(profile) {
+  if (!profile || profile.protocol !== "chat_completions") return null;
+  if (isOfficialDeepSeekProfile(profile)) return "deepseek";
+  if (typeof profile.baseUrl !== "string" || !MIMO_CHAT_MODELS.has(profile.model)) return null;
+  try {
+    return new URL(profile.baseUrl).origin === "https://api.xiaomimimo.com" ? "mimo" : null;
+  } catch {
+    return null;
+  }
+}
+
+function reasoningText(item) {
+  return Array.isArray(item.content)
+    ? item.content.filter((part) => part?.type === "reasoning_text" && typeof part.text === "string").map((part) => part.text).join("")
+    : "";
+}
+
+function vendorReasoningId(vendor, idFactory) {
+  return idFactory(`rs_${vendor}`);
+}
+
+function isVendorReasoningItem(item, vendor) {
+  return typeof item?.id === "string" && item.id.startsWith(`rs_${vendor}_`);
+}
+
+function mapHistory(input, messages, toolMap, { profile = null, hasTools = false } = {}) {
   if (typeof input === "string") {
     messages.push({ role: "user", content: input });
     return;
   }
   if (!Array.isArray(input)) invalid("input must be a string or an array.");
+  const vendor = officialChatVendor(profile);
+  const replayVendorReasoning = Boolean(vendor && hasTools);
+  let pendingReasoning = "";
+  const takeReasoning = () => {
+    const value = pendingReasoning;
+    pendingReasoning = "";
+    return value;
+  };
   const pendingCalls = [];
   const callsById = new Map();
   const flush = () => {
     if (!pendingCalls.length) return;
-    messages.push({ role: "assistant", content: null, tool_calls: pendingCalls.splice(0) });
+    messages.push({
+      role: "assistant",
+      content: null,
+      ...(replayVendorReasoning && pendingReasoning ? { reasoning_content: takeReasoning() } : {}),
+      tool_calls: pendingCalls.splice(0),
+    });
   };
   for (const item of input) {
     if (!item || typeof item !== "object") invalid("Each input item must be an object.");
     if (item.type === "message") {
       flush();
       if (!["system", "developer", "user", "assistant"].includes(item.role)) invalid(`Unsupported message role: ${item.role ?? "unknown"}.`, "unsupported_parameter");
-      messages.push({ role: item.role, content: toTextContent(item.content) });
+      const content = toTextContent(item.content);
+      if (item.role !== "assistant") pendingReasoning = "";
+      messages.push({
+        role: item.role,
+        content,
+        ...(item.role === "assistant" && replayVendorReasoning && pendingReasoning ? { reasoning_content: takeReasoning() } : {}),
+      });
       continue;
     }
     if (item.type === "function_call" || item.type === "custom_tool_call") {
@@ -226,9 +275,11 @@ function mapHistory(input, messages, toolMap) {
       if (typeof item.encrypted_content === "string" && item.encrypted_content.length) {
         invalid("Encrypted reasoning history cannot be replayed through a Chat Completions profile.", "unsupported_parameter");
       }
-      const text = Array.isArray(item.content)
-        ? item.content.filter((part) => part?.type === "reasoning_text" && typeof part.text === "string").map((part) => part.text).join("")
-        : "";
+      if (vendor) {
+        if (replayVendorReasoning && isVendorReasoningItem(item, vendor)) pendingReasoning += reasoningText(item);
+        continue;
+      }
+      const text = reasoningText(item);
       if (text) {
         flush();
         messages.push({ role: "assistant", content: text });
@@ -240,6 +291,7 @@ function mapHistory(input, messages, toolMap) {
         invalid("Encrypted agent messages cannot be replayed through a Chat Completions profile.", "unsupported_parameter");
       }
       flush();
+      pendingReasoning = "";
       const content = toTextContent(item.content);
       messages.push({ role: "user", content });
       continue;
@@ -263,8 +315,9 @@ export function responsesRequestToChat(body, profile) {
   // Codex client_metadata is local request context and is intentionally not forwarded to a provider.
   const toolMap = new Map();
   const messages = [];
+  const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
   if (body.instructions) messages.push({ role: "system", content: body.instructions });
-  mapHistory(body.input, messages, toolMap);
+  mapHistory(body.input, messages, toolMap, { profile, hasTools });
   const tools = registerDefinitions(body.tools, toolMap);
   const chat = { model: profile.model, messages, stream: body.stream === true };
   if (body.prompt_cache_key !== undefined) chat.prompt_cache_key = body.prompt_cache_key;
@@ -286,6 +339,92 @@ export function responsesRequestToChat(body, profile) {
   }
   mapReasoning(body, profile, chat);
   return { body: chat, toolMap };
+}
+
+const DEEPSEEK_RESPONSES_EFFORTS = new Set(["none", "low", "high", "max"]);
+const DEEPSEEK_RESPONSES_COMPAT_INCLUDES = new Set(["reasoning.encrypted_content"]);
+const DEEPSEEK_RESPONSES_UNSUPPORTED_STATE = ["truncation", "safety_identifier", "context_management", "prompt_cache_retention", "prompt"];
+
+export function normalizeOfficialDeepSeekResponsesRequest(body, profile) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) invalid("Request body must be an object.");
+  if (!profile || profile.protocol !== "responses" || !isOfficialDeepSeekProfile(profile)) {
+    invalid("An official DeepSeek Responses profile is required.");
+  }
+  if (body.model !== profile.model) invalid("Request model does not match the selected profile.", "model_mismatch");
+  const request = structuredClone(body);
+  if (request.store === true) invalid("DeepSeek Responses is stateless and does not support stored responses.", "unsupported_parameter");
+  delete request.store;
+  if (request.include !== undefined) {
+    if (!Array.isArray(request.include)) invalid("include must be an array.", "unsupported_parameter");
+    const unsupported = request.include.filter((value) => !DEEPSEEK_RESPONSES_COMPAT_INCLUDES.has(value));
+    if (unsupported.length) invalid(`DeepSeek Responses does not support include values: ${unsupported.join(", ")}.`, "unsupported_parameter");
+    delete request.include;
+  }
+  if (request.metadata !== undefined) {
+    if (request.metadata && (typeof request.metadata !== "object" || Array.isArray(request.metadata) || Object.keys(request.metadata).length)) {
+      invalid("DeepSeek Responses does not support non-empty metadata.", "unsupported_parameter");
+    }
+    delete request.metadata;
+  }
+  delete request.client_metadata;
+  for (const field of ["previous_response_id", "conversation"]) {
+    if (request[field] !== undefined && request[field] !== null) {
+      invalid(`DeepSeek Responses is stateless and does not support ${field}.`, "unsupported_parameter");
+    }
+    delete request[field];
+  }
+  if (request.background === true) invalid("DeepSeek Responses does not support background responses.", "unsupported_parameter");
+  delete request.background;
+  if (request.service_tier !== undefined && request.service_tier !== null) {
+    invalid("DeepSeek Responses does not support service_tier.", "unsupported_parameter");
+  }
+  delete request.service_tier;
+  if (request.stream_options !== undefined && request.stream_options !== null
+      && (typeof request.stream_options !== "object" || Array.isArray(request.stream_options) || Object.keys(request.stream_options).length)) {
+    invalid("DeepSeek Responses does not support stream_options.", "unsupported_parameter");
+  }
+  delete request.stream_options;
+  if (request.access_programs !== undefined && request.access_programs !== null) {
+    invalid("DeepSeek Responses does not support access_programs.", "unsupported_parameter");
+  }
+  delete request.access_programs;
+  delete request.prompt_cache_key;
+  delete request.use_responses_lite;
+  delete request.responses_lite;
+  for (const field of DEEPSEEK_RESPONSES_UNSUPPORTED_STATE) {
+    if (request[field] !== undefined && request[field] !== null) {
+      invalid(`DeepSeek Responses does not support ${field}.`, "unsupported_parameter");
+    }
+    delete request[field];
+  }
+  if (request.reasoning !== undefined && request.reasoning !== null) {
+    if (typeof request.reasoning !== "object" || Array.isArray(request.reasoning)) {
+      invalid("reasoning must be an object.", "unsupported_parameter");
+    }
+    for (const key of Object.keys(request.reasoning)) {
+      if (!["effort", "summary", "generate_summary", "context"].includes(key)) {
+        invalid(`DeepSeek Responses does not support reasoning.${key}.`, "unsupported_parameter");
+      }
+    }
+    const reasoning = {};
+    if (request.reasoning.effort !== undefined) {
+      const effort = request.reasoning.effort === "xhigh" ? "high" : request.reasoning.effort;
+      if (!DEEPSEEK_RESPONSES_EFFORTS.has(effort)) {
+        invalid(`Reasoning effort ${String(request.reasoning.effort)} is not supported by the official DeepSeek Responses API.`, "unsupported_parameter");
+      }
+      reasoning.effort = effort;
+    }
+    if (Object.keys(reasoning).length) request.reasoning = reasoning;
+    else delete request.reasoning;
+  }
+  if (Array.isArray(request.input)) {
+    for (const item of request.input) {
+      if (item && typeof item === "object" && typeof item.encrypted_content === "string" && item.encrypted_content.length) {
+        invalid("Encrypted history cannot be replayed through the official DeepSeek Responses API.", "unsupported_parameter");
+      }
+    }
+  }
+  return request;
 }
 
 function usageFromChat(usage) {
@@ -325,8 +464,17 @@ function finishReason(finish) {
   return { status: "completed", incomplete_details: null, type: "response.completed" };
 }
 
-function responseItemsFromMessage(message, toolMap, { idFactory = newId } = {}) {
+function responseItemsFromMessage(message, toolMap, { idFactory = newId, profile = null } = {}) {
   const output = [];
+  const vendor = officialChatVendor(profile);
+  if (vendor && typeof message?.reasoning_content === "string" && message.reasoning_content) {
+    output.push({
+      id: vendorReasoningId(vendor, idFactory),
+      type: "reasoning",
+      summary: [],
+      content: [{ type: "reasoning_text", text: message.reasoning_content }],
+    });
+  }
   if (typeof message?.content === "string" && message.content.length) output.push(textResponseItem(message.content, idFactory("msg")));
   else if (Array.isArray(message?.content)) {
     const text = message.content.map((part) => typeof part === "string" ? part : part?.text || "").join("");
@@ -357,10 +505,10 @@ function responseItemsFromMessage(message, toolMap, { idFactory = newId } = {}) 
   return output;
 }
 
-export function chatCompletionToResponse(chat, { requestId = null, model, toolMap = new Map(), idFactory = newId, createdAt } = {}) {
+export function chatCompletionToResponse(chat, { requestId = null, model, profile = null, toolMap = new Map(), idFactory = newId, createdAt } = {}) {
   const choice = chat?.choices?.[0];
   if (!choice) invalid("Chat completion did not contain a choice.", "invalid_upstream_response");
-  const output = responseItemsFromMessage(choice.message, toolMap, { idFactory });
+  const output = responseItemsFromMessage(choice.message, toolMap, { idFactory, profile });
   const terminal = finishReason(choice.finish_reason);
   return responseBase({
     id: `resp_${requestId || chat.id || randomUUID().replaceAll("-", "")}`,
@@ -408,15 +556,18 @@ async function* sseRecords(chunks) {
   }
 }
 
-export async function* chatSseToResponses(chunks, { requestId = null, model, toolMap = new Map(), idFactory = newId, createdAt = Math.floor(Date.now() / 1000) } = {}) {
+export async function* chatSseToResponses(chunks, { requestId = null, model, profile = null, toolMap = new Map(), idFactory = newId, createdAt = Math.floor(Date.now() / 1000) } = {}) {
   const responseId = `resp_${requestId || randomUUID().replaceAll("-", "")}`;
   const response = responseBase({ id: responseId, model, createdAt, status: "in_progress", output: [], usage: null });
+  const vendor = officialChatVendor(profile);
   let sequence = 0;
   const emit = (type, fields = {}) => ({ type, sequence_number: sequence++, ...fields });
   yield emit("response.created", { response: structuredClone(response) });
   yield emit("response.in_progress", { response: structuredClone(response) });
   let outputIndex = 0;
   let message = null;
+  let reasoningItem = null;
+  let reasoningTextValue = "";
   const tools = new Map();
   let finish = null;
   let doneSent = false;
@@ -432,6 +583,39 @@ export async function* chatSseToResponses(chunks, { requestId = null, model, too
     const part = { type: "output_text", text: "", annotations: [] };
     message.content.push(part);
     yield emit("response.content_part.added", { item_id: message.id, output_index: message.output_index, content_index: 0, part: structuredClone(part) });
+  };
+
+  const startReasoning = function* () {
+    if (reasoningItem) return;
+    reasoningItem = {
+      id: vendorReasoningId(vendor, idFactory),
+      type: "reasoning",
+      status: "in_progress",
+      summary: [],
+      content: [],
+      output_index: outputIndex++,
+    };
+    response.output.push(reasoningItem);
+    yield emit("response.output_item.added", {
+      output_index: reasoningItem.output_index,
+      item: { id: reasoningItem.id, type: "reasoning", summary: [], content: [] },
+    });
+  };
+
+  const finishReasoning = function* () {
+    if (!reasoningItem) return;
+    const item = reasoningItem;
+    reasoningItem = null;
+    item.status = "completed";
+    item.content = [{ type: "reasoning_text", text: reasoningTextValue }];
+    yield emit("response.reasoning_text.done", {
+      item_id: item.id,
+      output_index: item.output_index,
+      content_index: 0,
+      text: reasoningTextValue,
+    });
+    const { output_index: outputIndexValue, ...doneItem } = item;
+    yield emit("response.output_item.done", { output_index: outputIndexValue, item: doneItem });
   };
 
   const startTool = async function* (state) {
@@ -502,13 +686,25 @@ export async function* chatSseToResponses(chunks, { requestId = null, model, too
       const choice = chunk.choices?.[0];
       if (!choice) continue;
       const delta = choice.delta || {};
+      if (vendor && typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+        yield* startReasoning();
+        reasoningTextValue += delta.reasoning_content;
+        yield emit("response.reasoning_text.delta", {
+          item_id: reasoningItem.id,
+          output_index: reasoningItem.output_index,
+          content_index: 0,
+          delta: delta.reasoning_content,
+        });
+      }
       if (typeof delta.content === "string" && delta.content) {
+        yield* finishReasoning();
         yield* ensureMessage();
         const part = message.content[0];
         part.text += delta.content;
         yield emit("response.output_text.delta", { item_id: message.id, output_index: message.output_index, content_index: 0, delta: delta.content });
       }
       for (const call of delta.tool_calls || []) {
+        yield* finishReasoning();
         if (!Number.isInteger(call.index) || call.index < 0) invalid("Chat tool call delta is missing a valid index.", "invalid_tool_call");
         const state = tools.get(call.index) || { callId: null, name: "", arguments: "", emittedArguments: 0, started: false };
         tools.set(call.index, state);
@@ -529,6 +725,7 @@ export async function* chatSseToResponses(chunks, { requestId = null, model, too
       }
       if (choice.finish_reason) {
         finish = choice.finish_reason;
+        yield* finishReasoning();
         if (message) {
           const part = message.content[0];
           yield emit("response.output_text.done", { item_id: message.id, output_index: message.output_index, content_index: 0, text: part.text });

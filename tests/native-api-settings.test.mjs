@@ -128,6 +128,38 @@ throws(() => createApiProfile({
 }), /xhigh is normalized to high/, "manual DeepSeek profiles do not advertise xhigh");
 throws(() => createApiProfile({ ...apiDefinition, credential: { type: "dsh_account" } }), /official DeepSeek origin/, "DSH account grants cannot be sent to third-party providers");
 
+const proEnv = createApiProfile({
+  ...manualDeepSeek,
+  model: "deepseek-v4-pro",
+});
+ok(proEnv.profileId, "manual official DeepSeek v4-pro env profiles use the known effort levels");
+const proFile = createApiProfile({
+  ...proEnv,
+  credential: { type: "file", path: path.join(os.tmpdir(), "deepseek-pro-key") },
+});
+ok(proFile.profileId, "manual official DeepSeek v4-pro file profiles use the known effort levels");
+const proAccount = createApiProfile({
+  ...proEnv,
+  credential: { type: "dsh_account" },
+});
+ok(proAccount.profileId, "official DeepSeek v4-pro account-backed Responses profiles remain allowed");
+throws(() => createApiProfile({
+  ...proEnv,
+  reasoning: { supported: ["high", "xhigh"], default: "high", parameter: "reasoning_effort" },
+}), /xhigh is normalized to high/, "v4-pro profiles do not advertise xhigh");
+const proElsewhere = createApiProfile({
+  ...proEnv,
+  baseUrl: "https://api.example.com/v1",
+  reasoning: { supported: ["high", "xhigh"], default: "high", parameter: "reasoning_effort" },
+});
+ok(proElsewhere.profileId, "a non-official origin keeps declared efforts for a pro-named model");
+const unrecognizedDeepSeekName = createApiProfile({
+  ...proEnv,
+  model: "deepseek-chat",
+  reasoning: { supported: ["high", "xhigh"], default: "high", parameter: "reasoning_effort" },
+});
+ok(unrecognizedDeepSeekName.profileId, "an unknown DeepSeek model name is not guessed as official");
+
 const root = await mkdtemp(path.join(os.tmpdir(), "native-api-settings-"));
 try {
   const settingsFile = path.join(root, "native-api", "router.json");
