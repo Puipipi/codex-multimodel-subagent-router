@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 const OWNERSHIP_PREFIX = "sol-luna-native-gateway-task:v1:";
 const TASK_NAME_PREFIX = "SolLunaNativeGateway-";
 const POWERSHELL_TIMEOUT_MS = 10_000;
+const RESTART_COUNT = 3;
+const RESTART_INTERVAL_MINUTES = 1;
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 
 function taskError(message, code) {
@@ -23,7 +25,7 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
 
 function Get-TaskRecord($request) {
   $task = Get-ScheduledTask -TaskName $request.name -ErrorAction SilentlyContinue
-  if (-not $task) { return @{ exists = $false; owned = $false; state = 'Missing'; enabled = $false; lastTaskResult = $null } }
+  if (-not $task) { return @{ exists = $false; owned = $false; state = 'Missing'; enabled = $false; restartCount = $null; restartIntervalSeconds = $null; lastTaskResult = $null } }
   $actionMatches = $task.Actions.Count -eq 1 -and
     $task.Actions[0].Execute -ceq $request.execute -and
     $task.Actions[0].Arguments -ceq $request.arguments -and
@@ -38,14 +40,20 @@ function Get-TaskRecord($request) {
     [string]$task.Principal.RunLevel -eq 'Limited'
   $executionLimit = [TimeSpan]::MaxValue
   try { $executionLimit = [System.Xml.XmlConvert]::ToTimeSpan([string]$task.Settings.ExecutionTimeLimit) } catch { }
+  $restartCount = -1
+  try { $restartCount = [int]$task.Settings.RestartCount } catch { }
+  $restartIntervalSeconds = -1
+  try { $restartIntervalSeconds = [int][System.Xml.XmlConvert]::ToTimeSpan([string]$task.Settings.RestartInterval).TotalSeconds } catch { }
   $settingsMatches = [string]$task.Settings.MultipleInstances -eq 'IgnoreNew' -and
     $executionLimit -eq [TimeSpan]::Zero -and
+    $restartCount -eq ${RESTART_COUNT} -and $restartIntervalSeconds -eq ${RESTART_INTERVAL_MINUTES * 60} -and
     [bool]$task.Settings.AllowDemandStart -and [bool]$task.Settings.Hidden
   $owned = $task.Description -ceq $request.marker -and $actionMatches
   $info = Get-ScheduledTaskInfo -InputObject $task
   return @{
     exists = $true; owned = $owned; state = [string]$task.State
     specMatches = ($owned -and $principalMatches -and $settingsMatches)
+    restartCount = $restartCount; restartIntervalSeconds = $restartIntervalSeconds
     enabled = [bool]$task.Settings.Enabled; lastTaskResult = [long]$info.LastTaskResult
   }
 }
@@ -59,7 +67,7 @@ switch ($request.operation) {
     $action = New-ScheduledTaskAction -Execute $request.execute -Argument $request.arguments -WorkingDirectory $request.workingDirectory
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
     $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount ${RESTART_COUNT} -RestartInterval (New-TimeSpan -Minutes ${RESTART_INTERVAL_MINUTES}) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     $settings.AllowDemandStart = $true
     $settings.Hidden = $true
     Register-ScheduledTask -TaskName $request.name -Description $request.marker -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
@@ -136,6 +144,7 @@ export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPat
     name,
     marker,
     directory: dir,
+    restartPolicy: Object.freeze({ count: RESTART_COUNT, intervalSeconds: RESTART_INTERVAL_MINUTES * 60 }),
     launcher: Object.freeze({ path: launcherPath, content: launcherContent }),
     action: Object.freeze({ execute: wscript, arguments: arguments_, workingDirectory: dir }),
   });
@@ -207,14 +216,16 @@ export async function statusOwnedGatewayTask(plan, adapter) {
 }
 
 function taskPlanFingerprint(plan) {
-  return createHash("sha256").update(JSON.stringify({
+  const fingerprint = {
     name: plan.name,
     marker: plan.marker,
     directory: plan.directory,
     action: plan.action,
     launcherPath: plan.launcher?.path,
     launcherContent: plan.launcher?.content,
-  })).digest("hex");
+  };
+  if (plan.restartPolicy) fingerprint.restartPolicy = plan.restartPolicy;
+  return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
 }
 
 export async function snapshotGatewayTask(plan, adapter) {

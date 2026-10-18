@@ -28,7 +28,9 @@ const plan = gatewayTaskPlan({
 ok(plan.name.startsWith("SolLunaNativeGateway-"), "task name is namespaced");
 equal(plan.name, gatewayTaskPlan({ paths: { ...paths } }).name, "task name is stable for the gateway directory");
 ok(plan.marker.includes(plan.name.slice("SolLunaNativeGateway-".length)), "ownership marker is bound to the directory hash");
+equal(JSON.stringify(plan.restartPolicy), JSON.stringify({ count: 3, intervalSeconds: 60 }), "task plan pins a bounded three-restart policy at one-minute intervals");
 ok(plan.launcher.content.includes(", 0, True)"), "launcher hides Node and synchronously waits for its full lifetime");
+ok(plan.launcher.content.includes("exitCode = shell.Run(command, 0, True)") && plan.launcher.content.includes("WScript.Quit exitCode"), "launcher propagates the gateway child exit code to Task Scheduler");
 ok(plan.launcher.content.includes("native-gateway.mjs") && plan.launcher.content.includes("--serve") && plan.launcher.content.includes("--deepseek-only"), "launcher runs the formal DeepSeek-only gateway server entry point");
 ok(plan.launcher.content.includes("gateway.json") && plan.launcher.content.includes("identity.json") && plan.launcher.content.includes("gateway.log"), "launcher passes only gateway paths to the server");
 ok(plan.launcher.content.includes('""C:\\Program Files\\nodejs\\node.exe""'), "launcher escapes Windows paths with spaces and quotes");
@@ -37,6 +39,9 @@ ok(windowsTaskSchedulerScript.includes("[Console]::InputEncoding") && windowsTas
 ok(windowsTaskSchedulerScript.includes("IgnoreNew") && windowsTaskSchedulerScript.includes("TimeSpan]::Zero") && windowsTaskSchedulerScript.includes("Interactive"), "task definition is single-instance, interactive, and has no execution limit");
 ok(windowsTaskSchedulerScript.includes("AllowDemandStart") && windowsTaskSchedulerScript.includes("Hidden"), "task allows on-demand startup and hides task UI entry");
 ok(windowsTaskSchedulerScript.includes("$task.Settings.MultipleInstances") && windowsTaskSchedulerScript.includes("XmlConvert]::ToTimeSpan"), "ownership status validates concurrency policy and the no-limit duration");
+ok(windowsTaskSchedulerScript.includes("-RestartCount 3") && windowsTaskSchedulerScript.includes("-RestartInterval (New-TimeSpan -Minutes 1)"), "registered gateway task uses three restarts at one-minute intervals");
+ok(windowsTaskSchedulerScript.includes("$restartCount -eq 3 -and $restartIntervalSeconds -eq 60"), "ownership status validates the bounded restart count and interval");
+ok(windowsTaskSchedulerScript.includes("restartCount = $restartCount; restartIntervalSeconds = $restartIntervalSeconds"), "task query returns the observed restart policy");
 ok(windowsTaskSchedulerScript.includes("$taskPrincipalSid -ceq $expectedSid") && windowsTaskSchedulerScript.includes("Principal.LogonType") && windowsTaskSchedulerScript.includes("Principal.RunLevel"), "ownership status validates current-user interactive limited principal");
 ok(windowsTaskSchedulerScript.includes("lastTaskResult = [long]$info.LastTaskResult"), "status preserves unsigned scheduler result codes without Int32 overflow");
 ok(windowsTaskSchedulerScript.includes("TASK_SCHEDULER_ACCESS_DENIED") && windowsTaskSchedulerScript.includes("TASK_SCHEDULER_OPERATION_FAILED"), "PowerShell failures produce minimal structured error codes");
@@ -75,6 +80,7 @@ await rejects(() => restoreGatewayTask(ownedSnapshot, plan, adapter), /specifica
 scheduler.specMatches = true;
 const changedPlan = gatewayTaskPlan({ ...{ paths }, nodePath: "C:\\Other\\node.exe", wscriptPath: "C:\\Windows\\System32\\wscript.exe", gatewayScriptPath: "C:\\Plugin\\scripts\\native-gateway.mjs" });
 await rejects(() => restoreGatewayTask(ownedSnapshot, changedPlan, adapter), /snapshot does not match/i, "restore rejects snapshots from a different executable plan");
+await rejects(() => restoreGatewayTask(ownedSnapshot, { ...plan, restartPolicy: { count: 2, intervalSeconds: 60 } }, adapter), /snapshot does not match/i, "restore rejects snapshots with a different restart policy");
 await unregisterOwnedGatewayTask(plan, adapter);
 
 scheduler = { exists: true, owned: false, enabled: true, state: "Ready", lastTaskResult: 0 };
@@ -89,13 +95,30 @@ await rejects(() => startOwnedGatewayTask(plan, adapter), /specification changed
 await rejects(() => unregisterOwnedGatewayTask(plan, adapter), /specification changed/i, "unregister refuses an owned task with changed scheduler settings");
 scheduler = { exists: false, owned: false, state: "missing", lastTaskResult: null };
 
+for (const [label, restartPolicy] of [
+  ["missing restart policy", { restartCount: null, restartIntervalSeconds: null }],
+  ["different restart count", { restartCount: 2, restartIntervalSeconds: 60 }],
+  ["different restart interval", { restartCount: 3, restartIntervalSeconds: 30 }],
+]) {
+  const rejectedStarts = [];
+  const changedRestartAdapter = {
+    async status() { return { exists: true, owned: true, enabled: true, state: "Ready", specMatches: false, ...restartPolicy }; },
+    async start() { rejectedStarts.push(true); return { started: true }; },
+  };
+  await rejects(() => startOwnedGatewayTask(plan, changedRestartAdapter), /specification changed/i, `start refuses ${label}`);
+  equal(rejectedStarts.length, 0, `start never dispatches a task with ${label}`);
+}
+
 let invocation;
 const fakeRunner = (exe, args, options) => {
   invocation = { exe, args, options };
-  return { status: 0, stdout: JSON.stringify({ exists: true, owned: true, specMatches: true, state: "Ready", lastTaskResult: 0 }), stderr: "" };
+  return { status: 0, stdout: JSON.stringify({ exists: true, owned: true, specMatches: true, restartCount: 3, restartIntervalSeconds: 60, state: "Ready", lastTaskResult: 0 }), stderr: "" };
 };
 const windowsAdapter = createWindowsTaskSchedulerAdapter({ runner: fakeRunner, powershellPath: "powershell.exe" });
-equal((await windowsAdapter.status(plan)).owned, true, "Windows adapter parses only the minimal task status");
+const observedTask = await windowsAdapter.status(plan);
+equal(observedTask.owned, true, "Windows adapter parses only the minimal task status");
+equal(observedTask.restartCount, 3, "Windows task query exposes the observed restart count");
+equal(observedTask.restartIntervalSeconds, 60, "Windows task query exposes the observed restart interval");
 equal(invocation.exe, "powershell.exe", "adapter uses the injected PowerShell executable");
 ok(invocation.args.includes("-EncodedCommand"), "PowerShell receives the static script as UTF-16LE encoded command");
 const encodedScript = invocation.args[invocation.args.indexOf("-EncodedCommand") + 1];

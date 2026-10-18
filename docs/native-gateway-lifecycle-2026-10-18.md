@@ -11,3 +11,7 @@
 同日另一个私有 mock 生命周期 probe 以 exit 0 通过，覆盖 gateway 崩溃后的 Task Scheduler 恢复，以及端口冲突下的有界启动超时和释放端口后的显式恢复。超时返回 `NATIVE_GATEWAY_START_TIMEOUT` / `operation_timeout`；manager 的 900ms deadline 仅约束健康等待，不是整个 Task Scheduler 操作时限；整段操作实测 4206ms，包含 Scheduler 开销。没有 direct-spawn fallback 或自动重试。清理断言通过，临时任务和进程已清理。脱敏字段已合并进 [本回执 JSON](native-gateway-lifecycle-2026-10-18.json)，不含进程 ID、端口、用户路径或随机运行标识。详细原始脱敏报告保存在私有 work tree 的 `port-conflict-full-pass-2026-10-18.{md,json}`，没有将 probe 脚本打包进仓库。
 
 这两次证据都使用自有临时 Task/Job 与 mock 服务，没有发送模型或上游请求，也没有触碰 production gateway；它们不证明旧失败的根因已知，也不等同于正式安装 gateway、DSH 真实进程树或桌面 native child 的验收。
+
+## 受管 gateway Task 的有限失败重启
+
+当前 Task 定义固定设置失败重启 3 次、间隔 1 分钟；隐藏 VBS launcher 会把 gateway 子进程退出码传回 Task Scheduler。Task 查询与 ownership matcher 要求重启策略精确匹配；策略缺失或被改动会被拒绝，不会接管同名旧 Task。相关本地测试已通过，但尚未在真实 Windows Task Scheduler 验证崩溃后的重启，也未验证 DSH 退出后 gateway 的存活与恢复。
