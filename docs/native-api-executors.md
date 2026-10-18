@@ -276,7 +276,7 @@ fixture disables web search explicitly.
 ## Verification and current limits
 
 The current runtime approval hash is
-`2b3eebd587fa7fa17872644a726048d53f35f6e8651947ff98df62488b00ef45`. Runtime
+`2a5d6310c76b992ef772e62410c593204b570ff20f6e8a967f43deeac42bc3e7`. Runtime
 manifests built with the older `7a5c...` patch (including the installed 6ec
 binary) are not accepted by the API dispatch gate. The old binary may still be
 used as an adapter-level CLI smoke target, but it is not evidence that a new
@@ -294,13 +294,16 @@ Run `39136590575` at head
 SUCCESS: eight native API tests were running, two lightweight tests passed,
 and both the none cold-resume and `prepare_agent_spawn_config` tests hit
 `STATUS_STACK_OVERFLOW`; no release artifact was produced. It is not GREEN.
-A fourth build is run `39138841194` at head
-`45a3bd343c4bf4fc99115e7d68ee74d685429c01`, ref
-`fix/native-deepseek-bounded-retries`; at this checkpoint it was
-`in_progress` in the current “Restore Cargo dependencies and build cache” step,
-with no failed step observed. It is not claimed GREEN until it completes.
-This is build evidence, not a local installation, restart, or desktop
-API-role acceptance. No new runtime was installed in this worktree.
+The fourth run `39138841194` at head
+`45a3bd343c4bf4fc99115e7d68ee74d685429c01` completed the native API suite:
+all eight tests ran, seven passed, and the only failure was the none
+cold-resume fixture using an invalid native `task_name`
+(`non-reasoning-worker`). The large-stack change resolved the earlier stack
+problem; the separate correction uses `non_reasoning_worker`. At this
+checkpoint the run was still in its cache-save step, no release artifact
+binary had been produced, and a fifth build had not been dispatched. It is not
+claimed GREEN. This is build evidence, not a local installation, restart, or
+desktop API-role acceptance. No new runtime was installed in this worktree.
 
 The four same-source large-fixture tests now use a same-name `#[test]` wrapper
 and `async_impl` through the pinned

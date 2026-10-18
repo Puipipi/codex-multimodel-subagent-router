@@ -59,12 +59,16 @@ spawn-schema arguments:
 
 ```json
 {
-  "task_name": "bounded-api-task",
+  "task_name": "bounded_api_task",
   "agent_type": "native_api_<24hex>",
   "fork_turns": "none",
   "message": "<task and acceptance checks>"
 }
 ```
+
+For native subagents, `task_name` must use only lowercase ASCII letters,
+digits, and underscores. Do not use hyphens in `task_name`; profile IDs,
+models, and aliases are separate fields and may retain their own valid syntax.
 
 ## Shared native writer and child-message contract
 
