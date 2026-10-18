@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "status": "partial",
+  "scope": "single_host_native_desktop_observation",
+  "overall_goal_complete": false,
+  "source": {
+    "plugin_version": "0.10.4",
+    "commit": "2b2100b9f828e22828ca8c54f99ec472ff380c1e",
+    "ci_run": 39108853950,
+    "ci_status": "success",
+    "runtime_binary_sha256": "b311c3c365d1a9a5c19a6040428e02d49b10d7bdd766a859f0b842d42c3e3963"
+  },
+  "root_observation": {
+    "user_restarted": true,
+    "matching_codex_process_images": 2,
+    "runtime_binary_matches": true,
+    "native_agent_readiness_gate_runs": 3,
+    "native_agent_readiness_gate_exit_codes": [0, 0, 0],
+    "managed_user_environment_matches": 3,
+    "managed_user_environment_expected": 3,
+    "native_child_process_environment_matches": 3,
+    "native_child_process_environment_expected": 3,
+    "desktop_process_environment_directly_audited": false
+  },
+  "child_rollout_audit": {
+    "child_reference": "same_child_across_three_turns",
+    "agent_type": "native_deepseek",
+    "model": "deepseek/deepseek-flash",
+    "fork_turns": "none",
+    "provider_field_present_in_rollout": false,
+    "provider_from_formal_role_config": "deepseek-native",
+    "turn_count": 3,
+    "completed_turns": 3,
+    "error_null_turns": 3,
+    "first_turn_elapsed_ms": 35465,
+    "first_turn_file_write_verified": true,
+    "first_turn_manifest_discovery_after_parent_filename_mismatch": true,
+    "first_turn_elapsed_is_startup_latency": false,
+    "second_turn_elapsed_ms": 11888,
+    "second_turn_recalled_context_and_appended_line": true,
+    "third_turn_read_only": true,
+    "third_turn_progress_and_result_visible": true,
+    "user_confirmed_third_turn_visibility": true,
+    "user_reported_second_turn_panel_did_not_update": true,
+    "prior_panel_nonupdate_cause_known": false,
+    "prior_panel_nonupdate_fixed": false,
+    "third_turn_elapsed_ms": 7094,
+    "third_turn_agent_messages": 3,
+    "third_turn_command_executions": 2,
+    "third_turn_elapsed_is_startup_latency": false
+  },
+  "demo_file": {
+    "bytes": 97,
+    "lines": 3,
+    "utf8_write_verified": true,
+    "exact_content_verified": true,
+    "sha256": "3529f73b057d19ba92f07cecf17734f60dc66ff77572f56f0071dcfc74b768fe"
+  },
+  "gateway_usage_scope_first_two_turns_only": {
+    "requests": 10,
+    "http_200_responses": 10,
+    "relay_calls": 0,
+    "usage_records": 10,
+    "usage_matches_gateway_records": true,
+    "input_tokens": 1936151,
+    "output_tokens": 5885,
+    "total_tokens": 1942036,
+    "cached_input_tokens": 1746944,
+    "includes_third_turn_or_audit": false,
+    "codex_quota_percentage": null
+  },
+  "pending_acceptance": [
+    "new_child_entry_discovery",
+    "historical_message_clickability",
+    "full_cold_start_recovery",
+    "multi_chat_desktop_isolation",
+    "hooks_notification"
+  ],
+  "desktop_acceptance": false
+}
