@@ -113,7 +113,7 @@ try {
   const apiPlanWithSettings = apiTaskPlan({
     apiDir: path.join(tempRoot, "custom-api-plan"),
     gatewayScriptPath: path.join(repoRoot, "scripts", "native-api-serve.mjs"),
-    settingsPath: path.join(tempRoot, "custom-router.json"),
+    settingsPath: path.join(tempRoot, "custom settings", "router.json"),
   });
   ok(dsPlan.name.startsWith("SolLunaNativeGateway-"), "default task keeps the DeepSeek namespace");
   ok(apiPlan.name.startsWith("SolLunaNativeApi-"), "API task uses an independent namespace");
@@ -125,7 +125,7 @@ try {
   assert.match(dsPlan.launcher.content, /--deepseek-only/);
   assert.match(apiPlan.launcher.content, /--api-only/);
   assert.match(apiPlanWithSettings.launcher.content, /--settings/);
-  assert.match(apiPlanWithSettings.launcher.content, /custom-router\.json/);
+  assert.match(apiPlanWithSettings.launcher.content, /--settings ""[^"]*custom settings[^"]*router\.json""/);
   assert.match(apiPlan.launcher.content, /shell\.Run\(command, 0, True\)/);
   assert.doesNotMatch(apiPlan.launcher.content, /--deepseek-only/);
   checks += 1;

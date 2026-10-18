@@ -130,7 +130,7 @@ export function gatewayTaskPlan({ paths, nodePath = process.execPath, wscriptPat
   const marker = `${api ? API_OWNERSHIP_PREFIX : OWNERSHIP_PREFIX}${hash}`;
   const launcherPath = path.join(dir, api ? "api-task.vbs" : "gateway-task.vbs");
   const serveArgs = api ? ["--serve", "--api-only"] : ["--serve", "--deepseek-only"];
-  if (api && settingsPath) serveArgs.push("--settings", absolutePath(settingsPath, "API settings path"));
+  if (api && settingsPath) serveArgs.push("--settings", windowsQuote(absolutePath(settingsPath, "API settings path")));
   const command = [
     windowsQuote(node), windowsQuote(gateway), ...serveArgs,
     "--state", windowsQuote(state), "--identity", windowsQuote(identity), "--log", windowsQuote(log),

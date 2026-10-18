@@ -164,7 +164,7 @@ async function readGatewayOrigin(file) {
   const bytes = await readRegularOrAbsent(file, "native API gateway origin");
   if (bytes === null) return null;
   let value;
-  try { value = JSON.parse(bytes.toString("utf8")); }
+  try { value = decodeJournal(bytes.toString("utf8")); }
   catch { throw new Error("native API gateway origin is not valid JSON"); }
   if (value?.version !== 1 || !value.taskPlan || !value.taskSnapshot || !value.launcher?.path || !value.launcher?.prior) {
     throw new Error("native API gateway origin is incomplete");
@@ -601,6 +601,18 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
     })
     : composeApiConfig(currentConfig, { profileIds: remainingIds, gatewayBaseUrl });
   const nextRegistry = registryWithout(registry.value, journal.profile.profileId);
+  let origin = null;
+  if (remainingIds.length === 0) {
+    if (!journal.gateway.originFile) throw new Error("native API gateway origin is missing; refusing rollback");
+    origin = await readGatewayOrigin(journal.gateway.originFile);
+    if (!origin) throw new Error("native API gateway origin is missing; refusing rollback");
+    if (journal.gateway.originSha256 && origin.sha256 !== journal.gateway.originSha256) {
+      throw new Error("native API gateway origin changed; refusing to restore a different baseline");
+    }
+    if (path.resolve(origin.value.launcher.path) !== path.resolve(journal.gateway.launcher.path)) {
+      throw new Error("native API gateway origin launcher path differs from this install");
+    }
+  }
   if (remainingIds.length === 0) {
     const servicePaths = apiServicePaths(journal.paths.apiDir);
     if (await readGatewayState(servicePaths) !== null) {
@@ -615,20 +627,8 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
   await rm(journal.files.role.path, { force: true });
   await rm(journal.files.catalog.path, { force: true });
   if (remainingIds.length === 0) {
-    const origin = journal.gateway.originFile
-      ? await readGatewayOrigin(journal.gateway.originFile)
-      : null;
-    if (origin && journal.gateway.originSha256 && origin.sha256 !== journal.gateway.originSha256) {
-      throw new Error("native API gateway origin changed; refusing to restore a different baseline");
-    }
-    const restorePlan = origin?.value.taskPlan || journal.gateway.taskPlan;
-    const restoreTaskSnapshot = origin?.value.taskSnapshot || journal.gateway.taskSnapshot;
-    const restoreLauncher = origin?.value.launcher || journal.gateway.launcher.prior;
-    if (path.resolve(restoreLauncher.path) !== path.resolve(journal.gateway.launcher.path)) {
-      throw new Error("native API gateway origin launcher path differs from this install");
-    }
-    await restoreGatewayTask(restoreTaskSnapshot, restorePlan, tasks);
-    await restoreLauncherIfNext({ ...journal.gateway.launcher, prior: restoreLauncher.prior });
+    await restoreGatewayTask(origin.value.taskSnapshot, origin.value.taskPlan, tasks);
+    await restoreLauncherIfNext({ ...journal.gateway.launcher, prior: origin.value.launcher.prior });
     if (journal.gateway.originFile) await rm(journal.gateway.originFile, { force: true });
   }
   journal.phase = "rolled_back";
