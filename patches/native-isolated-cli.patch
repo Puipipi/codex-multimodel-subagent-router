@@ -250,7 +250,7 @@
  pub mod user_input;
 --- /dev/null
 +++ b/codex-rs/core/src/agent/native_deepseek.rs
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,282 @@
 +use crate::config::Config;
 +use codex_protocol::openai_models::ModelsResponse;
 +use std::fs;
@@ -493,6 +493,44 @@
 +
 +        assert!(error.contains("managed configuration requires `openai`"));
 +        assert_ne!(config.model_provider_id, PROVIDER);
++    }
++
++    #[tokio::test]
++    async fn native_api_profile_child_uses_owned_provider_and_catalog_without_changing_parent() {
++        let (home, mut parent) = test_config().await;
++        let role_hash = "0123456789abcdef01234567";
++        let role = format!("native_api_{role_hash}");
++        let provider_id = format!("api-native-{role_hash}");
++        let catalog_file = format!("sol-luna-native-models-{role_hash}.json");
++        let model_slug = "vendor/custom-model";
++        parent.model = Some(model_slug.to_string());
++        let mut provider = parent.model_provider.clone();
++        provider.name = "Custom native API test provider".to_string();
++        provider.base_url = Some(
++            "http://127.0.0.1:43210/token/profiles/0123456789abcdef01234567/v1".to_string(),
++        );
++        provider.requires_openai_auth = false;
++        parent
++            .model_providers
++            .insert(provider_id.clone(), provider.clone());
++        let catalog = ModelsResponse {
++            models: vec![model_info_from_slug(model_slug)],
++        };
++        fs::write(
++            home.path().join(catalog_file),
++            serde_json::to_vec(&catalog).expect("serialize API profile catalog"),
++        )
++        .expect("write API profile catalog");
++        let mut child = parent.clone();
++        let parent_before = parent.clone();
++
++        apply_native_deepseek_child_config(&mut child, Some(&role), false)
++            .expect("registered native API profile should select its owned provider and catalog");
++
++        assert_eq!(child.model_provider_id, provider_id);
++        assert_eq!(child.model_provider, provider);
++        assert_eq!(child.model_catalog.as_ref().unwrap().models[0].slug, model_slug);
++        assert_eq!(parent, parent_before);
 +    }
 +}
 --- /dev/null
