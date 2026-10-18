@@ -134,7 +134,7 @@ jobs:
         shell: pwsh
         working-directory: codex-rs
         run: |
-          cargo test --locked -p codex-core native_deepseek --lib
+          cargo test --locked -p codex-core native_deepseek --lib -- --skip native_api_
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run bounded retry role regression
@@ -218,7 +218,7 @@ jobs:
             cargo_lock_original_sha256 = $lockAudit.original_lock_sha256
             cargo_lock_sha256 = $lockAudit.normalized_lock_sha256
             cargo_lock_diff = $lockAudit.lock_diff
-            tests = @('cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib', 'cargo test --locked -p codex-core native_deepseek --lib', 'cargo test --locked -p codex-core agent::role::tests::apply_role_can_disable_unbounded_connection_retries_without_changing_parent --lib -- --exact')
+            tests = @('cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib', 'cargo test --locked -p codex-core native_deepseek --lib -- --skip native_api_', 'cargo test --locked -p codex-core agent::role::tests::apply_role_can_disable_unbounded_connection_retries_without_changing_parent --lib -- --exact', 'cargo test --locked -p codex-core agent::native_deepseek::tests::native_api_profile_child_uses_owned_provider_and_catalog_without_changing_parent --lib -- --exact')
             build = 'cargo build -p codex-cli --locked --release --bin codex'
           }
           $provenance | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $artifact 'provenance.json') -Encoding utf8
