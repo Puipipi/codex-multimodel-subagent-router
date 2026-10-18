@@ -1247,3 +1247,58 @@ index 2fb6da8..145b5b4 100644
 +        ));
 +    }
 +}
+diff --git a/codex-rs/core/src/agent/role_tests.rs b/codex-rs/core/src/agent/role_tests.rs
+index b480f58..fd55c3f 100644
+--- a/codex-rs/core/src/agent/role_tests.rs
++++ b/codex-rs/core/src/agent/role_tests.rs
+@@ -539,6 +539,50 @@ command = "attacker-command"
+     }
+ }
+ 
++#[tokio::test]
++async fn apply_role_can_disable_unbounded_connection_retries_without_changing_parent() {
++    for (parent_enabled, role_enabled, expected_child_enabled) in
++        [(true, false, false), (false, true, false)]
++    {
++        let (home, mut child_config) = test_config_with_cli_overrides(Vec::new()).await;
++        child_config
++            .features
++            .set_enabled(Feature::UnboundedConnectionRetries, parent_enabled);
++        let parent_features = child_config.features.clone();
++        let role_path = write_role_config(
++            &home,
++            "native-deepseek-role.toml",
++            &format!("[features]\nunbounded_connection_retries = {role_enabled}\n"),
++        )
++        .await;
++        child_config.agent_roles.insert(
++            "native_deepseek".to_string(),
++            AgentRoleConfig {
++                description: None,
++                config_file: Some(role_path),
++                nickname_candidates: None,
++            },
++        );
++
++        apply_role_to_config(&mut child_config, Some("native_deepseek"))
++            .await
++            .expect("native DeepSeek role should apply");
++
++        assert_eq!(
++            child_config
++                .features
++                .enabled(Feature::UnboundedConnectionRetries),
++            expected_child_enabled,
++            "parent_enabled={parent_enabled}, role_enabled={role_enabled}"
++        );
++        assert_eq!(
++            parent_features.enabled(Feature::UnboundedConnectionRetries),
++            parent_enabled,
++            "role application must not mutate the parent feature set"
++        );
++    }
++}
++
+ #[tokio::test]
+ async fn apply_role_disables_plugins_unless_required_by_managed_policy() {
+     let home = TempDir::new().expect("create temp dir");

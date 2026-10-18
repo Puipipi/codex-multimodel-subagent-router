@@ -137,6 +137,19 @@ jobs:
           cargo test --locked -p codex-core native_deepseek --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Run bounded retry role regression
+        shell: pwsh
+        working-directory: codex-rs
+        run: |
+          $output = cargo test --locked -p codex-core agent::role::tests::apply_role_can_disable_unbounded_connection_retries_without_changing_parent --lib -- --exact 2>&1
+          $testExit = $LASTEXITCODE
+          $outputText = $output | Out-String
+          Write-Output $outputText
+          if ($testExit -ne 0) { exit $testExit }
+          if ($outputText -notmatch '(?m)^running 1 test\r?$') {
+            throw 'Expected the bounded retry regression to run exactly one test.'
+          }
+
       - name: Build release CLI
         shell: pwsh
         working-directory: codex-rs
@@ -192,7 +205,7 @@ jobs:
             cargo_lock_original_sha256 = $lockAudit.original_lock_sha256
             cargo_lock_sha256 = $lockAudit.normalized_lock_sha256
             cargo_lock_diff = $lockAudit.lock_diff
-            tests = @('cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib', 'cargo test --locked -p codex-core native_deepseek --lib')
+            tests = @('cargo test --locked -p codex-protocol sol_luna_wire_aliases --lib', 'cargo test --locked -p codex-core native_deepseek --lib', 'cargo test --locked -p codex-core agent::role::tests::apply_role_can_disable_unbounded_connection_retries_without_changing_parent --lib -- --exact')
             build = 'cargo build -p codex-cli --locked --release --bin codex'
           }
           $provenance | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $artifact 'provenance.json') -Encoding utf8
