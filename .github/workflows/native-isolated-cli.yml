@@ -150,6 +150,19 @@ jobs:
             throw 'Expected the bounded retry regression to run exactly one test.'
           }
 
+      - name: Run native API profile RED regression
+        shell: pwsh
+        working-directory: codex-rs
+        run: |
+          $output = cargo test --locked -p codex-core agent::native_deepseek::tests::native_api_profile_child_uses_owned_provider_and_catalog_without_changing_parent --lib -- --exact 2>&1
+          $testExit = $LASTEXITCODE
+          $outputText = $output | Out-String
+          Write-Output $outputText
+          if ($outputText -notmatch '(?m)^running 1 test\r?$') {
+            throw 'Expected the native API profile regression to run exactly one test.'
+          }
+          if ($testExit -ne 0) { exit $testExit }
+
       - name: Build release CLI
         shell: pwsh
         working-directory: codex-rs
