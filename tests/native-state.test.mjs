@@ -76,6 +76,13 @@ try {
   checks += 1;
   await assert.rejects(tasks.begin({ parentThreadId: "parent-B", childThreadId: "child-A" }), /another parent chat/);
   checks += 1;
+  await assert.rejects(tasks.begin({
+    parentThreadId: "parent-A",
+    childThreadId: "child-invalid-nonce",
+    model: "deepseek/deepseek-flash",
+    taskNonce: "--child",
+  }), /taskNonce/);
+  checks += 1;
 
   const leases = new NativeWriterLease({ stateDir });
   const realWorkspaceA = await realpath(workspaceA);
@@ -140,6 +147,14 @@ try {
   const recordedTask = JSON.parse(recorded.stdout).task;
   equal(recordedTask.binding.profileId, readonlyProfile, "record stores the complete API binding");
   equal(recordedTask.binding.model, "api-readonly-model", "record stores the exact API model");
+  const swallowedNonce = runCli([
+    "record", "--workspace", workspaceA, "--task-nonce", "--child", "api-invalid-nonce",
+    "--model", "api-readonly-model", "--executor", "api", "--profile-id", readonlyProfile,
+    "--role", `native_api_${readonlyProfile}`, "--provider-id", `api-native-${readonlyProfile}`,
+    "--state-dir", readonlyState,
+  ]);
+  equal(swallowedNonce.status, 1, "a flag following --task-nonce is rejected instead of becoming the nonce");
+  assert.match(swallowedNonce.stderr, /taskNonce|task-nonce/);
   equal((await new NativeWriterLease({ stateDir: readonlyState }).get(workspaceA)).state, "reserved",
     "recording a read-only API child leaves the unrelated writer reservation intact");
   const recordedBinding = runCli(["binding", "--child", "api-readonly-child", "--state-dir", readonlyState]);

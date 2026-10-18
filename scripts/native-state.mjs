@@ -84,6 +84,7 @@ export class NativeTasks {
   async begin({ parentThreadId, childThreadId, model, workspace = null, taskNonce = null, binding = null }) {
     const parent = parentId(parentThreadId);
     const child = childId(childThreadId);
+    const task = taskNonce === null || taskNonce === undefined ? null : nonce(taskNonce);
     const normalizedBinding = normalizeBinding(binding);
     return this._mutate((data) => {
       const existing = data.tasks[child];
@@ -101,14 +102,14 @@ export class NativeTasks {
       if (immutable && typeof model === "string" && model !== immutable.model) {
         throw new Error("This child's model binding is immutable and cannot be changed");
       }
-      if (existing?.task_nonce && taskNonce && existing.task_nonce !== taskNonce) {
+      if (existing?.task_nonce && task && existing.task_nonce !== task) {
         throw new Error("This child's task nonce cannot be changed");
       }
       const at = new Date().toISOString();
       data.tasks[child] = {
         child_thread_id: child,
         owner: hashThread(parent),
-        task_nonce: existing?.task_nonce || taskNonce,
+        task_nonce: existing?.task_nonce || task,
         model: bound ? bound.model : (typeof model === "string" ? model : existing?.model ?? null),
         ...(bound ? { binding: bound } : {}),
         workspace,
@@ -252,6 +253,10 @@ async function main(argv) {
   const stateDir = get("state-dir");
   const workspace = get("workspace");
   const taskNonce = get("task-nonce");
+  const taskNonceAt = argv.indexOf("--task-nonce");
+  if (taskNonceAt >= 0 && (argv[taskNonceAt + 1] === undefined || argv[taskNonceAt + 1].startsWith("--"))) {
+    throw new Error("--task-nonce must be followed by a safe non-empty value, not another flag");
+  }
   const parent = trustedParent();
   if (command === "reserve") {
     const lease = await new NativeWriterLease({ stateDir }).reserve({ workspace, parentThreadId: parent, taskNonce: taskNonce || randomUUID() });

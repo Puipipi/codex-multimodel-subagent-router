@@ -52,6 +52,20 @@ The gate must pass before spawn. The returned `native_spawn` supplies
 the profile is not installed, report that failure and stop. Do not replace it
 with another executor or a hand-edited journal.
 
+Pass only `task_name`, `agent_type`, `fork_turns: "none"`, and `message` to
+`spawn_agent`; do not pass the whole `native_spawn` object. `provider_id`,
+`profile_id`, and `resolved_model` are metadata for state recording, not
+spawn-schema arguments:
+
+```json
+{
+  "task_name": "bounded-api-task",
+  "agent_type": "native_api_<24hex>",
+  "fork_turns": "none",
+  "message": "<task and acceptance checks>"
+}
+```
+
 ## Shared native writer and child-message contract
 
 This contract applies equally to native Luna and native DeepSeek write tasks. Reserve before `spawn_agent`, bind the real child immediately after spawn, and release only at explicit finish/terminal. Ownership comes from trusted `CODEX_THREAD_ID`; `--parent` is rejected as a forgery path.
@@ -80,7 +94,7 @@ For a write-capable API child, reserve and bind the full executor identity:
 ```powershell
 $taskNonce = [guid]::NewGuid().ToString()
 node .\scripts\native-state.mjs reserve --workspace (Get-Location).Path --task-nonce $taskNonce --model <exact-model>
-# spawn_agent with the gate result; omit model
+# spawn_agent with task_name, agent_type, fork_turns:none, message; omit model
 node .\scripts\native-state.mjs bind --workspace (Get-Location).Path --task-nonce $taskNonce `
   --child CHILD_THREAD_ID --model <exact-model> --executor api `
   --profile-id <24hex> --role native_api_<24hex> --provider-id api-native-<24hex>
@@ -90,6 +104,7 @@ For a read-only API child, record the actual child without taking a writer
 lease, then read the binding and complete only that task record:
 
 ```powershell
+$taskNonce = [guid]::NewGuid().ToString()
 node .\scripts\native-state.mjs record --workspace (Get-Location).Path --task-nonce $taskNonce `
   --child CHILD_THREAD_ID --model <exact-model> --executor api `
   --profile-id <24hex> --role native_api_<24hex> --provider-id api-native-<24hex>
