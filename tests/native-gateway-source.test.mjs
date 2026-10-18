@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { cleanupOwnedGatewaySourceStage, stageGatewaySource, verifyGatewaySource } from "../scripts/native-gateway-source.mjs";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "native-gateway-source-test-"));
+const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "native-gateway-source-test-")));
 const files = [
   "native-gateway.mjs",
   "native-routing.mjs",

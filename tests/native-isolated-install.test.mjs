@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +20,7 @@ const equal = (a, b, m) => { assert.equal(a, b, m); checks += 1; };
 const ok = (v, m) => { assert.ok(v, m); checks += 1; };
 const rejects = async (f, p, m) => { await assert.rejects(f, p, m); checks += 1; };
 const sha = (value) => createHash("sha256").update(value).digest("hex");
-const root = await mkdtemp(path.join(os.tmpdir(), "native-isolated-install-test-"));
+const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "native-isolated-install-test-")));
 
 async function fixture(label) {
   const dir = path.join(root, label);
