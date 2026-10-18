@@ -21,6 +21,8 @@ export const ROUTER_SETTINGS_TOOL_NAMES = new Set([
   'router_settings_save',
   'router_settings_save_profile',
   'router_settings_check_credential',
+  'router_settings_executor_status',
+  'router_settings_apply',
 ]);
 
 const SETTINGS_TOOL_META = {ui: {visibility: ['app']}};
@@ -119,16 +121,16 @@ export const ROUTER_SETTINGS_TOOLS = [
   {
     name: 'router_settings_open',
     title: '路由设置',
-    description: 'Open the compact router settings panel. It accepts an empty object and never starts a model turn.',
+    description: 'Provide the compact router settings MCP App resource. It accepts an empty object and never starts a model turn. Resource provision does not prove that the host displayed the panel.',
     inputSchema: emptyInput,
     outputSchema: {
       type: 'object',
       properties: {
-        opened: {type: 'boolean'},
+        resourceProvided: {type: 'boolean'},
         resourceUri: {type: 'string'},
         message: {type: 'string'},
       },
-      required: ['opened', 'resourceUri', 'message'],
+      required: ['resourceProvided', 'resourceUri', 'message'],
     },
     annotations: {readOnlyHint: true, destructiveHint: false, openWorldHint: false},
     _meta: {
@@ -262,6 +264,60 @@ export const ROUTER_SETTINGS_TOOLS = [
       required: ['available', 'source', 'verified', 'note'],
     },
     annotations: {readOnlyHint: true, destructiveHint: false, openWorldHint: false},
+    _meta: SETTINGS_TOOL_META,
+  },
+  {
+    name: 'router_settings_executor_status',
+    title: '读取执行器状态',
+    description: 'Read the injected read-only lifecycle status for the current settings or one profile. Unknown remains unknown; this tool never starts a service or a model.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        profileId: {type: 'string', minLength: 1, description: 'Optional profile id whose lifecycle status should be read.'},
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        installed: {type: ['boolean', 'string']},
+        runtimeCompatible: {type: ['boolean', 'string']},
+        restartRequired: {type: ['boolean', 'string']},
+        gatewayRunning: {type: ['boolean', 'string']},
+        localHealthy: {type: ['boolean', 'string']},
+        credentialAvailable: {type: ['boolean', 'string']},
+        apiVerified: {type: 'boolean'},
+        detail: {type: 'string'},
+      },
+      required: ['installed', 'runtimeCompatible', 'restartRequired', 'gatewayRunning', 'localHealthy', 'credentialAvailable', 'apiVerified', 'detail'],
+    },
+    annotations: {readOnlyHint: true, destructiveHint: false, openWorldHint: false},
+    _meta: SETTINGS_TOOL_META,
+  },
+  {
+    name: 'router_settings_apply',
+    title: '应用 API 配置',
+    description: 'Apply the saved API configuration only after an explicit user click. Requires an injected lifecycle handler; never downloads, installs, starts, or restarts a runtime.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        expectedSha256: hashInput,
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        applied: {type: 'boolean'},
+        supported: {type: 'boolean'},
+        busy: {type: 'boolean'},
+        restartRequired: {type: ['boolean', 'string']},
+        detail: {type: 'string'},
+        sha256: {type: ['string', 'null']},
+      },
+      required: ['applied', 'supported', 'busy', 'restartRequired', 'detail', 'sha256'],
+    },
+    annotations: {readOnlyHint: false, destructiveHint: false, openWorldHint: false},
     _meta: SETTINGS_TOOL_META,
   },
 ];
@@ -400,18 +456,18 @@ function statusFor(saved, notice) {
     install: 'unknown',
     verify: 'not_verified',
     resolverReady: false,
-    notice: notice ?? '面板只管理路由 JSON。安装、完整重启和验证需要在宿主侧单独完成；当前 resolver 尚未声明就绪。',
+    notice: notice ?? '面板只管理路由 JSON；安装、重启、网关健康和 API 验证由生命周期状态单独报告。',
   };
 }
 
-function snapshotFor(snapshot, notice) {
+function snapshotFor(snapshot, notice, capabilities = {}) {
   return {
     schema: ROUTER_SETTINGS_SCHEMA,
     settings: snapshot.settings,
     sha256: snapshot.sha256,
     saved: snapshot.sha256 !== null,
     selectors: selectorOptions(snapshot.settings),
-    capabilities: {contextWindow: supportsContextWindow()},
+    capabilities: {contextWindow: supportsContextWindow(), ...capabilities},
     status: statusFor(snapshot.sha256 !== null, notice),
   };
 }
@@ -489,6 +545,79 @@ function supportsContextWindow() {
   return contextWindowSupport;
 }
 
+const UNKNOWN = 'unknown';
+
+function triState(value) {
+  return value === true || value === false ? value : UNKNOWN;
+}
+
+function sanitizeStatusDetail(value) {
+  return String(value ?? '')
+    .replace(/(api[_-]?key|authorization|bearer|token|secret)(\s*[:=]\s*)\S+/ig, '$1$2<REDACTED>')
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, '<REDACTED_KEY>')
+    .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, '<REDACTED_TOKEN>')
+    .replace(/AKIA[0-9A-Z]{16}/g, '<REDACTED_KEY>');
+}
+
+async function defaultExecutorStatus() {
+  return {
+    installed: UNKNOWN,
+    runtimeCompatible: UNKNOWN,
+    restartRequired: UNKNOWN,
+    gatewayRunning: UNKNOWN,
+    localHealthy: UNKNOWN,
+    credentialAvailable: UNKNOWN,
+    apiVerified: false,
+    detail: '生命周期状态未接入；未启动服务或模型，未验证 API。',
+  };
+}
+
+function normalizeExecutorStatus(raw) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return {
+    installed: triState(source.installed),
+    runtimeCompatible: triState(source.runtimeCompatible),
+    restartRequired: triState(source.restartRequired),
+    gatewayRunning: triState(source.gatewayRunning),
+    localHealthy: triState(source.localHealthy),
+    credentialAvailable: triState(source.credentialAvailable),
+    apiVerified: false,
+    detail: sanitizeStatusDetail(
+      typeof source.detail === 'string' && source.detail.trim()
+        ? source.detail
+        : '生命周期未提供可读状态；未验证 API。',
+    ),
+  };
+}
+
+async function defaultApplyApiConfiguration() {
+  return {
+    applied: false,
+    supported: false,
+    restartRequired: UNKNOWN,
+    detail: '当前 runtime 未提供 API 配置应用接口（unsupported/not installed）；未下载、安装、启动或重启任何组件。',
+  };
+}
+
+function normalizeApplyResult(raw, sha256, serviceSupported) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const applied = source.applied === true;
+  return {
+    applied,
+    supported: source.supported === false ? false : serviceSupported,
+    busy: source.busy === true,
+    restartRequired: triState(source.restartRequired),
+    detail: sanitizeStatusDetail(
+      typeof source.detail === 'string' && source.detail.trim()
+        ? source.detail
+        : applied
+          ? 'API 配置已应用。'
+          : '应用接口未返回成功结果。',
+    ),
+    sha256,
+  };
+}
+
 async function credentialIsAvailable(profile, {env, readSecretFile, resolveAccount}) {
   await resolveApiCredential(profile, {
     env,
@@ -503,7 +632,14 @@ export function createRouterSettingsService({
   readSecretFile,
   resolveAccount = resolveDeepSeekAuth,
   htmlPath = new URL('../ui/router-settings.html', import.meta.url),
+  getExecutorStatus: statusResolver,
+  applyApiConfiguration: applyHandler,
 } = {}) {
+  const getExecutorStatus = typeof statusResolver === 'function' ? statusResolver : defaultExecutorStatus;
+  const applyApiConfiguration = typeof applyHandler === 'function' ? applyHandler : defaultApplyApiConfiguration;
+  const applySupported = typeof applyHandler === 'function';
+  const capabilities = {applyApiConfiguration: applySupported};
+  let applying = false;
   let htmlPromise;
   function settingsHtml() {
     htmlPromise ??= readFile(htmlPath, 'utf8');
@@ -511,7 +647,7 @@ export function createRouterSettingsService({
   }
 
   async function snapshot(notice) {
-    return snapshotFor(await readRouterSettingsSnapshot(settingsPath), notice);
+    return snapshotFor(await readRouterSettingsSnapshot(settingsPath), notice, capabilities);
   }
 
   async function readSettings() {
@@ -563,7 +699,11 @@ export function createRouterSettingsService({
     if (!plainObject(args.settings)) throw new Error('settings must be an object.');
     const expected = requireHash(args.expectedSha256, 'expectedSha256');
     const saved = await saveRouterSettings(settingsPath, normalizeSettingsSelectors(args.settings), {expectedSha256: expected});
-    const result = snapshotFor({settings: saved.settings, sha256: saved.sha256}, '设置已保存。新增或修改的 API 角色仍需安装并完整重启；当前 resolver 尚未声明就绪。');
+    const result = snapshotFor(
+      {settings: saved.settings, sha256: saved.sha256},
+      '设置已保存。安装、重启和 API 验证状态由生命周期单独报告。',
+      capabilities,
+    );
     return {...result, previousSha256: saved.previousSha256};
   }
 
@@ -634,13 +774,13 @@ export function createRouterSettingsService({
     const pending = newRole
       ? {
         restartRequired: true,
-        message: '配置已保存；新增角色尚需安装并完整重启 Codex；当前 resolver 尚未声明就绪。',
+        message: '配置已保存；新增角色尚需安装并完整重启 Codex；安装与验证状态以生命周期为准。',
       }
       : {
         restartRequired: false,
         message: '标签或别名已保存；API 定义未变，本次未新增角色。安装与验证状态仍需单独确认。',
       };
-    const result = snapshotFor({settings: saved.settings, sha256: saved.sha256}, pending.message);
+    const result = snapshotFor({settings: saved.settings, sha256: saved.sha256}, pending.message, capabilities);
     return {
       ...result,
       profileId,
@@ -687,17 +827,58 @@ export function createRouterSettingsService({
     };
   }
 
+  async function executorStatus(args) {
+    exactObject(args, new Set(['profileId']), 'router_settings_executor_status arguments');
+    const profileId = args.profileId === undefined ? undefined : args.profileId.trim();
+    if (profileId !== undefined && !profileId) throw new Error('profileId must be a non-empty string when provided.');
+    const current = await readRouterSettingsSnapshot(settingsPath);
+    const raw = await getExecutorStatus({
+      settings: current.settings,
+      ...(profileId ? {profileId} : {}),
+    });
+    return normalizeExecutorStatus(raw);
+  }
+
+  async function applyConfiguration(args) {
+    exactObject(args, new Set(['expectedSha256']), 'router_settings_apply arguments');
+    const expected = args.expectedSha256 === undefined ? undefined : requireHash(args.expectedSha256, 'expectedSha256');
+    if (applying) {
+      return {
+        applied: false,
+        supported: applySupported,
+        busy: true,
+        restartRequired: UNKNOWN,
+        detail: '应用操作正在进行；请等待当前操作完成。',
+        sha256: null,
+      };
+    }
+    applying = true;
+    try {
+      const current = await readRouterSettingsSnapshot(settingsPath);
+      if (expected !== undefined && expected !== current.sha256) {
+        throw new Error('router settings changed since they were read; reload before applying');
+      }
+      const raw = await applyApiConfiguration({
+        settings: current.settings,
+        expectedSha256: current.sha256,
+      });
+      return normalizeApplyResult(raw, current.sha256, applySupported);
+    } finally {
+      applying = false;
+    }
+  }
+
   async function callTool(name, args = {}) {
     switch (name) {
       case 'router_settings_open':
         requireEmpty(args, 'router_settings_open arguments');
         return {
           payload: {
-            opened: true,
+            resourceProvided: true,
             resourceUri: ROUTER_SETTINGS_URI,
-            message: '路由设置面板已打开。',
+            message: '已提供路由设置面板资源；宿主是否实际显示由宿主决定。',
           },
-          text: '路由设置面板已打开。',
+          text: '已提供路由设置面板资源；宿主是否实际显示由宿主决定。',
         };
       case 'router_settings_read':
         requireEmpty(args, 'router_settings_read arguments');
@@ -713,6 +894,10 @@ export function createRouterSettingsService({
         return {payload: await saveProfile(args)};
       case 'router_settings_check_credential':
         return {payload: await checkCredential(args)};
+      case 'router_settings_executor_status':
+        return {payload: await executorStatus(args)};
+      case 'router_settings_apply':
+        return {payload: await applyConfiguration(args)};
       default:
         throw new Error(`Unknown router settings tool: ${name}`);
     }

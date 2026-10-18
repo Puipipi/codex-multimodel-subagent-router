@@ -299,12 +299,18 @@ export function createPluginMcp({
   ownership,
   leases,
   settingsPath,
+  getExecutorStatus,
+  applyApiConfiguration,
 } = {}) {
   const resolvedStateDir = resolveStateDir(stateDir);
   const ownershipStore = ownership ?? new OwnershipStore({stateDir: resolvedStateDir, now});
   const leaseStore = leases ?? new WorkspaceLeases({stateDir: resolvedStateDir, now});
   const traceService = traceOverride ?? createTraceService({now});
-  const routerSettings = createRouterSettingsService({settingsPath});
+  const routerSettings = createRouterSettingsService({
+    settingsPath,
+    getExecutorStatus,
+    applyApiConfiguration,
+  });
 
   async function backend(action, args, threadId) {
     const response = await run({action, args, meta: {threadId}});

@@ -5,6 +5,7 @@ import {mkdir, mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
+import {createPluginMcp} from "../scripts/plugin-mcp.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const temp = await mkdtemp(path.join(os.tmpdir(), "router-settings-mcp-"));
@@ -142,6 +143,8 @@ try {
     "router_settings_save",
     "router_settings_save_profile",
     "router_settings_check_credential",
+    "router_settings_executor_status",
+    "router_settings_apply",
   ]) ok(names.includes(name), `tools/list includes ${name}`);
   for (const name of ["dsh_start", "dsh_status", "dsh_wait", "dsh_followup", "dsh_list", "dsh_trace"]) {
     ok(names.includes(name), `tools/list retains legacy ${name}`);
@@ -156,6 +159,12 @@ try {
     "the entrypoint accepts exactly an empty object");
   ok(!openTool.inputSchema.required || openTool.inputSchema.required.length === 0,
     "the entrypoint requires no arguments");
+  ok(openTool.outputSchema.properties.resourceProvided,
+    "the entrypoint reports resource provision, not host display");
+  ok(!openTool.outputSchema.properties.opened,
+    "the entrypoint does not claim the host opened the panel");
+  doesNotMatch(openTool.description, /^open|opens the panel/i,
+    "the entrypoint description does not claim a visible host window");
 
   const readTool = tools.find(tool => tool.name === "router_settings_read");
   ok(readTool.outputSchema, "the settings read tool declares an outputSchema");
@@ -212,6 +221,18 @@ try {
   match(html, /id="context-window-note"/, "the UI has an inline contextWindow capability note");
   match(html, /capabilities\?\.contextWindow/, "the UI consumes the contextWindow capability flag");
   doesNotMatch(html, /所有模型[^<]*(?:安全|保守)/, "the hint does not claim every model is conservatively safe");
+  match(html, /id="apply-api"/, "the UI has an explicit apply button");
+  match(html, /应用 API 配置/, "the apply action is labeled in Chinese");
+  match(html, /当前 runtime 未提供 API 配置应用接口/, "the default apply state explains missing runtime support");
+  match(html, /不会自动下载或安装 runtime/, "the apply action never downloads or installs a runtime");
+  match(html, /不会关闭或重启 Codex/, "the apply action never closes or restarts Codex");
+  match(html, /router_settings_apply/, "the UI calls the injected apply tool only on demand");
+  match(html, /applyApiConfiguration/, "the UI consumes the apply capability seam");
+  match(html, /角色已安装/, "the status surface distinguishes installed roles");
+  match(html, /需重启/, "the status surface distinguishes restart requirements");
+  match(html, /本地网关/, "the status surface distinguishes local gateway health");
+  match(html, /API 调用/, "the status surface distinguishes API verification");
+  match(html, /id="apply-api"[^>]*disabled/, "the apply button is disabled until a runtime seam supports it");
 
   const unknownResource = await client.request("resources/read", {uri: "ui://router/missing"});
   ok(unknownResource.error, "an unknown resource is a JSON-RPC error");
@@ -233,7 +254,20 @@ try {
   const opened = await toolCall("router_settings_open", {});
   ok(!isError(opened), "the entrypoint accepts an empty object");
   equal(payload(opened).resourceUri, "ui://router/settings", "the entrypoint reports its UI resource");
-  match(text(opened), /路由设置/, "the entrypoint result is readable in Chinese");
+  equal(payload(opened).resourceProvided, true, "the entrypoint reports that it provided the resource");
+  ok(!Object.hasOwn(payload(opened), "opened"), "the entrypoint does not claim the host displayed the panel");
+  match(text(opened), /资源/, "the entrypoint result is readable in Chinese");
+  doesNotMatch(text(opened), /已打开|opened/i, "the entrypoint never claims a visible screen");
+
+  const defaultStatus = payload(await toolCall("router_settings_executor_status", {}));
+  equal(defaultStatus.installed, "unknown", "the default lifecycle status is unknown");
+  equal(defaultStatus.runtimeCompatible, "unknown", "the default runtime compatibility is unknown");
+  equal(defaultStatus.restartRequired, "unknown", "the default restart status is unknown");
+  equal(defaultStatus.gatewayRunning, "unknown", "the default gateway status is unknown");
+  equal(defaultStatus.localHealthy, "unknown", "the default local health is unknown");
+  equal(defaultStatus.credentialAvailable, "unknown", "the default credential status is unknown");
+  equal(defaultStatus.apiVerified, false, "the default status never claims API verification");
+  match(defaultStatus.detail, /未接入|未启动|未验证/, "the default status explains the missing lifecycle");
 
   const updated = await toolCall("router_settings_update", {
     set: {mode: "scheduled", peak: "deepseek", valley: "luna"},
@@ -271,6 +305,13 @@ try {
 
   snapshot = payload(await toolCall("router_settings_snapshot", {}));
   equal(snapshot.sha256, changedHash, "reread returns the new exact revision");
+  const defaultApply = await toolCall("router_settings_apply", {expectedSha256: snapshot.sha256});
+  ok(!isError(defaultApply), "the default apply returns an explicit structured refusal");
+  equal(payload(defaultApply).applied, false, "the default apply never claims success");
+  equal(payload(defaultApply).supported, false, "the default apply reports missing runtime support");
+  match(payload(defaultApply).detail, /未提供|未支持|未安装|not installed/i,
+    "the default apply explains that the runtime seam is unavailable");
+  match(payload(defaultApply).detail, /未下载|未安装|未重启|不会/, "the default apply does not claim side effects");
   const saved = await toolCall("router_settings_save", {
     settings: raw,
     expectedSha256: snapshot.sha256,
@@ -464,6 +505,173 @@ try {
     "the settings file never contains the env credential");
   equal((await readFile(settingsFile, "utf8")).includes("file-secret-never-returned"), false,
     "the settings file never contains the file credential");
+
+  {
+    const injectedRoot = path.join(temp, "injected");
+    const injectedSettings = path.join(injectedRoot, "router.json");
+    const injectedState = path.join(temp, "injected-state");
+    await mkdir(injectedRoot, {recursive: true});
+    await mkdir(injectedState, {recursive: true});
+    const statusCalls = [];
+    const applyCalls = [];
+    let statusMode = "true";
+    let releaseApply;
+    const applyGate = new Promise(resolve => { releaseApply = resolve; });
+    const injected = createPluginMcp({
+      settingsPath: injectedSettings,
+      stateDir: injectedState,
+      getExecutorStatus: async args => {
+        statusCalls.push(args);
+        return statusMode === "true"
+          ? {
+            installed: true,
+            runtimeCompatible: true,
+            restartRequired: false,
+            gatewayRunning: true,
+            localHealthy: true,
+            credentialAvailable: true,
+            apiVerified: true,
+            detail: "mock lifecycle status sk-status-secret-1234567890",
+          }
+          : {
+            installed: false,
+            runtimeCompatible: false,
+            restartRequired: true,
+            gatewayRunning: false,
+            localHealthy: false,
+            credentialAvailable: false,
+            apiVerified: true,
+            detail: "mock unavailable status",
+          };
+      },
+      applyApiConfiguration: async args => {
+        applyCalls.push(args);
+        await applyGate;
+        return {applied: true, restartRequired: true, detail: "mock apply sk-apply-secret-1234567890"};
+      },
+    });
+    try {
+      await injected.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {protocolVersion: "2025-11-25"},
+      });
+      const injectedProfile = await injected.handle({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "router_settings_save_profile",
+          arguments: {
+            expectedSha256: null,
+            label: "Injected",
+            definition: {
+              protocol: "responses",
+              baseUrl: "https://api.injected.example/v1",
+              model: "injected-model",
+              reasoning: {supported: ["none"], default: "none", parameter: "none"},
+              credential: {type: "env", name: "INJECTED_API_KEY"},
+            },
+          },
+        },
+      });
+      ok(!isError(injectedProfile), "the injected server can save a profile for status/apply mocking");
+      const injectedProfilePayload = payload(injectedProfile);
+      const injectedProfileId = injectedProfilePayload.profileId;
+
+      const injectedStatus = payload(await injected.handle({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "router_settings_executor_status",
+          arguments: {profileId: injectedProfileId},
+        },
+      }));
+      equal(injectedStatus.installed, true, "the injected status is surfaced as installed");
+      equal(injectedStatus.runtimeCompatible, true, "the injected runtime compatibility is surfaced");
+      equal(injectedStatus.restartRequired, false, "the injected restart state is surfaced");
+      equal(injectedStatus.gatewayRunning, true, "the injected gateway state is surfaced");
+      equal(injectedStatus.localHealthy, true, "the injected local health is surfaced");
+      equal(injectedStatus.credentialAvailable, true, "the injected credential state is surfaced");
+      equal(injectedStatus.apiVerified, false, "local health never implies API or auth verification");
+      doesNotMatch(injectedStatus.detail, /sk-status-secret-1234567890/,
+        "status details redact credential-shaped text");
+      equal(statusCalls.length, 1, "the status resolver is called once for one request");
+      equal(statusCalls[0].profileId, injectedProfileId, "the status resolver receives the requested profile id");
+      ok(statusCalls[0].settings.profiles[injectedProfileId], "the status resolver receives the current settings");
+      statusMode = "false";
+      const unavailableStatus = payload(await injected.handle({
+        jsonrpc: "2.0",
+        id: 31,
+        method: "tools/call",
+        params: {
+          name: "router_settings_executor_status",
+          arguments: {profileId: injectedProfileId},
+        },
+      }));
+      equal(unavailableStatus.installed, false, "an injected false installed state is preserved");
+      equal(unavailableStatus.runtimeCompatible, false, "an injected false compatibility state is preserved");
+      equal(unavailableStatus.restartRequired, true, "an injected restart requirement is preserved");
+      equal(unavailableStatus.gatewayRunning, false, "an injected stopped gateway state is preserved");
+      equal(unavailableStatus.localHealthy, false, "an injected unhealthy state is preserved");
+      equal(unavailableStatus.credentialAvailable, false, "an injected unavailable credential state is preserved");
+      equal(unavailableStatus.apiVerified, false, "an injected unavailable state still never implies verification");
+      equal(statusCalls.length, 2, "the false status path calls the resolver again");
+
+      const firstApply = injected.handle({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: {
+          name: "router_settings_apply",
+          arguments: {expectedSha256: injectedProfilePayload.sha256},
+        },
+      });
+      const secondApply = injected.handle({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: {
+          name: "router_settings_apply",
+          arguments: {expectedSha256: injectedProfilePayload.sha256},
+        },
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      const secondPayload = payload(await secondApply);
+      equal(secondPayload.applied, false, "a repeated apply click is not applied");
+      equal(secondPayload.busy, true, "a repeated apply click is reported as busy");
+      equal(applyCalls.length, 1, "only the first apply reaches the injected lifecycle");
+      releaseApply();
+      const firstPayload = payload(await firstApply);
+      equal(firstPayload.applied, true, "the first apply reaches the injected lifecycle");
+      equal(firstPayload.supported, true, "an injected apply reports support");
+      equal(firstPayload.restartRequired, true, "the apply result carries the restart requirement");
+      doesNotMatch(firstPayload.detail, /sk-apply-secret-1234567890/,
+        "apply details redact credential-shaped text");
+
+      const beforeConflictCalls = applyCalls.length;
+      const injectedBytes = await readFile(injectedSettings);
+      await writeFile(injectedSettings, Buffer.concat([injectedBytes, Buffer.from("\n")]));
+      const conflictApply = await injected.handle({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: {
+          name: "router_settings_apply",
+          arguments: {expectedSha256: injectedProfilePayload.sha256},
+        },
+      });
+      ok(isError(conflictApply), "a stale apply revision is rejected");
+      match(text(conflictApply), /changed since|reload|重新/i,
+        "the stale apply asks the caller to reload");
+      equal(applyCalls.length, beforeConflictCalls,
+        "a stale apply never reaches the injected lifecycle");
+    } finally {
+      await injected.close();
+    }
+  }
 } finally {
   await client.close();
   await rm(temp, {recursive: true, force: true});

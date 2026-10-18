@@ -72,7 +72,7 @@ button.ghost { background: transparent; }
 button.small { min-height: 28px; padding: 3px 9px; font-size: 12px; }
 .status {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 1px;
   margin: 18px 0 12px;
   border: 1px solid var(--line-soft);
@@ -97,6 +97,7 @@ button.small { min-height: 28px; padding: 3px 9px; font-size: 12px; }
 .status-item[data-state="saved"] .dot, .status-item[data-state="on"] .dot { background: var(--ok); }
 .status-item[data-state="pending"] .dot { background: var(--warn); }
 .status-item[data-state="unknown"] .dot, .status-item[data-state="off"] .dot { background: var(--faint); }
+.status-detail { margin: -2px 0 14px; color: var(--muted); font-size: 12px; }
 .notice, .warning {
   margin: 0 0 14px;
   padding: 9px 11px;
@@ -172,7 +173,7 @@ input::placeholder { color: var(--faint); }
 .hint { margin-top: 8px; color: var(--faint); font-size: 12px; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0 20px; }
 .dirty { color: var(--warn); font-size: 12px; }
-.profiles, .editor { border-top: 1px solid var(--line-soft); padding-top: 16px; margin-top: 16px; }
+.profiles, .editor, .apply { border-top: 1px solid var(--line-soft); padding-top: 16px; margin-top: 16px; }
 .section-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .section-head p { margin-top: 3px; color: var(--muted); font-size: 12px; }
 .profile-list { display: grid; gap: 7px; margin-top: 12px; }
@@ -259,12 +260,19 @@ footer p + p { margin-top: 3px; }
       <span class="dot" aria-hidden="true"></span><span>已保存</span><strong id="save-state">读取中</strong>
     </div>
     <div class="status-item" id="install-status" data-state="unknown">
-      <span class="dot" aria-hidden="true"></span><span>已安装</span><strong id="install-state">未知</strong>
+      <span class="dot" aria-hidden="true"></span><span>角色已安装</span><strong id="install-state">未知</strong>
+    </div>
+    <div class="status-item" id="restart-status" data-state="unknown">
+      <span class="dot" aria-hidden="true"></span><span>需重启</span><strong id="restart-state">未知</strong>
+    </div>
+    <div class="status-item" id="gateway-status" data-state="unknown">
+      <span class="dot" aria-hidden="true"></span><span>本地网关</span><strong id="gateway-state">未知</strong>
     </div>
     <div class="status-item" id="verify-status" data-state="off">
-      <span class="dot" aria-hidden="true"></span><span>已验证</span><strong id="verify-state">否</strong>
+      <span class="dot" aria-hidden="true"></span><span>API 调用</span><strong id="verify-state">未验证</strong>
     </div>
   </section>
+  <p id="executor-status-detail" class="status-detail" aria-live="polite">生命周期状态未接入；未启动服务或模型，未验证 API。</p>
 
   <div id="host-warning" class="warning" role="alert" hidden></div>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
@@ -389,9 +397,23 @@ footer p + p { margin-top: 3px; }
     <p class="pending" id="profile-pending" hidden></p>
   </form>
 
+  <section class="apply">
+    <div class="section-head">
+      <div>
+        <h2>应用 API 配置</h2>
+        <p>只在你点击后调用生命周期接口；不会自动下载或安装 runtime，也不会关闭或重启 Codex。</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="apply-api" type="button" class="ghost" disabled>应用 API 配置</button>
+      <output id="apply-result" class="check-result" aria-live="polite"></output>
+    </div>
+    <p id="apply-explanation" class="hint">当前 runtime 未提供 API 配置应用接口；不会自动下载或安装 runtime，也不会关闭或重启 Codex。</p>
+  </section>
+
   <footer>
-    <p>保存后，新增或修改的 API 角色需要安装并按宿主要求完整重启；当前 resolver 尚未声明就绪。</p>
-    <p>已安装与已验证状态不会由本面板推断。</p>
+    <p>默认生命周期状态为未知；接入只读状态模块后显示真实安装、网关与验证结果。</p>
+    <p>应用 API 配置只会在你点击后调用；不会自动下载或安装 runtime，也不会关闭或重启 Codex，也不代表 API 已验证。</p>
   </footer>
 </main>
 <script>
@@ -407,10 +429,12 @@ footer p + p { margin-top: 3px; }
     pending: new Map(),
     nextId: 1,
     busy: false,
+    dirty: false,
   };
   let resizeObserver = null;
   let sizeFrame = 0;
   let lastSize = {width: 0, height: 0};
+  let statusRequest = 0;
 
   const byId = id => document.getElementById(id);
   const modeInputs = [...document.querySelectorAll('input[name="mode"]')];
@@ -440,6 +464,24 @@ footer p + p { margin-top: 3px; }
     for (const node of document.querySelectorAll("button, input, select")) {
       if (node.dataset.alwaysEnabled === "true") continue;
       node.disabled = busy || !state.hostCapabilities?.serverTools;
+    }
+    renderApplyAvailability();
+  }
+
+  function renderApplyAvailability() {
+    const supported = state.snapshot?.capabilities?.applyApiConfiguration === true;
+    const ready = Boolean(state.hostCapabilities?.serverTools && state.snapshot && !state.busy);
+    byId("apply-api").disabled = !supported || !ready || state.dirty;
+    if (!state.snapshot) {
+      byId("apply-explanation").textContent = "配置尚未载入；应用接口暂不可用。";
+    } else if (!supported) {
+      byId("apply-explanation").textContent = "当前 runtime 未提供 API 配置应用接口；不会自动下载或安装 runtime，也不会关闭或重启 Codex。";
+    } else if (state.busy) {
+      byId("apply-explanation").textContent = "正在应用…";
+    } else if (state.dirty) {
+      byId("apply-explanation").textContent = "有未保存的路由更改；先保存后再应用。";
+    } else {
+      byId("apply-explanation").textContent = "仅在你点击后调用已注入的生命周期应用接口；不会自动下载或安装 runtime，也不会关闭或重启 Codex。";
     }
   }
 
@@ -585,16 +627,89 @@ footer p + p { margin-top: 3px; }
     const status = snapshot.status || {};
     const save = byId("save-status");
     const install = byId("install-status");
+    const restart = byId("restart-status");
+    const gateway = byId("gateway-status");
     const verify = byId("verify-status");
     save.dataset.state = status.save === "saved" ? "saved" : "unknown";
-    install.dataset.state = status.install === "installed" ? "on" : "unknown";
-    verify.dataset.state = status.verify === "verified" ? "on" : "off";
+    install.dataset.state = "unknown";
+    restart.dataset.state = "unknown";
+    gateway.dataset.state = "unknown";
+    verify.dataset.state = "off";
     byId("save-state").textContent = status.save === "saved" ? "是" : "否";
     byId("install-state").textContent = "未知";
-    byId("verify-state").textContent = "否";
+    byId("restart-state").textContent = "未知";
+    byId("gateway-state").textContent = "未知";
+    byId("verify-state").textContent = "未验证";
+    byId("executor-status-detail").textContent = "生命周期状态未接入；未启动服务或模型，未验证 API。";
     save.title = "路由 JSON 的保存状态。";
-    install.title = "本面板无法确认新增角色是否已安装。";
-    verify.title = "本面板不发起 API 请求，也不验证认证或计费。";
+    install.title = "生命周期只读状态；未知不会当作已安装。";
+    restart.title = "应用新角色后是否需要完整重启；不会自动重启 Codex。";
+    gateway.title = "本地网关是否运行或健康；健康不代表模型或认证已验证。";
+    verify.title = "API 调用是否经过显式验证；本地健康不会推断为已验证。";
+  }
+
+  function triText(value) {
+    return value === true ? "是" : value === false ? "否" : "未知";
+  }
+
+  function renderExecutorStatus(status) {
+    const install = byId("install-status");
+    const restart = byId("restart-status");
+    const gateway = byId("gateway-status");
+    const verify = byId("verify-status");
+    byId("install-state").textContent = triText(status.installed);
+    byId("restart-state").textContent = triText(status.restartRequired);
+    let gatewayText = "未知";
+    let gatewayState = "unknown";
+    if (status.gatewayRunning === false) {
+      gatewayText = "未运行";
+      gatewayState = "off";
+    } else if (status.localHealthy === false) {
+      gatewayText = "异常";
+      gatewayState = "pending";
+    } else if (status.gatewayRunning === true && status.localHealthy === true) {
+      gatewayText = "健康";
+      gatewayState = "on";
+    } else if (status.gatewayRunning === true) {
+      gatewayText = "已运行";
+      gatewayState = "pending";
+    } else if (status.localHealthy === true) {
+      gatewayText = "本地健康";
+      gatewayState = "pending";
+    }
+    byId("gateway-state").textContent = gatewayText;
+    install.dataset.state = status.installed === true ? "on" : status.installed === false ? "off" : "unknown";
+    restart.dataset.state = status.restartRequired === true ? "pending" : status.restartRequired === false ? "off" : "unknown";
+    gateway.dataset.state = gatewayState;
+    byId("verify-state").textContent = status.apiVerified === true ? "已验证" : "未验证";
+    verify.dataset.state = status.apiVerified === true ? "on" : "off";
+    const facts = [];
+    if (status.runtimeCompatible !== "unknown") {
+      facts.push(`runtime ${status.runtimeCompatible ? "兼容" : "不兼容"}`);
+    }
+    if (status.credentialAvailable !== "unknown") {
+      facts.push(`凭据 ${status.credentialAvailable ? "可用" : "不可用"}`);
+    }
+    byId("executor-status-detail").textContent = [
+      text(status.detail),
+      facts.join(" · "),
+    ].filter(Boolean).join(" · ") || "生命周期未提供可读状态；未验证 API。";
+  }
+
+  async function loadExecutorStatus(profileId) {
+    if (!state.hostCapabilities?.serverTools) return;
+    const requestId = ++statusRequest;
+    try {
+      const status = await callTool(
+        "router_settings_executor_status",
+        profileId ? {profileId} : {},
+      );
+      if (requestId !== statusRequest) return;
+      renderExecutorStatus(status);
+    } catch (error) {
+      if (requestId !== statusRequest) return;
+      byId("executor-status-detail").textContent = `执行器状态读取失败：${messageOf(error)}`;
+    }
   }
 
   function renderSnapshot(snapshot) {
@@ -616,8 +731,11 @@ footer p + p { margin-top: 3px; }
       contextNote.hidden = true;
     }
     renderStatus(snapshot);
+    state.dirty = false;
     byId("dirty").textContent = "";
     byId("reload-route").hidden = true;
+    renderApplyAvailability();
+    void loadExecutorStatus();
   }
 
   function renderMode() {
@@ -741,6 +859,7 @@ footer p + p { margin-top: 3px; }
     byId("profile-form").hidden = false;
     updateCredentialFields();
     byId("profile-label").focus();
+    void loadExecutorStatus(profile?.profileId);
   }
 
   function closeEditor() {
@@ -748,6 +867,7 @@ footer p + p { margin-top: 3px; }
     byId("profile-form").hidden = true;
     byId("profile-pending").hidden = true;
     byId("reload-profile").hidden = true;
+    void loadExecutorStatus();
   }
 
   function updateCredentialFields() {
@@ -836,10 +956,16 @@ footer p + p { margin-top: 3px; }
       state.snapshot = null;
       byId("save-status").dataset.state = "unknown";
       byId("install-status").dataset.state = "unknown";
+      byId("restart-status").dataset.state = "unknown";
+      byId("gateway-status").dataset.state = "unknown";
       byId("verify-status").dataset.state = "off";
       byId("save-state").textContent = "读取失败";
       byId("install-state").textContent = "未知";
-      byId("verify-state").textContent = "否";
+      byId("restart-state").textContent = "未知";
+      byId("gateway-state").textContent = "未知";
+      byId("verify-state").textContent = "未验证";
+      byId("executor-status-detail").textContent = "配置读取失败；生命周期状态未读取。";
+      renderApplyAvailability();
       setNotice(`读取失败：${messageOf(error)}`, "error");
     } finally {
       setBusy(false);
@@ -847,7 +973,9 @@ footer p + p { margin-top: 3px; }
   }
 
   function markDirty() {
+    state.dirty = true;
     byId("dirty").textContent = "有未保存更改";
+    renderApplyAvailability();
   }
 
   async function saveRoute(event) {
@@ -949,6 +1077,55 @@ footer p + p { margin-top: 3px; }
     }
   }
 
+  async function applyConfiguration() {
+    if (state.busy) return;
+    if (!state.snapshot) {
+      setNotice("配置尚未载入，请先重新载入。", "error");
+      return;
+    }
+    if (state.dirty) {
+      setNotice("有未保存的路由更改；先保存后再应用。", "error");
+      return;
+    }
+    if (state.snapshot.capabilities?.applyApiConfiguration !== true) {
+      setNotice("当前 runtime 未提供 API 配置应用接口；不会自动下载或安装 runtime，也不会关闭或重启 Codex。", "error");
+      return;
+    }
+    const output = byId("apply-result");
+    output.textContent = "正在应用…";
+    output.className = "check-result";
+    setBusy(true);
+    try {
+      const result = await callTool("router_settings_apply", {
+        expectedSha256: state.snapshot.sha256,
+      });
+      if (result.applied === true) {
+        output.textContent = result.restartRequired === true
+          ? "已应用。新增或更新的角色需要完整重启 Codex 后生效。"
+          : "已应用。";
+        output.className = "check-result ok";
+        setNotice(result.detail || "API 配置已应用。");
+        await loadExecutorStatus();
+        if (result.restartRequired === true) {
+          byId("restart-state").textContent = "是";
+          byId("restart-status").dataset.state = "pending";
+        }
+      } else {
+        const reason = text(result.detail) || text(result.reason) || "未应用。";
+        output.textContent = `未应用：${reason}`;
+        output.className = "check-result bad";
+        setNotice(`应用失败：${reason}`, "error");
+      }
+    } catch (error) {
+      const message = messageOf(error);
+      output.textContent = `应用失败：${message}`;
+      output.className = "check-result bad";
+      setNotice(`应用失败：${message}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function connect() {
     setBusy(true);
     try {
@@ -991,6 +1168,7 @@ footer p + p { margin-top: 3px; }
   byId("cancel-profile").addEventListener("click", closeEditor);
   byId("profile-form").addEventListener("submit", saveProfile);
   byId("check-credential").addEventListener("click", checkCredential);
+  byId("apply-api").addEventListener("click", applyConfiguration);
   byId("credential-type").addEventListener("change", updateCredentialFields);
   byId("reload-profile").addEventListener("click", loadSnapshot);
   byId("profile-form").addEventListener("input", () => {
