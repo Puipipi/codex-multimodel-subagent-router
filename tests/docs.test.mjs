@@ -30,6 +30,10 @@ assert.equal(pluginManifest.version, '0.11.2', 'the plugin manifest is the 0.11.
 assert.match(nativeApiRoleFix, /0\.11\.1/i, 'the 0.11.2 fix record identifies the affected version');
 assert.match(nativeApiRoleFix, /unknown agent_type/i, 'the 0.11.2 fix record captures the failed first real role dispatch');
 assert.match(nativeApiRoleFix, /config\/read/i, 'the fix record limits loader evidence to config/read');
+assert.match(readme, /native-api-role-registration-0\.11\.2-2026-10-19/);
+assert.match(pluginDoc, /native-api-role-registration-0\.11\.2-2026-10-19/);
+assert.doesNotMatch(readme, /currently installed 0\.10\.5\/6ec/i, 'README does not describe the historical runtime as current');
+assert.doesNotMatch(pluginDoc, /actual isolated CLI installation has not been run/i, 'PLUGIN reflects the recorded formal installation');
 assert.match(readme, /^# Sol 主控 · 多模型峰谷子代理$/m, 'README uses the unified display name');
 assert.match(skill, /^# Sol 主控 · 多模型峰谷子代理$/m, 'SKILL.md uses the unified display name');
 assert.match(pluginDoc, /^# Sol 主控 · 多模型峰谷子代理$/m, 'PLUGIN.md uses the unified display name');
