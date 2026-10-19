@@ -28,15 +28,27 @@ conflict detection, and concurrent root-config edits. A local app-server
 its `config_file`; it makes no model request and does not establish host menu
 discovery or successful spawn.
 
-The installed 0.11.1 source remains pinned to `c9686e724966a41ce977c66e732539cf3e30afed`.
+The 0.11.1 installation was pinned to source `c9686e724966a41ce977c66e732539cf3e30afed`.
+The 0.11.2 source `19339135e2d08cd21b368bfe1620fc85528b3268` is now formally installed
+as `0.11.2-1933913`. Its release contains 165 files; the canonical owned set
+contains 96 files, and four foreign files were preserved. One explicit Apply
+completed successfully from `2026-10-19T02:24:42.058Z` through
+`2026-10-19T02:24:47.947Z` UTC and reported `restartRequired: true`. The readiness
+gate exited successfully with a safe dispatch descriptor only; it spawned no
+model and sent no API request. The active route remains fixed to Luna. Root
+model, provider, catalog, and base URL settings were unchanged.
+
 The existing runtime build `39140584735` and binary SHA-256
 `48d1d326f2567cdc602c03337674d22da4d1933e36e84d5df229a93ff5ea174b` remain
 unchanged; the native patch provenance SHA-256 remains
 `2a5d6310c76b992ef772e62410c593204b570ff20f6e8a967f43deeac42bc3e7`.
-No runtime was rebuilt or reinstalled for this source fix.
+The matching 48d runtime was reused; no runtime was rebuilt.
 
-The formal installation of this 0.11.2 candidate, full restart, host role
-discovery, and a real native API child spawn remain pending. The paid API role
-was not spawned, and `apiVerified` remains false. The local credential check
-reported by the user only established local credential availability; it sent
-no API request and does not prove upstream authentication or a model response.
+The observed backend processes all predate the Apply, so they do not establish
+a post-restart host state. A full Codex restart, host role discovery, the
+authorized real native API child spawn, and usage evidence remain pending. The
+paid API role was not spawned, and `apiVerified` remains false. The user reported
+that the settings-panel local credential check succeeded and stated that it
+sent no API request. This establishes local credential availability only; it
+does not establish upstream authentication or a model response. Historical
+DeepSeek desktop acceptance remains separate and is not generic API acceptance.
