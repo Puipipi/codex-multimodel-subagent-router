@@ -33,8 +33,9 @@ migrated.
   gateway identity. It created no Task, registry, journal, or role. This
   record does not change that observed state or the 0.11.0 acceptance record.
 - When this source-fix record was first written, formal Apply and desktop
-  acceptance for 0.11.1 were pending. The subsequent installation evidence is
-  recorded below.
+  acceptance for 0.11.1 were pending. Formal installation was subsequently
+  recorded below; the later post-restart observations are recorded in
+  [Post-restart observation](#post-restart-observation).
 
 The runtime is reused from run `39140584735`, head `51381b…`, artifact
 `12144790530`, binary SHA-256
@@ -70,8 +71,40 @@ one running API Task. This does not establish that the second Apply was
 idempotent, and this record does not claim to preserve its response.
 
 The local API gate generated spawn metadata but did not spawn a child or make a
-model-interface call; `apiVerified` remains false. Full application restart,
-desktop acceptance, and a real API child task remain pending. Paid model tests
-are paused under the user's Luna-only instruction and were not run. The later
-documentation commit does not change or reinstall the pinned 0.11.1 plugin
-source.
+model-interface call; at that point `apiVerified` remained false. Full
+application restart and desktop acceptance were then pending; their later
+observations are recorded below. Paid model tests are paused under the user's
+Luna-only instruction and were not run. The later documentation commit does
+not change or reinstall the pinned 0.11.1 plugin source.
+
+## Post-restart observation
+
+At 09:34 China Standard Time on 2026-10-19, Codex was fully exited and
+restarted. Sol independently observed the old process exit and verified that
+the new running binary SHA-256, `48d1d326f2567cdc602c03337674d22da4d1933e36e84d5df229a93ff5ea174b`,
+matches build `39140584735`. The installed 0.11.1 source remains pinned to
+`c9686e724966a41ce977c66e732539cf3e30afed`; this observation did not reinstall
+or rebuild it. The root model remained `gpt-6.1-sol`, with no provider or
+base-URL override, and the route remained fixed to Luna.
+
+The formal native-agent API gate exited successfully and parsed
+`native_api_b313e8db39e5df95adabdf63` as `deepseek-flash`. The gate can launch
+and inspect the local API gateway, but this run did not spawn a child or make a
+model API request. The registered role/catalog has the four reasoning levels
+`none`, `low`, `high`, and `max`, with `high` as default, and the DSH account
+references. Consequently, the gate result does not establish a successful
+model-interface call; `apiVerified` remains false.
+
+The user reported that the MCP settings card appeared, that expanding it showed
+the fixed/automatic peak-valley controls and fixed/peak/valley executor
+choices, and that selecting Luna then saving the route displayed success.
+Sol subsequently confirmed the route JSON still reported `fixed/luna`. These
+UI observations come from the user's report: the automation interface exposed
+no browser tabs, and no screenshot was captured, so this is not recorded as an
+automated visual UI check. The user's credential-check result has not been
+received and remains unverified.
+
+A real generic API-role task remains unspawned. The restart and reported UI
+controls/save are partial observations only; end-to-end API acceptance remains
+incomplete. No paid role test was run, in accordance with the user's Luna-only
+instruction.
