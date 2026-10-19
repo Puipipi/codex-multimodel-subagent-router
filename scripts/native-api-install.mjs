@@ -153,6 +153,10 @@ function samePath(left, right) {
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+function nativeApiRolePath(codexHome, profileId) {
+  return path.join(codexHome, ...apiIdentifiers(profileId).roleFile.split("/"));
+}
+
 function assertRegistryEntry(registry, journal, profileId) {
   const entry = registry?.value?.profiles?.[profileId];
   if (!entry) throw new Error(`native API registry has no entry for profile ${profileId}`);
@@ -404,7 +408,7 @@ export async function prepare(options = {}, dependencies = {}) {
   if (existingIds.length) {
     const configSnapshot = await snapshotFile(path.join(codexHome, "config.toml"), "Codex config");
     const current = configSnapshot.exists ? configSnapshot.bytes.toString("utf8") : "";
-    if (composeApiConfig(current, { profileIds: existingIds, gatewayBaseUrl }) !== current) {
+    if (composeApiConfig(current, { profileIds: existingIds, gatewayBaseUrl, codexHome }) !== current) {
       throw new Error("installed native API providers changed outside their owned config block");
     }
   }
@@ -425,7 +429,7 @@ export async function prepare(options = {}, dependencies = {}) {
     throw new Error("native API config block exists without an owned registry; refusing to adopt it");
   }
   const nextIds = [...existingIds, profileId];
-  const nextConfig = composeApiConfig(priorConfig, { profileIds: nextIds, gatewayBaseUrl });
+  const nextConfig = composeApiConfig(priorConfig, { profileIds: nextIds, gatewayBaseUrl, codexHome });
   const nextRegistry = registryNext(registrySnapshot.value, profileId, artifacts);
   const taskPlan = gatewayTaskPlan({ paths: paths.service, gatewayScriptPath: gatewayScript, service: "api", settingsPath: taskSettingsPath });
   const taskSnapshot = await snapshotGatewayTask(taskPlan, tasks);
@@ -531,6 +535,9 @@ async function assertPrepared(journal, tasks, verifyRuntime, verifySource) {
   if (JSON.stringify(currentTask) !== JSON.stringify(journal.gateway.taskSnapshot)) {
     throw new Error("native API Task Scheduler task changed since prepare");
   }
+  if (!samePath(journal.files.role.path, nativeApiRolePath(journal.paths.codexHome, journal.profile.profileId))) {
+    throw new Error("native API role path changed since prepare");
+  }
 }
 
 async function verifiedGatewayBaseUrl(journal) {
@@ -627,6 +634,9 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
       throw new Error(`native API ${name} changed after activation; refusing rollback`);
     }
   }
+  if (!samePath(journal.files.role.path, nativeApiRolePath(journal.paths.codexHome, journal.profile.profileId))) {
+    throw new Error("native API role path changed after activation; refusing rollback");
+  }
   if (!journal.completed.launcher || !journal.gateway.launcher) {
     throw new Error("native API install journal has no activated launcher; reinstall the profile");
   }
@@ -642,8 +652,14 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
   const allComposed = composeApiConfig(currentConfig, {
     profileIds: registryIds,
     gatewayBaseUrl,
+    codexHome: journal.paths.codexHome,
   });
-  if (currentConfig !== allComposed) {
+  const legacyComposed = composeApiConfig(currentConfig, {
+    profileIds: registryIds,
+    gatewayBaseUrl,
+    registerAgentRoles: false,
+  });
+  if (currentConfig !== allComposed && currentConfig !== legacyComposed) {
     throw new Error("native API provider block changed after activation; refusing rollback");
   }
   const remainingIds = registryIds.filter((id) => id !== journal.profile.profileId);
@@ -651,8 +667,9 @@ export async function rollback({ journalPath } = {}, dependencies = {}) {
     ? composeApiConfig(journal.config.priorText, {
       profileIds: journal.config.profileIds.filter((id) => id !== journal.profile.profileId),
       gatewayBaseUrl,
+      codexHome: journal.paths.codexHome,
     })
-    : composeApiConfig(currentConfig, { profileIds: remainingIds, gatewayBaseUrl });
+    : composeApiConfig(currentConfig, { profileIds: remainingIds, gatewayBaseUrl, codexHome: journal.paths.codexHome });
   const nextRegistry = registryWithout(registry.value, journal.profile.profileId);
   let origin = null;
   if (remainingIds.length === 0) {
@@ -762,11 +779,18 @@ export async function inspectNativeApiDispatchState({
       throw new Error(`native API ${name} changed after activation`);
     }
   }
+  if (!samePath(journal.files.role.path, nativeApiRolePath(journal.paths.codexHome, profileId))) {
+    throw new Error("native API role path changed after activation");
+  }
   const registry = await readRegistry(journal.files.registry.path);
   assertRegistryEntry(registry, journal, profileId);
   const configBytes = await readRegularOrAbsent(journal.config.path, "Codex config");
   const config = configBytes === null ? "" : configBytes.toString("utf8");
-  const composed = composeApiConfig(config, { profileIds: Object.keys(registry.value.profiles), gatewayBaseUrl });
+  const composed = composeApiConfig(config, {
+    profileIds: Object.keys(registry.value.profiles),
+    gatewayBaseUrl,
+    codexHome: journal.paths.codexHome,
+  });
   if (composed !== config) throw new Error("native API provider config changed after activation");
   if (rootApiReference(config, gatewayBaseUrl)) {
     throw new Error("the root Sol provider references the native API gateway");
@@ -928,7 +952,8 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
 
   let installed = false;
   if (journal?.phase === "active" && journal.completed?.launcher && journal.completed?.files && journal.completed?.task) {
-    const roleOk = sameBytes(await readRegularOrAbsent(journal.files.role.path, "managed file"), journal.files.role.next);
+    const roleOk = samePath(journal.files.role.path, nativeApiRolePath(journal.paths.codexHome, selected.profileId))
+      && sameBytes(await readRegularOrAbsent(journal.files.role.path, "managed file"), journal.files.role.next);
     const catalogOk = sameBytes(await readRegularOrAbsent(journal.files.catalog.path, "managed file"), journal.files.catalog.next);
     const launcherOk = Boolean(journal.gateway?.launcher) && sameBytes(
       await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher"),
@@ -949,6 +974,7 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
       configOk = composeApiConfig(config, {
         profileIds: registry ? Object.keys(registry.value.profiles) : journal.config.profileIds,
         gatewayBaseUrl: apiGatewayBaseUrl(identity),
+        codexHome: journal.paths.codexHome,
       }) === config;
     } catch { configOk = false; }
     installed = roleOk && catalogOk && launcherOk && configOk && registryOk;
@@ -987,6 +1013,52 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
   };
 }
 
+async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir, dependencies }) {
+  if (journal.phase !== "active" || !journal.completed?.launcher || !journal.completed?.files || !journal.completed?.task
+      || path.resolve(journal.paths.codexHome) !== path.resolve(codexHome)
+      || path.resolve(journal.paths.versionDir) !== path.resolve(runtimeDir)) return false;
+  await (dependencies.verifyRuntimeVersion || verifyRuntimeVersion)(journal.paths.versionDir);
+  if (!journal.source.direct) {
+    await (dependencies.verifyGatewaySource || verifyGatewaySource)(journal.source, { runtimeRoot: journal.paths.gatewaySourceRoot });
+  }
+  if (!samePath(journal.files.role.path, nativeApiRolePath(codexHome, journal.profile.profileId))) return false;
+  for (const name of ["role", "catalog"]) {
+    const item = journal.files[name];
+    if (!sameBytes(await readRegularOrAbsent(item.path, "managed file"), item.next)) return false;
+  }
+  if (!journal.gateway.launcher || !sameBytes(
+    await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher"),
+    journal.gateway.launcher.next,
+  )) return false;
+  const registry = await readRegistry(journal.files.registry.path);
+  assertRegistryEntry(registry, journal, journal.profile.profileId);
+  const identityBytes = await readRegularOrAbsent(journal.gateway.identityFile, "native API gateway identity");
+  if (identityBytes === null || sha256(identityBytes) !== journal.gateway.identitySha256) return false;
+  const identity = await readGatewayIdentity(apiServicePaths(journal.paths.apiDir));
+  const configBytes = await readRegularOrAbsent(journal.config.path, "Codex config");
+  const currentConfig = configBytes === null ? "" : configBytes.toString("utf8");
+  const profileIds = Object.keys(registry.value.profiles);
+  const gatewayBaseUrl = apiGatewayBaseUrl(identity);
+  if (rootApiReference(currentConfig, gatewayBaseUrl)) return false;
+  const legacyConfig = composeApiConfig(currentConfig, {
+    profileIds,
+    gatewayBaseUrl,
+    registerAgentRoles: false,
+  });
+  if (legacyConfig !== currentConfig) return false;
+  const nextConfig = composeApiConfig(currentConfig, { profileIds, gatewayBaseUrl, codexHome });
+  if (nextConfig === currentConfig) return false;
+  const tasks = dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
+  const task = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
+  if (!task.exists || !task.owned || task.specMatches !== true || !task.enabled) return false;
+  const configBeforeWrite = await readRegularOrAbsent(journal.config.path, "Codex config");
+  if (!sameBytes(configBeforeWrite, configBytes)) {
+    throw new Error("Codex config changed during legacy API role registration repair; preserving the later change");
+  }
+  await atomicWrite(journal.config.path, Buffer.from(nextConfig, "utf8"));
+  return true;
+}
+
 export async function applyApiConfiguration({ settings, expectedSha256 } = {}, dependencies = {}) {
   const validated = validateRouterSettings(settings);
   const apiDir = dependencies.apiDir || defaultNativeApiDir();
@@ -1017,6 +1089,7 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
   }
   const applied = [];
   const alreadyInstalled = [];
+  const repairedRegistrations = [];
   for (const profileId of Object.keys(validated.profiles)) {
     const journalPath = paths.journal(profileId);
     const existing = await journalIfPresent(journalPath);
@@ -1024,6 +1097,7 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
       if (existing.paths?.versionDir !== runtime.versionDir) {
         throw new Error(`API profile ${profileId} is active with a different runtime; rollback or reinstall it before counting it as installed`);
       }
+      const repaired = await repairLegacyApiRoleRegistrations(existing, { codexHome, runtimeDir: runtime.versionDir, dependencies });
       try {
         await inspectNativeApiDispatchState({
           profileId,
@@ -1037,7 +1111,10 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
       } catch (error) {
         throw new Error(`API profile ${profileId} is active but incomplete or changed (${error.message}); rollback or reinstall it before counting it as installed`);
       }
-      alreadyInstalled.push(profileId);
+      if (repaired) {
+        applied.push(profileId);
+        repairedRegistrations.push(profileId);
+      } else alreadyInstalled.push(profileId);
       continue;
     }
     if (existing?.phase === "prepared") {
@@ -1063,7 +1140,9 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
     supported: true,
     restartRequired: applied.length > 0,
     detail: applied.length > 0
-      ? "API role/catalog/provider 与 Task 事务已应用；新增角色需要完整重启 Codex。"
+      ? repairedRegistrations.length
+        ? "API 角色、目录和 provider 注册已修复；需要完整重启 Codex。"
+        : "API role/catalog/provider 与 Task 事务已应用；新增角色需要完整重启 Codex。"
       : "API 配置已安装；没有新增角色。",
     appliedProfiles: applied,
     alreadyInstalled,

@@ -179,15 +179,47 @@ function hasForeignProvider(content, providerId) {
   return content.replace(/\r\n/g, "\n").split("\n").some((line) => table.test(line) || dotted.test(line));
 }
 
-export function composeApiConfig(content, { profileIds = [], gatewayBaseUrl } = {}) {
+function hasForeignAgent(content, roleName) {
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const key = (value) => `(?:${escape(value)}|"${escape(value)}"|'${escape(value)}')`;
+  const agentsKey = key("agents");
+  const roleKey = key(roleName);
+  const directTable = new RegExp(`^\\s*\\[{1,2}\\s*${agentsKey}\\s*\\.\\s*${roleKey}(?:\\s*\\.|\\s*\\])`);
+  const agentsTable = new RegExp(`^\\s*\\[{1,2}\\s*${agentsKey}\\s*\\]{1,2}`);
+  const dotted = new RegExp(`^\\s*${agentsKey}\\s*\\.\\s*${roleKey}(?:\\s*\\.|\\s*=)`);
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  let insideAgentsTable = false;
+  let insideRootInlineAgents = false;
+  for (const line of lines) {
+    const visible = line.replace(/\s+#.*$/, "").trim();
+    if (/^\s*\[/.test(visible)) {
+      insideAgentsTable = agentsTable.test(visible);
+      insideRootInlineAgents = false;
+      if (directTable.test(visible)) return true;
+      continue;
+    }
+    if (insideAgentsTable && new RegExp(`^\\s*${roleKey}(?:\\s*\\.|\\s*=)`).test(visible)) return true;
+    if (new RegExp(`^\\s*${agentsKey}\\s*=\\s*\\{`).test(visible)) insideRootInlineAgents = true;
+    if (insideRootInlineAgents && new RegExp(`(?:^|[,\\s{])${roleKey}\\s*=`).test(visible)) return true;
+    if (dotted.test(visible)) return true;
+  }
+  return false;
+}
+
+export function composeApiConfig(content, { profileIds = [], gatewayBaseUrl, codexHome, registerAgentRoles = true } = {}) {
   if (typeof content !== "string") throw new TypeError("content must be a string");
   const ids = [...new Set(profileIds)].sort();
   for (const id of ids) apiIdentifiers(id);
+  if (ids.length && registerAgentRoles && (typeof codexHome !== "string" || !path.isAbsolute(codexHome))) {
+    throw new Error("codexHome must be absolute to register native API roles");
+  }
   const existingBlock = blockRange(content);
   if (existingBlock) {
     for (const line of existingBlock.lines.slice(existingBlock.start + 1, existingBlock.end)) {
       const visible = line.replace(/\s+#.*$/, "").trim();
-      if (visible.startsWith("[") && !/^\[model_providers\.api-native-[a-f0-9]{24}\]$/.test(visible)) {
+      if (visible.startsWith("[")
+          && !/^\[model_providers\.api-native-[a-f0-9]{24}\]$/.test(visible)
+          && !/^\[agents\.native_api_[a-f0-9]{24}\]$/.test(visible)) {
         throw new Error("the native API config block contains a foreign table; refusing to replace it");
       }
     }
@@ -196,6 +228,8 @@ export function composeApiConfig(content, { profileIds = [], gatewayBaseUrl } = 
   for (const id of ids) {
     const providerId = apiIdentifiers(id).providerId;
     if (hasForeignProvider(base, providerId)) throw new Error(`user-owned provider config conflicts with ${providerId}`);
+    const roleName = apiIdentifiers(id).roleName;
+    if (registerAgentRoles && hasForeignAgent(base, roleName)) throw new Error(`user-owned agent config conflicts with ${roleName}`);
   }
   if (ids.length === 0) {
     const trimmed = base.replace(/\n{3,}/g, "\n\n").trimEnd();
@@ -203,6 +237,17 @@ export function composeApiConfig(content, { profileIds = [], gatewayBaseUrl } = 
   }
   if (typeof gatewayBaseUrl !== "string" || !gatewayBaseUrl) throw new Error("gatewayBaseUrl is required to compose native API providers");
   const tables = ids.map((id) => buildApiProviderTable(id, apiProfileBaseUrl(gatewayBaseUrl, id)));
+  if (registerAgentRoles) {
+    for (const id of ids) {
+      const identifiers = apiIdentifiers(id);
+      const rolePath = path.join(codexHome, ...identifiers.roleFile.split("/"));
+      tables.push(
+        `[agents.${identifiers.roleName}]`,
+        `description = ${tomlString(`Native API profile ${id}`)}`,
+        `config_file = ${tomlString(rolePath)}`,
+      );
+    }
+  }
   const block = [API_CONFIG_BEGIN, ...tables, API_CONFIG_END].join("\n");
   return `${base.trimEnd()}${base.trimEnd() ? "\n\n" : ""}${block}\n`;
 }

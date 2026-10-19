@@ -4,8 +4,11 @@ import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } f
 import os from "node:os";
 import path from "node:path";
 import { createApiProfile, defaultRouterSettingsPath, readRouterSettingsSnapshot, saveRouterSettings } from "../scripts/native-api-settings.mjs";
+import { apiGatewayBaseUrl, composeApiConfig } from "../scripts/native-api-artifacts.mjs";
 import {
   activate,
+  applyApiConfiguration,
+  getExecutorStatus,
   inspectNativeApiDispatchState,
   nativeApiPaths,
   prepare,
@@ -309,6 +312,51 @@ try {
   const configAB = await readFile(path.join(codexHome, "config.toml"), "utf8");
   assert.match(configAB, new RegExp(`api-native-${profileB.profileId}`));
   equal(tasks.registers, 1, "adding a second profile reuses the owned API task");
+  const providerOnlyLegacyConfig = composeApiConfig(configAB, {
+    profileIds: [profileA.profileId, profileB.profileId],
+    gatewayBaseUrl: apiGatewayBaseUrl(identity),
+    registerAgentRoles: false,
+  });
+  await writeFile(path.join(codexHome, "config.toml"), providerOnlyLegacyConfig, "utf8");
+  delete settings.profiles[profileC.profileId];
+  await writeFile(paths.settings, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+  const applyDependencies = {
+    ...dependencies,
+    apiDir,
+    settingsPath: paths.settings,
+    codexHome,
+    env: { SOL_LUNA_NATIVE_API_VERSION_DIR: path.join(root, "runtime") },
+  };
+  const legacyStatus = await getExecutorStatus({ settings, profileId: profileA.profileId }, applyDependencies);
+  equal(legacyStatus.installed, false, "status rejects the previously active provider-only profile config");
+  const repaired = await applyApiConfiguration({ settings }, applyDependencies);
+  equal(repaired.applied, true, "explicit Apply repairs active legacy profiles");
+  equal(repaired.appliedProfiles.includes(profileA.profileId), true, "Apply records the repaired profile");
+  equal(repaired.alreadyInstalled.includes(profileB.profileId), true, "Apply recognizes the second repaired profile as installed");
+  const repairedConfig = await readFile(path.join(codexHome, "config.toml"), "utf8");
+  assert.match(repairedConfig, new RegExp(`\\[agents\\.native_api_${profileA.profileId}\\]`));
+  assert.match(repairedConfig, new RegExp(`\\[agents\\.native_api_${profileB.profileId}\\]`));
+  assert.match(repairedConfig, /^model = "gpt-6\.1-sol"/m);
+  assert.match(repairedConfig, /\[model_providers\.deepseek-native\]/);
+  checks += 1;
+  await writeFile(path.join(codexHome, "config.toml"), providerOnlyLegacyConfig, "utf8");
+  let injectedExternalEdit = false;
+  const racingTasks = {
+    ...tasks,
+    async status() {
+      const result = await tasks.status();
+      if (!injectedExternalEdit) {
+        injectedExternalEdit = true;
+        await writeFile(path.join(codexHome, "config.toml"), `${providerOnlyLegacyConfig}\n# user edit during repair\n`, "utf8");
+      }
+      return result;
+    },
+  };
+  await rejects(() => applyApiConfiguration({ settings }, { ...applyDependencies, taskAdapter: racingTasks }), /Codex config changed during legacy API role registration repair/);
+  assert.match(await readFile(path.join(codexHome, "config.toml"), "utf8"), /# user edit during repair/);
+  await writeFile(path.join(codexHome, "config.toml"), repairedConfig, "utf8");
+  settings.profiles[profileC.profileId] = profileC;
+  await writeFile(paths.settings, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   const inspectedAWithB = await inspectNativeApiDispatchState({
     profileId: profileA.profileId,
     apiDir,
@@ -333,7 +381,10 @@ try {
   equal(rolledBackAWithB.remainingProfiles.includes(profileB.profileId), true, "rolling back A while B remains preserves B");
   await rejectMissing(path.join(codexHome, "agents", `native_api_${profileA.profileId}.toml`), "A role is removed first");
   ok((await readFile(path.join(codexHome, "agents", `native_api_${profileB.profileId}.toml`), "utf8")).includes("unbounded_connection_retries"), "B role remains after A rollback");
-  assert.match(await readFile(path.join(codexHome, "config.toml"), "utf8"), new RegExp(`api-native-${profileB.profileId}`));
+  const configAfterRollbackA = await readFile(path.join(codexHome, "config.toml"), "utf8");
+  assert.match(configAfterRollbackA, new RegExp(`api-native-${profileB.profileId}`));
+  assert.match(configAfterRollbackA, new RegExp(`\\[agents\\.native_api_${profileB.profileId}\\]`));
+  assert.doesNotMatch(configAfterRollbackA, new RegExp(`\\[agents\\.native_api_${profileA.profileId}\\]`));
   equal((await tasks.status()).exists, true, "A rollback preserves the shared B task");
   equal((await readFile(launcherPath)).length > 0, true, "A rollback preserves the shared B launcher");
   equal((await status({ journalPath: journalA })).phase, "rolled_back", "A journal is terminal after its rollback");

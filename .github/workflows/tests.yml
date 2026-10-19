@@ -92,7 +92,10 @@ jobs:
       - name: Native config/read local gate (requires local Codex)
         if: ${{ vars.RUN_NATIVE_CONFIG_READ == 'true' }}
         shell: pwsh
-        run: node tests/native-config-read.test.mjs
+        run: |
+          node tests/native-config-read.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/native-api-config-read.test.mjs
       # Opt-in real-CLI adapter smoke. This step must fail, not silently skip,
       # when the gate is enabled without an explicit binary and hash.
       - name: Native API CLI smoke (opt-in, explicit binary/hash)

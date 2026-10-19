@@ -227,6 +227,47 @@ try {
     }, dependencies);
     equal(ready.ready, true, "gate accepts activated role/provider/catalog/task/health");
 
+    const rootConfigPath = path.join(codexHome, "config.toml");
+    const activeConfig = await readFile(rootConfigPath, "utf8");
+    const roleRegistration = `[agents.native_api_${profile.profileId}]\ndescription = "Native API profile ${profile.profileId}"\nconfig_file = ${JSON.stringify(path.join(codexHome, "agents", `native_api_${profile.profileId}.toml`))}`;
+    assert.ok(activeConfig.includes(roleRegistration), "activation registers the generated role file in root config");
+    assert.match(activeConfig, /^model = "gpt-6\.1-sol"/m);
+    checks += 1;
+    const legacyConfig = activeConfig.replace(new RegExp(`\\n\\[agents\\.native_api_${profile.profileId}\\]\\n[^\\n]*\\n[^\\n]*`), "");
+    assert.notEqual(legacyConfig, activeConfig, "fixture models the previously active provider-only config");
+    await writeFile(rootConfigPath, legacyConfig, "utf8");
+    await rejects(() => inspectNativeApiDispatchState({
+      profileId: profile.profileId,
+      apiDir,
+      settingsPath: paths.settings,
+      taskAdapter: tasks,
+    }, dependencies), /provider config changed/);
+    const applyDependencies = {
+      ...dependencies,
+      apiDir,
+      settingsPath: paths.settings,
+      codexHome,
+      env: { SOL_LUNA_NATIVE_API_VERSION_DIR: path.join(tempRoot, "runtime") },
+    };
+    const legacyStatus = await getExecutorStatus({ settings, profileId: profile.profileId }, applyDependencies);
+    equal(legacyStatus.installed, false, "status does not claim a provider-only legacy block is dispatch ready");
+    equal(legacyStatus.apiVerified, false, "legacy status does not claim an API model request");
+    const repaired = await applyApiConfiguration({ settings }, applyDependencies);
+    equal(repaired.applied, true, "explicit Apply repairs a safe legacy role registration");
+    equal(repaired.appliedProfiles.includes(profile.profileId), true, "Apply reports the repaired registration as applied");
+    const repairedConfig = await readFile(rootConfigPath, "utf8");
+    assert.ok(repairedConfig.includes(roleRegistration), "Apply restores the exact generated role file registration");
+    assert.match(repairedConfig, /^model = "gpt-6\.1-sol"/m);
+    checks += 1;
+    const repairedDispatch = await inspectNativeApiDispatchState({
+      profileId: profile.profileId,
+      apiDir,
+      settingsPath: paths.settings,
+      taskAdapter: tasks,
+      requireRunning: true,
+    }, dependencies);
+    equal(repairedDispatch.ready, true, "dispatch gate accepts the repaired legacy profile");
+
     await writeFile(launcherPath, "tampered");
     await rejects(() => inspectNativeApiDispatchState({
       profileId: profile.profileId,

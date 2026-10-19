@@ -88,30 +88,66 @@ const root = [
   "[model_providers.deepseek-native]",
   'base_url = "http://127.0.0.1:1/token/v1"',
 ].join("\n");
-const composed = composeApiConfig(root, { profileIds: [profile.profileId], gatewayBaseUrl });
+const composed = composeApiConfig(root, { profileIds: [profile.profileId], gatewayBaseUrl, codexHome });
 assert.match(composed, /^model = "gpt-6\.1-sol"/m);
 assert.match(composed, /\[model_providers\.deepseek-native\]/);
-equal(composeApiConfig(composed, { profileIds: [profile.profileId], gatewayBaseUrl }), composed, "compose is idempotent");
-equal(composeApiConfig(composed, { profileIds: [], gatewayBaseUrl }), `${root}\n`, "removing the API block preserves foreign configuration");
+assert.match(composed, new RegExp(`\\[agents\\.${ids.roleName}\\]`));
+assert.ok(composed.includes(`config_file = ${JSON.stringify(rendered.rolePath)}`), "registration points to the precise generated role file");
+equal(composeApiConfig(composed, { profileIds: [profile.profileId], gatewayBaseUrl, codexHome }), composed, "compose is idempotent");
+equal(composeApiConfig(composed, { profileIds: [], gatewayBaseUrl, codexHome }), `${root}\n`, "removing the API block preserves foreign configuration");
 const two = composeApiConfig(composed, {
   profileIds: [profile.profileId, small.profileId],
   gatewayBaseUrl,
+  codexHome,
 });
 ok(two.includes(`[model_providers.api-native-${small.profileId}]`), "additional profiles are added to the owned block");
+ok(two.includes(`[agents.native_api_${small.profileId}]`), "additional profiles register their native agent role");
 ok(two.indexOf(API_CONFIG_BEGIN) < two.indexOf(API_CONFIG_END), "owned block has ordered markers");
 
 assert.throws(() => composeApiConfig(`${root}\n\n[model_providers.${ids.providerId}]\nbase_url = "https://foreign.invalid"\n`, {
   profileIds: [profile.profileId],
   gatewayBaseUrl,
+  codexHome,
 }), /conflicts/);
 checks += 1;
 assert.throws(() => composeApiConfig(`${root}\nmodel_providers.${ids.providerId}.base_url = "https://foreign.invalid"\n`, {
   profileIds: [profile.profileId],
   gatewayBaseUrl,
+  codexHome,
+}), /conflicts/);
+checks += 1;
+assert.throws(() => composeApiConfig(`${root}\n\n[agents.${ids.roleName}]\nconfig_file = "C:/owned-by-user.toml"\n`, {
+  profileIds: [profile.profileId],
+  gatewayBaseUrl,
+  codexHome,
+}), /conflicts/);
+checks += 1;
+assert.throws(() => composeApiConfig(`${root}\n\n["agents"."${ids.roleName}"]\nconfig_file = "C:/owned-by-user.toml"\n`, {
+  profileIds: [profile.profileId],
+  gatewayBaseUrl,
+  codexHome,
+}), /conflicts/);
+checks += 1;
+assert.throws(() => composeApiConfig(`${root}\n\n[agents]\n"${ids.roleName}" = { config_file = "C:/owned-by-user.toml" }\n`, {
+  profileIds: [profile.profileId],
+  gatewayBaseUrl,
+  codexHome,
+}), /conflicts/);
+checks += 1;
+assert.throws(() => composeApiConfig(`${root}\n\n[agents]\n${ids.roleName}.description = "user role"\n`, {
+  profileIds: [profile.profileId],
+  gatewayBaseUrl,
+  codexHome,
+}), /conflicts/);
+checks += 1;
+assert.throws(() => composeApiConfig(`${root}\n\n[agents]\n"${ids.roleName}".description = "user role"\n`, {
+  profileIds: [profile.profileId],
+  gatewayBaseUrl,
+  codexHome,
 }), /conflicts/);
 checks += 1;
 const foreignInside = composed.replace(API_CONFIG_END, `[foreign.inside]\nvalue = "preserve"\n${API_CONFIG_END}`);
-assert.throws(() => composeApiConfig(foreignInside, { profileIds: [profile.profileId], gatewayBaseUrl }), /foreign table/);
+assert.throws(() => composeApiConfig(foreignInside, { profileIds: [profile.profileId], gatewayBaseUrl, codexHome }), /foreign table/);
 checks += 1;
 
 console.log(`PASS ${checks} native API artifact assertions`);
