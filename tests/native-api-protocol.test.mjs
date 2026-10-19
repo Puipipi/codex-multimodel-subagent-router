@@ -529,6 +529,36 @@ test("official DeepSeek Responses normalization follows the documented field sup
   }, deepseekResponsesProfile), /encrypted/i);
 });
 
+test("official DeepSeek Responses maps native agent_message to a standard user message without losing content", () => {
+  const content = [
+    { type: "input_text", text: "local fixture task" },
+    { type: "input_image", image_url: "data:image/png;base64,AA==", detail: "auto" },
+  ];
+  const originalHistory = [
+    { type: "agent_message", id: "msg_local", content },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "follow-up" }] },
+    { type: "function_call", call_id: "call_local", name: "exec", arguments: "{}" },
+  ];
+  const normalized = normalizeOfficialDeepSeekResponsesRequest({
+    model: "deepseek-flash", input: originalHistory,
+  }, deepseekResponsesProfile);
+  assert.deepEqual(normalized.input[0], { type: "message", role: "user", content });
+  assert.deepEqual(normalized.input.slice(1), originalHistory.slice(1));
+  assert.deepEqual(originalHistory[0], { type: "agent_message", id: "msg_local", content });
+  const chat = responsesRequestToChat({ model: "deepseek-flash", input: [{ type: "agent_message", content: "local fixture task" }] }, deepseekChatProfile);
+  assert.deepEqual(chat.body.messages, [{ role: "user", content: "local fixture task" }]);
+  assert.throws(() => responsesRequestToChat({
+    model: "deepseek-flash", input: [{ type: "agent_message", content: [{ type: "input_image", image_url: "data:image/png;base64,AA==" }] }],
+  }, deepseekChatProfile), /unsupported Responses message content type/i);
+  assert.throws(() => normalizeOfficialDeepSeekResponsesRequest({
+    model: "deepseek-flash",
+    input: [{ type: "agent_message", content: [{ type: "encrypted_content", data: "opaque" }] }],
+  }, deepseekResponsesProfile), /encrypted agent messages/i);
+  assert.throws(() => normalizeOfficialDeepSeekResponsesRequest({
+    model: "deepseek-flash", input: [{ type: "agent_message" }],
+  }, deepseekResponsesProfile), /content/i);
+});
+
 test("maps the standard Responses prompt_cache_key to the standard Chat field", () => {
   const converted = responsesRequestToChat({ model: "mimo-model", input: "x", prompt_cache_key: "test-only-key" }, profile);
   assert.equal(converted.body.prompt_cache_key, "test-only-key");
@@ -766,6 +796,88 @@ test("gateway normalizes official DeepSeek Responses requests and fails closed o
   assert.equal(stored.status, 400);
   assert.match((await stored.json()).error.message, /stateless/i);
   assert.equal(observed.length, 1, "a rejected stateful request must not reach upstream");
+});
+
+test("gateway sends native agent_message as a standard Responses user message and preserves upstream progress/tool/usage", async (t) => {
+  let observed;
+  const taskText = "fixture parent task body";
+  const content = [{ type: "input_text", text: taskText }];
+  const upstreamResponse = {
+    id: "resp-agent-message",
+    object: "response",
+    status: "completed",
+    output: [{ type: "function_call", call_id: "call-fixture", name: "exec", arguments: "{}" }],
+    usage: { input_tokens: 17, output_tokens: 5, total_tokens: 22 },
+  };
+  const progressFrames = [
+    { type: "response.output_text.delta", delta: "working" },
+    { type: "response.output_item.done", item: upstreamResponse.output[0] },
+    { type: "response.completed", response: upstreamResponse },
+  ].map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  const gateway = createNativeApiGateway({
+    resolveProfile: async ({ profileId }) => profileId === PROFILE_ID ? { ...deepseekResponsesProfile, profileId } : null,
+    resolveAuth: async () => ({ headers: {} }),
+    fetchImpl: async (url, init) => {
+      observed = { url: String(url), body: JSON.parse(Buffer.from(init.body).toString("utf8")) };
+      return init.body && JSON.parse(Buffer.from(init.body).toString("utf8")).stream === true
+        ? new Response(progressFrames, { status: 200, headers: { "content-type": "text/event-stream" } })
+        : new Response(JSON.stringify(upstreamResponse), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    token: "local-token",
+    logger: { info() {} },
+  });
+  const { baseUrl } = await gateway.start(0);
+  t.after(() => gateway.close());
+  const response = await fetch(`${baseUrl}/profiles/${PROFILE_ID}/v1/responses`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "deepseek-flash", input: [{ type: "agent_message", content }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(observed.url, "https://api.deepseek.com/responses");
+  assert.deepEqual(observed.body.input, [{ type: "message", role: "user", content }]);
+  const result = await response.json();
+  assert.deepEqual(result.output, upstreamResponse.output);
+  assert.deepEqual(result.usage, upstreamResponse.usage);
+
+  const progress = await fetch(`${baseUrl}/profiles/${PROFILE_ID}/v1/responses`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "deepseek-flash", input: [{ type: "agent_message", content }], stream: true }),
+  });
+  assert.equal(progress.status, 200);
+  const events = await progress.text();
+  assert.match(events, /response\.output_text\.delta/);
+  assert.match(events, /response\.output_item\.done/);
+  assert.match(events, /response\.completed/);
+  assert.match(events, /"total_tokens":22/);
+});
+
+test("gateway normalizes native agent_message for generic Responses profiles without changing other input items", async (t) => {
+  let observed;
+  const genericResponsesProfile = { ...profile, protocol: "responses", baseUrl: "http://127.0.0.1:0/v1" };
+  const content = [{ type: "input_text", text: "generic fixture task" }, { type: "input_image", image_url: "data:image/png;base64,AA==" }];
+  const ordinaryItem = { type: "provider_specific_future_item", value: "preserve" };
+  const providerReasoning = { type: "reasoning", encrypted_content: "provider-owned-opaque-value" };
+  const gateway = createNativeApiGateway({
+    resolveProfile: async ({ profileId }) => profileId === PROFILE_ID ? genericResponsesProfile : null,
+    resolveAuth: async () => ({ headers: {} }),
+    fetchImpl: async (url, init) => {
+      observed = { url: String(url), body: JSON.parse(Buffer.from(init.body).toString("utf8")) };
+      return new Response(JSON.stringify({ id: "generic-response", object: "response", output: [] }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    },
+    token: "local-token",
+    logger: { info() {} },
+  });
+  const { baseUrl } = await gateway.start(0);
+  t.after(() => gateway.close());
+  const response = await fetch(`${baseUrl}/profiles/${PROFILE_ID}/v1/responses`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mimo-model", input: [ordinaryItem, providerReasoning, { type: "agent_message", content }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(observed.url, "http://127.0.0.1:0/v1/responses");
+  assert.deepEqual(observed.body.input, [ordinaryItem, providerReasoning, { type: "message", role: "user", content }]);
 });
 
 test("gateway routes the official DeepSeek v4-pro Responses profile through normalization", async (t) => {

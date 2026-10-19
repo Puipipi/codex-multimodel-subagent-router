@@ -6,6 +6,7 @@ import {
   NativeApiProtocolError,
   chatCompletionToResponse,
   chatSseToResponses,
+  normalizeNativeAgentMessages,
   normalizeOfficialDeepSeekResponsesRequest,
   responseErrorEvent,
   responsesRequestToChat,
@@ -183,7 +184,7 @@ export function createNativeApiGateway({
       if (profile.protocol === "responses") {
         const normalized = isOfficialDeepSeekProfile(profile)
           ? normalizeOfficialDeepSeekResponsesRequest(body, profile)
-          : body;
+          : normalizeNativeAgentMessages(body);
         outgoing = Buffer.from(JSON.stringify(normalized));
       } else {
         const converted = responsesRequestToChat(body, profile);

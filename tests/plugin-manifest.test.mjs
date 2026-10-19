@@ -22,7 +22,7 @@ match(openaiYaml, /display_name: "Sol 主控 · 多模型峰谷子代理"/, 'the
 match(openaiYaml, /default_prompt: "[^"]*\$sol-luna-deepseek-router/, 'the skill default prompt names the canonical skill');
 match(openaiYaml, /policy:\s*\n\s*allow_implicit_invocation: true/, 'the existing skill invocation policy is preserved');
 match(manifest.version, /^\d+\.\d+\.\d+$/, 'the manifest uses strict semver');
-equal(manifest.version, '0.11.3', 'the plugin manifest is the 0.11.3 candidate');
+equal(manifest.version, '0.11.4', 'the plugin manifest is the 0.11.4 candidate');
 ok(manifest.description.length > 20, 'the manifest describes the plugin');
 equal(manifest.author.name, 'Puipipi', 'the manifest names the author');
 match(manifest.repository, /^https:\/\//, 'the repository is an https URL');

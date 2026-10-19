@@ -20,6 +20,26 @@ function invalid(message, code = "invalid_request_error") {
   throw new NativeApiProtocolError(message, { code });
 }
 
+export function normalizeNativeAgentMessages(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) invalid("Request body must be an object.");
+  const request = structuredClone(body);
+  if (Array.isArray(request.input)) {
+    request.input = request.input.map((item) => {
+      if (item?.type !== "agent_message") return item;
+      if (typeof item.content !== "string" && !Array.isArray(item.content)) {
+        invalid("agent_message requires text or content blocks.", "unsupported_parameter");
+      }
+      if ((typeof item.encrypted_content === "string" && item.encrypted_content.length)
+          || (Array.isArray(item.content) && item.content.some((part) => part?.type === "encrypted_content"
+            || (typeof part?.encrypted_content === "string" && part.encrypted_content.length)))) {
+        invalid("Encrypted agent messages cannot be represented as a standard Responses user message.", "unsupported_parameter");
+      }
+      return { type: "message", role: "user", content: item.content };
+    });
+  }
+  return request;
+}
+
 function newId(prefix) {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }
@@ -351,7 +371,7 @@ export function normalizeOfficialDeepSeekResponsesRequest(body, profile) {
     invalid("An official DeepSeek Responses profile is required.");
   }
   if (body.model !== profile.model) invalid("Request model does not match the selected profile.", "model_mismatch");
-  const request = structuredClone(body);
+  const request = normalizeNativeAgentMessages(body);
   if (request.store === true) invalid("DeepSeek Responses is stateless and does not support stored responses.", "unsupported_parameter");
   delete request.store;
   if (request.include !== undefined) {
