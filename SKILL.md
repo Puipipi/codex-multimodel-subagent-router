@@ -59,8 +59,10 @@ must remain not-ready until the user explicitly applies the registration
 repair; never hand-edit its journal or dispatch fallback. A local
 `config/read` check confirms parsed registration only. The 0.11.2 host restart
 and role discovery succeeded, while real dispatch was rejected before child
-creation by a missing catalog-instructions field; the 0.11.3 fix still requires
-Apply and a real spawn observation. See the
+creation by a missing catalog-instructions field. The 0.11.3 catalog repair was
+applied successfully and created a child, but that child made no tool calls and
+returned a generic reply. The 0.11.4 wire fix has only local/mock validation; a
+newly authorized real retest is still required. See the
 [0.11.2 role-registration fix record](docs/native-api-role-registration-0.11.2-2026-10-19.md) and [0.11.3 catalog instructions repair record](docs/native-api-catalog-instructions-0.11.3-2026-10-19.md).
 
 Pass only `task_name`, `agent_type`, `fork_turns: "none"`, and `message` to
