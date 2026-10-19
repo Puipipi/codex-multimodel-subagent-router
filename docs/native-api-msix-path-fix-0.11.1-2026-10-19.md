@@ -101,8 +101,10 @@ choices, and that selecting Luna then saving the route displayed success.
 Sol subsequently confirmed the route JSON still reported `fixed/luna`. These
 UI observations come from the user's report: the automation interface exposed
 no browser tabs, and no screenshot was captured, so this is not recorded as an
-automated visual UI check. The user's credential-check result has not been
-received and remains unverified.
+automated visual UI check. The user also reported that the settings panel's
+local credential check says the credential is available and that no API
+request was sent. This local check does not establish upstream authentication
+or a successful model request.
 
 A real generic API-role task remains unspawned. The restart and reported UI
 controls/save are partial observations only; end-to-end API acceptance remains
