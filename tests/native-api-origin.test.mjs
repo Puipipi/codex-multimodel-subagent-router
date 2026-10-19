@@ -37,6 +37,11 @@ async function fixture(label) {
   const settings = { schemaVersion: 1, mode: "fixed", fixedExecutor: a.profileId, profiles: { [a.profileId]: a, [b.profileId]: b } };
   await mkdir(path.join(codexHome, "agents"), { recursive: true });
   await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-6.1-sol"\nmodel_provider = "openai"\n');
+  await writeFile(path.join(codexHome, "models_cache.json"), JSON.stringify({ models: [{
+    slug: "fixture-native-model",
+    visibility: "list",
+    model_messages: { instructions_template: "You are Codex, an AI coding assistant working in the shared workspace." },
+  }] }));
   await saveRouterSettings(paths.settings, settings);
   const script = path.join(root, "native-api-serve.mjs");
   await writeFile(script, "// fixture\n");

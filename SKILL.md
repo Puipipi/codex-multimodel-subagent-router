@@ -57,9 +57,11 @@ registered in root `config.toml` as `[agents.native_api_<profileId>]` with its
 exact `config_file`. A legacy active install with only the owned provider block
 must remain not-ready until the user explicitly applies the registration
 repair; never hand-edit its journal or dispatch fallback. A local
-`config/read` check confirms parsed registration only. Host role discovery and
-dispatch still require a real spawn observation after a full restart. See the
-[0.11.2 role-registration fix record](docs/native-api-role-registration-0.11.2-2026-10-19.md).
+`config/read` check confirms parsed registration only. The 0.11.2 host restart
+and role discovery succeeded, while real dispatch was rejected before child
+creation by a missing catalog-instructions field; the 0.11.3 fix still requires
+Apply and a real spawn observation. See the
+[0.11.2 role-registration fix record](docs/native-api-role-registration-0.11.2-2026-10-19.md) and [0.11.3 catalog instructions repair record](docs/native-api-catalog-instructions-0.11.3-2026-10-19.md).
 
 Pass only `task_name`, `agent_type`, `fork_turns: "none"`, and `message` to
 `spawn_agent`; do not pass the whole `native_spawn` object. `provider_id`,
@@ -201,7 +203,7 @@ Use native `wait` and `thread/read` for the same child. A timeout means the task
 
 The historical native evidence is recorded in `docs/native-deepseek-acceptance-2026-10-17.md`; it used the earlier shared-provider call contract and does not verify the isolated-role route. The current source includes prepare/activate/rollback/status orchestration, with one host-specific installation in `docs/native-formal-install-2026-10-18.md`, a stable gateway source switch in `docs/native-stable-gateway-acceptance-2026-10-18.md`, and later 0.10.5 desktop observations in `docs/native-desktop-acceptance-0.10.5-2026-10-18.md`. Those observations describe tested host-specific behavior and limits; other hosts require local verification. Package/skill synchronization and publication status are tracked separately from desktop behavior. Do not treat a prepared/configured journal or its static `runtimeObserved=false` diagnostic as the latest runtime observation; consult the dated desktop evidence. Do not treat preparation or configuration alone as desktop acceptance.
 
-The generic OpenAI-compatible API executor backend is described in `docs/native-api-executors.md`. The panel source and this product guidance are integrated; desktop acceptance and final runtime installation remain separate. The historical 0.10.5/6ec runtime predates generic API support; the matching 48d runtime now exists, but a generic API profile still requires root role registration, a full restart, and real spawn acceptance before it is described as ready. See the [0.11.2 role-registration fix record](docs/native-api-role-registration-0.11.2-2026-10-19.md).
+The generic OpenAI-compatible API executor backend is described in `docs/native-api-executors.md`. The 0.11.2 runtime was installed, restarted, and its role was discovered by the host; the real spawn was then rejected before child creation because the generated catalog lacked instructions. The source repair is in the 0.11.3 candidate, but Apply and a real child spawn remain pending. `model/list` does not parse this custom catalog and is not acceptance evidence. See the [0.11.3 catalog instructions repair record](docs/native-api-catalog-instructions-0.11.3-2026-10-19.md).
 
 默认路径仍是高峰 Luna、低谷 DeepSeek。用户显式选择的 API 配置使用 fixed 模式且不判断时段；只有显式 scheduled 才在既有的 DeepSeek 峰谷日历上使用两个 API 选择器。一次性/粘性显式选择优先；选中的执行器失败时明确报告，不静默回退到 Luna、DeepSeek、另一个 API 或另一个账号。DSH 账号或本地 refs 的既有解析规则保留，失败不会试探其他账号或 provider。保存 JSON 只保存配置；“应用 API 配置”仍需兼容且已安装的 runtime，首次新增 role 后要完整重启 Codex。已有 child 继续使用其不可变 profile。首版所有 API child（Responses 与 Chat Completions）都禁用 Codex 内建 web_search，适配器也不声称强制 provider grammar。状态里的本地网关/凭据可用不等于认证或模型调用通过；旧 6ec runtime 为 `runtimeCompatible:false`，generic API role 仍需角色注册、完整重启和实际派发证据。
 

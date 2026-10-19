@@ -8,7 +8,9 @@ import {
   buildApiCatalog,
   buildApiRoleToml,
   composeApiConfig,
+  hasModelInstructions,
   renderApiArtifacts,
+  resolveApiModelInstructions,
 } from "../scripts/native-api-artifacts.mjs";
 import { createApiProfile } from "../scripts/native-api-settings.mjs";
 
@@ -29,6 +31,23 @@ const token = "local-token-1234567890";
 const gatewayBaseUrl = `http://127.0.0.1:42123/${token}`;
 const baseUrl = `http://127.0.0.1:42123/${token}/profiles/${profile.profileId}/v1`;
 const ids = apiIdentifiers(profile.profileId);
+const modelMessages = {
+  instructions_template: "You are Codex, an AI coding assistant. Follow the user's request and work in the shared workspace.",
+  persistent_instructions: "Keep the coding task focused.",
+  approvals: { policy: "never" },
+};
+const nativeCache = { models: [{ slug: "native-model", visibility: "list", model_messages: modelMessages }] };
+assert.deepEqual(resolveApiModelInstructions(nativeCache), { model_messages: modelMessages });
+checks += 1;
+const baseInstructions = "Native base instructions";
+assert.deepEqual(resolveApiModelInstructions({ models: [{ visibility: "list", base_instructions: baseInstructions }] }), {
+  base_instructions: baseInstructions,
+});
+equal(buildApiCatalog(profile, { base_instructions: baseInstructions }).models[0].base_instructions,
+  baseInstructions, "API catalogs preserve the valid base_instructions schema alternative");
+ok(hasModelInstructions({ base_instructions: "Base model instructions" }), "a non-empty base_instructions field satisfies the native catalog schema");
+ok(hasModelInstructions({ model_messages: { instructions_template: modelMessages.instructions_template } }), "a non-empty model_messages template satisfies the native catalog schema");
+equal(hasModelInstructions({ model_messages: { instructions_template: "  " } }), false, "empty instruction fields do not satisfy the native catalog schema");
 
 equal(ids.roleName, `native_api_${profile.profileId}`, "role name derives from the profile id");
 equal(ids.providerId, `api-native-${profile.profileId}`, "provider id derives from the profile id");
@@ -42,7 +61,10 @@ assert.match(role, /unbounded_connection_retries = false/);
 assert.doesNotMatch(role, /baseUrl|credential|EXAMPLE_API_KEY|developer_instructions|context_window|web_search/);
 checks += 1;
 
-const catalog = buildApiCatalog(profile);
+const catalog = buildApiCatalog(profile, { model_messages: modelMessages });
+ok(typeof catalog.models[0].model_messages?.instructions_template === "string"
+  && catalog.models[0].model_messages.instructions_template.trim().length > 0,
+"API catalog carries non-empty instructions through the native model_messages schema");
 equal(catalog.models.length, 1, "API catalog contains exactly the profile model");
 equal(catalog.models[0].slug, profile.model, "catalog uses the exact wire model");
 equal(catalog.models[0].context_window, DEFAULT_API_CONTEXT_WINDOW, "omitted contextWindow uses the documented plugin working budget");
@@ -56,7 +78,7 @@ equal(catalog.models[0].multi_agent_version, "v2", "API model can be spawned by 
 equal(catalog.models[0].comp_hash, `sol-luna-native-api-${profile.profileId}`, "compaction identity is profile-specific");
 
 const small = createApiProfile({ ...definition, contextWindow: 2_048 });
-equal(buildApiCatalog(small).models[0].context_window, 2_048, "small explicit context windows are supported");
+equal(buildApiCatalog(small, { model_messages: modelMessages }).models[0].context_window, 2_048, "small explicit context windows are supported");
 assert.throws(() => createApiProfile({ ...definition, contextWindow: 1_023 }), /1024/);
 assert.throws(() => createApiProfile({ ...definition, contextWindow: 2_000_001 }), /2000000/);
 checks += 2;
@@ -67,10 +89,10 @@ const noReasoning = createApiProfile({
 });
 const noReasoningRole = buildApiRoleToml(noReasoning);
 assert.doesNotMatch(noReasoningRole, /model_reasoning_effort/);
-equal(buildApiCatalog(noReasoning).models[0].supported_reasoning_levels.length, 0, "parameter=none advertises no reasoning levels");
+equal(buildApiCatalog(noReasoning, { model_messages: modelMessages }).models[0].supported_reasoning_levels.length, 0, "parameter=none advertises no reasoning levels");
 checks += 2;
 
-const rendered = renderApiArtifacts(profile, { codexHome, baseUrl });
+const rendered = renderApiArtifacts(profile, { codexHome, baseUrl, modelInstructions: { model_messages: modelMessages } });
 equal(rendered.rolePath, path.join(codexHome, "agents", `native_api_${profile.profileId}.toml`), "role path is profile-specific");
 equal(rendered.catalogPath, path.join(codexHome, `sol-luna-native-models-${profile.profileId}.json`), "catalog path is profile-specific");
 assert.match(rendered.providerTable, new RegExp(`\\[model_providers\\.api-native-${profile.profileId}\\]`));

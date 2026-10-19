@@ -10,6 +10,26 @@ export const MAX_API_CONTEXT_WINDOW = 2_000_000;
 export const API_CONFIG_BEGIN = "# sol-luna-native-api begin";
 export const API_CONFIG_END = "# sol-luna-native-api end";
 
+export function resolveApiModelInstructions(catalog) {
+  if (!Array.isArray(catalog?.models)) throw new Error("native models catalog has no models for API instructions");
+  const candidates = [
+    ...catalog.models.filter((model) => model?.visibility === "list"),
+    ...catalog.models.filter((model) => model?.visibility !== "list"),
+  ];
+  const template = candidates.find((model) => hasModelInstructions(model));
+  if (!template) throw new Error("native models catalog has no non-empty base_instructions or model_messages.instructions_template");
+  if (typeof template.model_messages?.instructions_template === "string" && template.model_messages.instructions_template.trim()) {
+    return { model_messages: structuredClone(template.model_messages) };
+  }
+  return { base_instructions: template.base_instructions };
+}
+
+export function hasModelInstructions(model) {
+  return (typeof model?.base_instructions === "string" && model.base_instructions.trim().length > 0)
+    || (typeof model?.model_messages?.instructions_template === "string"
+      && model.model_messages.instructions_template.trim().length > 0);
+}
+
 const EFFORT_DESCRIPTIONS = Object.freeze({
   none: "No reasoning effort parameter",
   low: "Fast responses with lighter reasoning",
@@ -60,7 +80,10 @@ export function buildApiRoleToml(profile) {
   return lines.join("\n");
 }
 
-export function buildApiCatalog(profile) {
+export function buildApiCatalog(profile, modelInstructions) {
+  if (!hasModelInstructions(modelInstructions)) {
+    throw new Error("non-empty native model instructions are required for the API catalog");
+  }
   const ids = apiIdentifiers(profile.profileId);
   const contextWindow = effectiveContextWindow(profile);
   const noReasoning = profile.reasoning.parameter === "none";
@@ -106,6 +129,7 @@ export function buildApiCatalog(profile) {
     node_repl_auto_review_required: false,
     tool_mode: null,
     multi_agent_version: "v2",
+    ...structuredClone(modelInstructions),
   };
   if (!noReasoning) model.default_reasoning_level = profile.reasoning.default;
   if (!noReasoning && profile.reasoning.supported.includes(profile.reasoning.default) && profile.reasoning.default !== "none") {
@@ -252,7 +276,7 @@ export function composeApiConfig(content, { profileIds = [], gatewayBaseUrl, cod
   return `${base.trimEnd()}${base.trimEnd() ? "\n\n" : ""}${block}\n`;
 }
 
-export function renderApiArtifacts(profile, { codexHome, baseUrl } = {}) {
+export function renderApiArtifacts(profile, { codexHome, baseUrl, modelInstructions } = {}) {
   if (typeof codexHome !== "string" || !path.isAbsolute(codexHome)) throw new Error("codexHome must be absolute");
   const ids = apiIdentifiers(profile.profileId);
   return {
@@ -260,7 +284,7 @@ export function renderApiArtifacts(profile, { codexHome, baseUrl } = {}) {
     rolePath: path.join(codexHome, ...ids.roleFile.split("/")),
     catalogPath: path.join(codexHome, ids.catalogFile),
     roleBytes: Buffer.from(buildApiRoleToml(profile), "utf8"),
-    catalogBytes: Buffer.from(`${JSON.stringify(buildApiCatalog(profile), null, 2)}\n`, "utf8"),
+    catalogBytes: Buffer.from(`${JSON.stringify(buildApiCatalog(profile, modelInstructions), null, 2)}\n`, "utf8"),
     providerTable: buildApiProviderTable(profile.profileId, baseUrl),
   };
 }

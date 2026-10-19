@@ -75,6 +75,11 @@ try {
   settings.fixedExecutor = profileA.profileId;
   await mkdir(codexHome, { recursive: true });
   await mkdir(path.join(codexHome, "agents"), { recursive: true });
+  await writeFile(path.join(codexHome, "models_cache.json"), JSON.stringify({ models: [{
+    slug: "fixture-native-model",
+    visibility: "list",
+    model_messages: { instructions_template: "You are Codex, an AI coding assistant working in the shared workspace." },
+  }] }), "utf8");
   await saveRouterSettings(paths.settings, settings);
   const priorConfig = [
     'model = "gpt-6.1-sol"',
@@ -128,6 +133,13 @@ try {
     const msixSettings = { ...settings, profiles: { [profileA.profileId]: profileA }, fixedExecutor: profileA.profileId };
     await mkdir(canonicalApiDir, { recursive: true });
     await mkdir(path.dirname(nominalApiDir), { recursive: true });
+    const msixCodexHome = path.join(root, "msix-codex-home");
+    await mkdir(msixCodexHome, { recursive: true });
+    await writeFile(path.join(msixCodexHome, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "fixture-native-model",
+      visibility: "list",
+      model_messages: { instructions_template: "You are Codex, an AI coding assistant working in the shared workspace." },
+    }] }), "utf8");
     await symlink(canonicalApiDir, nominalApiDir, "junction");
     await saveRouterSettings(nominalSettingsPath, msixSettings);
     const revisionBefore = await readRouterSettingsSnapshot(canonicalSettingsPath);
@@ -136,7 +148,7 @@ try {
       profileId: profileA.profileId,
       settingsPath: nominalSettingsPath,
       apiDir: canonicalApiDir,
-      codexHome: path.join(root, "msix-codex-home"),
+      codexHome: msixCodexHome,
       versionDir: path.join(root, "runtime"),
       journalPath: msixJournalPath,
       gatewayScriptPath: gatewayScript,
@@ -312,13 +324,75 @@ try {
   const configAB = await readFile(path.join(codexHome, "config.toml"), "utf8");
   assert.match(configAB, new RegExp(`api-native-${profileB.profileId}`));
   equal(tasks.registers, 1, "adding a second profile reuses the owned API task");
+  delete settings.profiles[profileC.profileId];
+  await writeFile(paths.settings, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+  const catalogAPath = path.join(codexHome, `sol-luna-native-models-${profileA.profileId}.json`);
+  const catalogBPath = path.join(codexHome, `sol-luna-native-models-${profileB.profileId}.json`);
+  const catalogBBeforeRepair = await readFile(catalogBPath);
+  const oldCatalogA = JSON.parse(await readFile(catalogAPath, "utf8"));
+  delete oldCatalogA.models[0].model_messages;
+  const oldCatalogABytes = Buffer.from(`${JSON.stringify(oldCatalogA, null, 2)}\n`);
+  const oldJournalA = JSON.parse(await readFile(journalA, "utf8"));
+  oldJournalA.files.catalog.next = { $buffer: oldCatalogABytes.toString("base64") };
+  await writeFile(journalA, `${JSON.stringify(oldJournalA, null, 2)}\n`, "utf8");
+  await writeFile(catalogAPath, oldCatalogABytes);
+  const oldCatalogStatus = await getExecutorStatus({ settings, profileId: profileA.profileId }, {
+    ...dependencies,
+    apiDir,
+    settingsPath: paths.settings,
+    codexHome,
+    env: { SOL_LUNA_NATIVE_API_VERSION_DIR: path.join(root, "runtime") },
+  });
+  equal(oldCatalogStatus.installed, false, "status rejects an owned catalog without instructions");
+  await rejects(() => inspectNativeApiDispatchState({
+    profileId: profileA.profileId,
+    apiDir,
+    settingsPath: paths.settings,
+    taskAdapter: tasks,
+  }, dependencies), /missing model instructions/);
+  const catalogRepair = await applyApiConfiguration({ settings }, {
+    ...dependencies,
+    apiDir,
+    settingsPath: paths.settings,
+    codexHome,
+    env: { SOL_LUNA_NATIVE_API_VERSION_DIR: path.join(root, "runtime") },
+  });
+  equal(catalogRepair.applied, true, "explicit Apply refreshes an owned legacy API catalog");
+  equal(catalogRepair.appliedProfiles.includes(profileA.profileId), true, "Apply reports the repaired catalog profile");
+  const repairedCatalogA = JSON.parse(await readFile(catalogAPath, "utf8"));
+  equal(repairedCatalogA.models[0].model_messages.instructions_template,
+    "You are Codex, an AI coding assistant working in the shared workspace.",
+  "Apply restores the native instructions template");
+  equal((await readFile(catalogBPath)).equals(catalogBBeforeRepair), true, "repair preserves other profile catalogs");
+  const oldCatalogB = JSON.parse(catalogBBeforeRepair.toString("utf8"));
+  delete oldCatalogB.models[0].model_messages;
+  const oldCatalogBBytes = Buffer.from(`${JSON.stringify(oldCatalogB, null, 2)}\n`);
+  const oldJournalB = JSON.parse(await readFile(journalB, "utf8"));
+  oldJournalB.files.catalog.next = { $buffer: oldCatalogBBytes.toString("base64") };
+  await writeFile(journalB, `${JSON.stringify(oldJournalB, null, 2)}\n`, "utf8");
+  await writeFile(catalogBPath, oldCatalogBBytes);
+  await writeFile(catalogBPath, catalogBBeforeRepair);
+  const interruptedRepair = await applyApiConfiguration({ settings }, {
+    ...dependencies,
+    apiDir,
+    settingsPath: paths.settings,
+    codexHome,
+    env: { SOL_LUNA_NATIVE_API_VERSION_DIR: path.join(root, "runtime") },
+  });
+  equal(interruptedRepair.appliedProfiles.includes(profileB.profileId), true,
+    "Apply completes a catalog write interrupted before its journal update");
+  equal((await inspectNativeApiDispatchState({
+    profileId: profileB.profileId,
+    apiDir,
+    settingsPath: paths.settings,
+    taskAdapter: tasks,
+  }, dependencies)).ready, true, "interrupted catalog repair restores ready state");
   const providerOnlyLegacyConfig = composeApiConfig(configAB, {
     profileIds: [profileA.profileId, profileB.profileId],
     gatewayBaseUrl: apiGatewayBaseUrl(identity),
     registerAgentRoles: false,
   });
   await writeFile(path.join(codexHome, "config.toml"), providerOnlyLegacyConfig, "utf8");
-  delete settings.profiles[profileC.profileId];
   await writeFile(paths.settings, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   const applyDependencies = {
     ...dependencies,
@@ -352,7 +426,7 @@ try {
       return result;
     },
   };
-  await rejects(() => applyApiConfiguration({ settings }, { ...applyDependencies, taskAdapter: racingTasks }), /Codex config changed during legacy API role registration repair/);
+  await rejects(() => applyApiConfiguration({ settings }, { ...applyDependencies, taskAdapter: racingTasks }), /config or catalog changed during repair/);
   assert.match(await readFile(path.join(codexHome, "config.toml"), "utf8"), /# user edit during repair/);
   await writeFile(path.join(codexHome, "config.toml"), repairedConfig, "utf8");
   settings.profiles[profileC.profileId] = profileC;
@@ -417,6 +491,11 @@ try {
 
   const foreignHome = path.join(root, "foreign-home");
   await mkdir(path.join(foreignHome, "agents"), { recursive: true });
+  await writeFile(path.join(foreignHome, "models_cache.json"), JSON.stringify({ models: [{
+    slug: "fixture-native-model",
+    visibility: "list",
+    model_messages: { instructions_template: "You are Codex, an AI coding assistant working in the shared workspace." },
+  }] }), "utf8");
   await writeFile(path.join(foreignHome, "config.toml"), priorConfig, "utf8");
   await writeFile(path.join(foreignHome, "agents", `native_api_${profileC.profileId}.toml`), "user-owned role\n", "utf8");
   await rejects(() => prepare({

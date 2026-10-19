@@ -175,6 +175,11 @@ try {
   };
   await mkdir(path.join(codexHome, "agents"), { recursive: true });
   await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-6.1-sol"\nmodel_provider = "openai"\n', "utf8");
+  await writeFile(path.join(codexHome, "models_cache.json"), JSON.stringify({ models: [{
+    slug: "fixture-native-model",
+    visibility: "list",
+    model_messages: { instructions_template: "You are Codex, an AI coding assistant working in the shared workspace." },
+  }] }), "utf8");
   await saveRouterSettings(paths.settings, settings);
   const gatewayScript = path.join(tempRoot, "native-api-serve.mjs");
   await writeFile(gatewayScript, "// fixture\n", "utf8");
@@ -418,6 +423,11 @@ try {
   };
   await mkdir(path.join(applyHome, "agents"), { recursive: true });
   await writeFile(path.join(applyHome, "config.toml"), 'model = "gpt-6.1-sol"\nmodel_provider = "openai"\n', "utf8");
+  await writeFile(path.join(applyHome, "models_cache.json"), JSON.stringify({ models: [{
+    slug: "fixture-native-model",
+    visibility: "list",
+    model_messages: { instructions_template: "You are Codex, an AI coding assistant working in the shared workspace." },
+  }] }), "utf8");
   await saveRouterSettings(applyPaths.settings, applySettings);
   const applySnapshot = await import("../scripts/native-api-settings.mjs").then(({ readRouterSettingsSnapshot }) => readRouterSettingsSnapshot(applyPaths.settings));
   const applyTasks = fakeTaskAdapter();

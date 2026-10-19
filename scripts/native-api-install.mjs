@@ -12,8 +12,10 @@ import {
   apiProfileBaseUrl,
   composeApiConfig,
   effectiveContextWindow,
+  hasModelInstructions,
   readRegularOrAbsent,
   renderApiArtifacts,
+  resolveApiModelInstructions,
 } from "./native-api-artifacts.mjs";
 import { defaultNativeApiDir, apiServicePaths, verifyApiHealth } from "./native-api-manager.mjs";
 import {
@@ -155,6 +157,21 @@ function samePath(left, right) {
 
 function nativeApiRolePath(codexHome, profileId) {
   return path.join(codexHome, ...apiIdentifiers(profileId).roleFile.split("/"));
+}
+
+function catalogHasInstructions(bytes) {
+  if (!bytes) return false;
+  try {
+    const catalog = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    return Array.isArray(catalog.models) && catalog.models.length === 1 && hasModelInstructions(catalog.models[0]);
+  } catch { return false; }
+}
+
+async function nativeApiModelInstructions(codexHome) {
+  let cache;
+  try { cache = JSON.parse(await readFile(path.join(codexHome, "models_cache.json"), "utf8")); }
+  catch { throw new Error(`native models_cache.json is missing or invalid at ${path.join(codexHome, "models_cache.json")}`); }
+  return resolveApiModelInstructions(cache);
 }
 
 function assertRegistryEntry(registry, journal, profileId) {
@@ -402,7 +419,12 @@ export async function prepare(options = {}, dependencies = {}) {
     });
   const gatewayScript = source.direct ? gatewayScriptPath : gatewaySourceEntry(source, paths.root);
 
-  const artifacts = renderApiArtifacts(profile, { codexHome, baseUrl: apiProfileBaseUrl(gatewayBaseUrl, profileId) });
+  const modelInstructions = await nativeApiModelInstructions(codexHome);
+  const artifacts = renderApiArtifacts(profile, {
+    codexHome,
+    baseUrl: apiProfileBaseUrl(gatewayBaseUrl, profileId),
+    modelInstructions,
+  });
   const registrySnapshot = await readRegistry(paths.registry);
   const existingIds = Object.keys(registrySnapshot.value.profiles);
   if (existingIds.length) {
@@ -775,8 +797,12 @@ export async function inspectNativeApiDispatchState({
   }
   for (const name of ["role", "catalog"]) {
     const item = journal.files[name];
-    if (!sameBytes(await readRegularOrAbsent(item.path, "managed file"), item.next)) {
+    const current = await readRegularOrAbsent(item.path, "managed file");
+    if (!sameBytes(current, item.next)) {
       throw new Error(`native API ${name} changed after activation`);
+    }
+    if (name === "catalog" && !catalogHasInstructions(current)) {
+      throw new Error("native API catalog is missing model instructions; apply the API configuration to refresh it");
     }
   }
   if (!samePath(journal.files.role.path, nativeApiRolePath(journal.paths.codexHome, profileId))) {
@@ -954,7 +980,8 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
   if (journal?.phase === "active" && journal.completed?.launcher && journal.completed?.files && journal.completed?.task) {
     const roleOk = samePath(journal.files.role.path, nativeApiRolePath(journal.paths.codexHome, selected.profileId))
       && sameBytes(await readRegularOrAbsent(journal.files.role.path, "managed file"), journal.files.role.next);
-    const catalogOk = sameBytes(await readRegularOrAbsent(journal.files.catalog.path, "managed file"), journal.files.catalog.next);
+    const catalogBytes = await readRegularOrAbsent(journal.files.catalog.path, "managed file");
+    const catalogOk = sameBytes(catalogBytes, journal.files.catalog.next) && catalogHasInstructions(catalogBytes);
     const launcherOk = Boolean(journal.gateway?.launcher) && sameBytes(
       await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher"),
       journal.gateway.launcher.next,
@@ -1013,7 +1040,7 @@ export async function getExecutorStatus({ settings, profileId } = {}, dependenci
   };
 }
 
-async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir, dependencies }) {
+async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir, profile, dependencies }) {
   if (journal.phase !== "active" || !journal.completed?.launcher || !journal.completed?.files || !journal.completed?.task
       || path.resolve(journal.paths.codexHome) !== path.resolve(codexHome)
       || path.resolve(journal.paths.versionDir) !== path.resolve(runtimeDir)) return false;
@@ -1022,10 +1049,9 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
     await (dependencies.verifyGatewaySource || verifyGatewaySource)(journal.source, { runtimeRoot: journal.paths.gatewaySourceRoot });
   }
   if (!samePath(journal.files.role.path, nativeApiRolePath(codexHome, journal.profile.profileId))) return false;
-  for (const name of ["role", "catalog"]) {
-    const item = journal.files[name];
-    if (!sameBytes(await readRegularOrAbsent(item.path, "managed file"), item.next)) return false;
-  }
+  if (!sameBytes(await readRegularOrAbsent(journal.files.role.path, "managed file"), journal.files.role.next)) return false;
+  const catalogBefore = await readRegularOrAbsent(journal.files.catalog.path, "managed file");
+  const catalogMatchesJournal = sameBytes(catalogBefore, journal.files.catalog.next);
   if (!journal.gateway.launcher || !sameBytes(
     await readRegularOrAbsent(journal.gateway.launcher.path, "native API task launcher"),
     journal.gateway.launcher.next,
@@ -1045,18 +1071,48 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
     gatewayBaseUrl,
     registerAgentRoles: false,
   });
-  if (legacyConfig !== currentConfig) return false;
   const nextConfig = composeApiConfig(currentConfig, { profileIds, gatewayBaseUrl, codexHome });
-  if (nextConfig === currentConfig) return false;
+  if (legacyConfig !== currentConfig && nextConfig !== currentConfig) return false;
+  const refreshCatalog = !catalogHasInstructions(catalogBefore) || !catalogMatchesJournal;
+  let catalogNext = null;
+  let catalogNeedsWrite = false;
+  if (refreshCatalog) {
+    if (!profile || profile.profileId !== journal.profile.profileId || profile.model !== journal.profile.model) return false;
+    const modelInstructions = await nativeApiModelInstructions(codexHome);
+    const artifacts = renderApiArtifacts(profile, {
+      codexHome,
+      baseUrl: apiProfileBaseUrl(gatewayBaseUrl, profile.profileId),
+      modelInstructions,
+    });
+    catalogNext = artifacts.catalogBytes;
+    if (sameBytes(catalogBefore, catalogNext)) catalogNeedsWrite = false;
+    else if (catalogMatchesJournal && !catalogHasInstructions(catalogBefore)) catalogNeedsWrite = true;
+    else return false;
+  }
+  if (nextConfig === currentConfig && !refreshCatalog) return false;
   const tasks = dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
   const task = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
   if (!task.exists || !task.owned || task.specMatches !== true || !task.enabled) return false;
-  const configBeforeWrite = await readRegularOrAbsent(journal.config.path, "Codex config");
-  if (!sameBytes(configBeforeWrite, configBytes)) {
-    throw new Error("Codex config changed during legacy API role registration repair; preserving the later change");
-  }
-  await atomicWrite(journal.config.path, Buffer.from(nextConfig, "utf8"));
-  return true;
+  const journalPath = journal.paths.journalPath;
+  if (!journalPath) return false;
+  return withFileLock(`${journalPath}.repair-lock`, async () => {
+    const journalBefore = await readRegularOrAbsent(journalPath, "native API install journal");
+    if (!journalBefore || encodeJournal(decodeJournal(journalBefore.toString("utf8"))) !== encodeJournal(journal)) {
+      throw new Error("native API journal changed during API catalog repair; reload before applying");
+    }
+    const configBeforeWrite = await readRegularOrAbsent(journal.config.path, "Codex config");
+    const catalogBeforeWrite = await readRegularOrAbsent(journal.files.catalog.path, "native API catalog");
+    if (!sameBytes(configBeforeWrite, configBytes) || !sameBytes(catalogBeforeWrite, catalogBefore)) {
+      throw new Error("native API config or catalog changed during repair; preserving the later change");
+    }
+    if (catalogNext) {
+      if (catalogNeedsWrite) await atomicWrite(journal.files.catalog.path, catalogNext);
+      journal.files.catalog.next = catalogNext;
+      await writeJournal(journalPath, journal);
+    }
+    if (nextConfig !== currentConfig) await atomicWrite(journal.config.path, Buffer.from(nextConfig, "utf8"));
+    return true;
+  });
 }
 
 export async function applyApiConfiguration({ settings, expectedSha256 } = {}, dependencies = {}) {
@@ -1089,7 +1145,7 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
   }
   const applied = [];
   const alreadyInstalled = [];
-  const repairedRegistrations = [];
+  const repairedProfiles = [];
   for (const profileId of Object.keys(validated.profiles)) {
     const journalPath = paths.journal(profileId);
     const existing = await journalIfPresent(journalPath);
@@ -1097,7 +1153,12 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
       if (existing.paths?.versionDir !== runtime.versionDir) {
         throw new Error(`API profile ${profileId} is active with a different runtime; rollback or reinstall it before counting it as installed`);
       }
-      const repaired = await repairLegacyApiRoleRegistrations(existing, { codexHome, runtimeDir: runtime.versionDir, dependencies });
+      const repaired = await repairLegacyApiRoleRegistrations(existing, {
+        codexHome,
+        runtimeDir: runtime.versionDir,
+        profile: validated.profiles[profileId],
+        dependencies,
+      });
       try {
         await inspectNativeApiDispatchState({
           profileId,
@@ -1113,7 +1174,7 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
       }
       if (repaired) {
         applied.push(profileId);
-        repairedRegistrations.push(profileId);
+        repairedProfiles.push(profileId);
       } else alreadyInstalled.push(profileId);
       continue;
     }
@@ -1140,8 +1201,8 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
     supported: true,
     restartRequired: applied.length > 0,
     detail: applied.length > 0
-      ? repairedRegistrations.length
-        ? "API 角色、目录和 provider 注册已修复；需要完整重启 Codex。"
+      ? repairedProfiles.length
+        ? "API 角色目录或 provider 注册已修复；需要完整重启 Codex。"
         : "API role/catalog/provider 与 Task 事务已应用；新增角色需要完整重启 Codex。"
       : "API 配置已安装；没有新增角色。",
     appliedProfiles: applied,
