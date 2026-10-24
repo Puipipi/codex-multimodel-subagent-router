@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { withFileLock, writeJsonAtomic } from "./plugin-state.mjs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const STATE_FILE = "connection-diagnostics.json";
 const MAX_ROWS = 500;
 const MAX_EVENTS = 128;
+const LOCK_TIMEOUT_MS = 120;
+const RESPONSE_TARGET_PREFIXES = ["codex_core::responses_retry", "codex_core::client", "codex_api::endpoint::responses_websocket"];
 const WINDOW_MS = 72 * 60 * 60 * 1000;
 const sha = (value) => createHash("sha256").update(String(value)).digest("hex").slice(0, 16);
+const ownerHash = (parentThreadId) => parentThreadId ? createHash("sha256").update(String(parentThreadId)).digest("hex") : "unbound";
 const safeIso = (seconds, nanos = 0) => {
   const ms = Number(seconds) * 1000 + Math.floor(Number(nanos || 0) / 1e6);
   return Number.isFinite(ms) && Number.isFinite(new Date(ms).getTime()) ? new Date(ms).toISOString() : null;
@@ -32,9 +35,14 @@ function classify(text) {
   if (/websocket.{0,100}(?:closed|close)|(?:closed|close).{0,100}websocket|stream disconnected before completion/.test(s)) return "websocket_closed_before_completed";
   return null;
 }
+function isResponseTarget(target) {
+  return RESPONSE_TARGET_PREFIXES.some((prefix) => target === prefix || target.startsWith(`${prefix}::`));
+}
 function makeEvent(row, parentThreadId, registeredChildThreadIds) {
-  const raw = typeof row.message === "string" ? row.message : (typeof row.feedback_log_body === "string" ? row.feedback_log_body : "");
-  const text = `${String(row.target ?? "")} ${raw}`;
+  const target = typeof row.target === "string" ? row.target : "";
+  if (!isResponseTarget(target)) return null;
+  const raw = typeof row.event_body === "string" ? row.event_body : "";
+  const text = `${target} ${raw}`;
   const errorClass = classify(text);
   if (!errorClass) return null;
   const tid = row.thread_id == null || row.thread_id === "" ? null : String(row.thread_id);
@@ -72,26 +80,33 @@ function sanitizeEvent(event) {
 function safeFailure() {
   return { available: false, rootCause: "uncertain", events: [] };
 }
-async function loadState(stateDir) {
+async function loadState(stateFile) {
   try {
-    const value = JSON.parse(await readFile(path.join(stateDir, STATE_FILE), "utf8"));
+    const value = JSON.parse(await readFile(stateFile, "utf8"));
     return value && typeof value === "object" && Array.isArray(value.events) ? { available: true, cursor: { rowid: Number.isSafeInteger(value.cursor?.rowid) ? value.cursor.rowid : 0, maxTimestampMs: Number.isFinite(value.cursor?.maxTimestampMs) ? value.cursor.maxTimestampMs : 0 }, events: value.events.map((event) => sanitizeEvent(event)).filter(Boolean).slice(-MAX_EVENTS) } : null;
   } catch { return null; }
 }
-async function atomicWrite(stateDir, snapshot) {
-  await mkdir(stateDir, { recursive: true });
-  const target = path.join(stateDir, STATE_FILE);
-  const temp = path.join(stateDir, `.connection-diagnostics-${process.pid}-${Date.now()}.tmp`);
-  await writeFile(temp, `${JSON.stringify(snapshot)}\n`, { encoding: "utf8", flag: "wx" });
-  await rename(temp, target);
+async function atomicWrite(stateFile, snapshot) {
+  await writeJsonAtomic(stateFile, snapshot);
 }
 
 /** Read and classify a bounded batch of Rust log rows; raw log text never leaves this function. */
 export async function collectConnectionDiagnostics({ codexHome, stateDir, now = Date.now(), enabled = false, parentThreadId = null, registeredChildThreadIds = [] } = {}) {
   if (!enabled) return safeFailure();
   if (!codexHome || !stateDir || !Number.isFinite(Number(now))) return safeFailure();
+  const dir = path.resolve(stateDir);
+  const stateFile = path.join(dir, `connection-diagnostics-${ownerHash(parentThreadId)}.json`);
+  const lockFile = path.join(dir, `connection-diagnostics-${ownerHash(parentThreadId)}.lock`);
+  try {
+    return await withFileLock(lockFile, () => collectLocked({ codexHome, stateFile, now, parentThreadId, registeredChildThreadIds }), { timeoutMs: LOCK_TIMEOUT_MS, staleMs: 60_000 });
+  } catch {
+    return safeFailure();
+  }
+}
+
+async function collectLocked({ codexHome, stateFile, now, parentThreadId, registeredChildThreadIds }) {
   const dbPath = path.join(codexHome, "logs_2.sqlite");
-  const prior = await loadState(stateDir);
+  const prior = await loadState(stateFile);
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true, timeout: 50 });
@@ -101,25 +116,29 @@ export async function collectConnectionDiagnostics({ codexHome, stateDir, now = 
     if (!columns.has("ts") || !columns.has("target")) return safeFailure();
     const bodyCol = columns.has("feedback_log_body") ? "feedback_log_body" : (columns.has("message") ? "message" : null);
     if (!bodyCol) return safeFailure();
-    const select = ["rowid AS _rowid", "ts", columns.has("ts_nanos") ? "ts_nanos" : "0 AS ts_nanos", "target", ...(columns.has("message") ? ["message"] : []), ...(columns.has("feedback_log_body") ? ["feedback_log_body"] : []), columns.has("thread_id") ? "thread_id" : "NULL AS thread_id"].join(", ");
+    const select = ["rowid AS _rowid", "ts", columns.has("ts_nanos") ? "ts_nanos" : "0 AS ts_nanos", "target", `${bodyCol} AS event_body`, columns.has("thread_id") ? "thread_id" : "NULL AS thread_id"].join(", ");
     const maxRow = db.prepare("SELECT COALESCE(MAX(rowid),0) AS id FROM logs").get().id;
     const previousCursor = Number(prior?.cursor?.rowid ?? 0);
     const previousTime = Number(prior?.cursor?.maxTimestampMs ?? 0);
     const latestTime = Number(db.prepare("SELECT COALESCE(MAX(ts),0) AS ts FROM logs").get().ts) * 1000;
     const rotated = Number(maxRow) < previousCursor || (previousTime > 0 && latestTime > 0 && latestTime < previousTime - 1000);
-    const cursor = rotated ? 0 : previousCursor;
     const floorSec = Math.floor((Number(now) - WINDOW_MS) / 1000);
-    const rows = db.prepare(`SELECT ${select} FROM logs WHERE rowid > ? AND ts >= ? ORDER BY rowid ASC LIMIT ${MAX_ROWS}`).all(cursor, floorSec);
+    const initializeFromRecent = !prior || rotated;
+    const rows = initializeFromRecent
+      ? db.prepare(`SELECT ${select} FROM logs WHERE ts >= ? ORDER BY rowid DESC LIMIT ${MAX_ROWS}`).all(floorSec).reverse()
+      : db.prepare(`SELECT ${select} FROM logs WHERE rowid > ? AND ts >= ? ORDER BY rowid ASC LIMIT ${MAX_ROWS}`).all(previousCursor, floorSec);
     const events = rows.map((row) => makeEvent(row, parentThreadId, registeredChildThreadIds)).filter(Boolean);
     const allEvents = [...(rotated ? [] : (prior?.events ?? [])), ...events].slice(-MAX_EVENTS);
-    const nextCursor = rows.length ? Number(rows.at(-1)._rowid) : (rotated ? 0 : previousCursor);
+    const nextCursor = initializeFromRecent || rows.length < MAX_ROWS
+      ? Number(maxRow)
+      : Number(rows.at(-1)._rowid);
     const snapshot = {
       available: true,
       rootCause: "uncertain",
-      cursor: { rowid: nextCursor, maxTimestampMs: Math.max(previousTime, latestTime) },
+      cursor: { rowid: nextCursor, maxTimestampMs: rotated ? latestTime : Math.max(previousTime, latestTime) },
       events: allEvents,
     };
-    await atomicWrite(stateDir, snapshot);
+    await atomicWrite(stateFile, snapshot);
     return { available: true, rootCause: "uncertain", events };
   } catch {
     return safeFailure();
@@ -128,8 +147,8 @@ export async function collectConnectionDiagnostics({ codexHome, stateDir, now = 
   }
 }
 
-export async function readConnectionDiagnosticsSnapshot(stateDir) {
-  const value = await loadState(stateDir);
+export async function readConnectionDiagnosticsSnapshot(stateDir, { parentThreadId = null } = {}) {
+  const value = await loadState(path.join(path.resolve(stateDir), `connection-diagnostics-${ownerHash(parentThreadId)}.json`));
   if (!value) return safeFailure();
   return { available: value.available === true, rootCause: "uncertain", events: Array.isArray(value.events) ? value.events.slice(-MAX_EVENTS) : [] };
 }
@@ -143,7 +162,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const stateDir = process.env.CODEX_CONNECTION_DIAGNOSTICS_STATE;
     result = await collectConnectionDiagnostics({ codexHome, stateDir, enabled: true, parentThreadId: process.env.CODEX_THREAD_ID ?? null });
   } else if (json) {
-    result = await readConnectionDiagnosticsSnapshot(process.env.CODEX_CONNECTION_DIAGNOSTICS_STATE ?? "");
+    result = await readConnectionDiagnosticsSnapshot(process.env.CODEX_CONNECTION_DIAGNOSTICS_STATE ?? "", { parentThreadId: process.env.CODEX_THREAD_ID ?? null });
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
