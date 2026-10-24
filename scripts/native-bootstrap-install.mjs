@@ -10,6 +10,7 @@ import { createWindowsUserEnvironmentAdapter } from "./native-runtime-env.mjs";
 const CODEX_CLI_PATH = "CODEX_CLI_PATH";
 const PLAINTEXT_KEY = "SOL_LUNA_NATIVE_PLAINTEXT_V2";
 const JOURNAL_KEY = "SOL_LUNA_NATIVE_INSTALL_JOURNAL";
+const RESOLVE_OFFICIAL_ARGUMENT = "--codex-native-resolve-official-cli-v1";
 const BASIC_KEYS = [CODEX_CLI_PATH, PLAINTEXT_KEY];
 const ALLOWED_KEYS = [CODEX_CLI_PATH, PLAINTEXT_KEY, JOURNAL_KEY];
 export const NATIVE_BOOTSTRAP_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../native/bootstrap/codex-bootstrap.exe");
@@ -117,16 +118,41 @@ export async function applyBootstrapEnvironment(plan, adapter) {
   return { prior: plan.prior, next: plan.next, bootstrapPath: plan.bootstrapPath, bootstrapFile };
 }
 
-export async function rollbackBootstrapEnvironment(snapshot, adapter) {
+function isWindowsAppsOfficialPath(value) {
+  return typeof value === "string" && /(?:^|[\\/])WindowsApps[\\/]OpenAI\.Codex_[^\\/]+[\\/]app[\\/]resources[\\/]codex\.exe$/i.test(value);
+}
+
+function resolveOfficialThroughBootstrap(snapshot) {
+  const executable = snapshot.bootstrapPath;
+  if (typeof executable !== "string") return null;
+  const result = spawnSync(executable, [RESOLVE_OFFICIAL_ARGUMENT], {
+    encoding: "utf8", windowsHide: true, timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.error || result.status !== 0) return null;
+  const candidate = (result.stdout || "").trim();
+  return path.isAbsolute(candidate) && isWindowsAppsOfficialPath(candidate) ? candidate : null;
+}
+
+export async function rollbackBootstrapEnvironment(snapshot, adapter, { isRegularFile: fileExists = regularFile, resolveCurrentOfficialPath } = {}) {
   if (!snapshot?.prior || !snapshot?.next || !adapter?.get || !adapter?.set) throw new Error("a valid bootstrap environment snapshot is required");
   const keys = keysFor(snapshot);
   for (const key of keys) if (!equal(await adapter.get(key), snapshot.next[key])) throw new Error(`environment changed since bootstrap apply: ${key}`);
+  const prior = { ...snapshot.prior };
+  const oldCli = prior[CODEX_CLI_PATH];
+  if (oldCli?.present && isWindowsAppsOfficialPath(oldCli.value) && !await fileExists(oldCli.value).catch(() => false)) {
+    let replacement = null;
+    try { replacement = resolveCurrentOfficialPath ? await resolveCurrentOfficialPath() : resolveOfficialThroughBootstrap(snapshot); } catch {}
+    prior[CODEX_CLI_PATH] = typeof replacement === "string" && path.isAbsolute(replacement)
+      && isWindowsAppsOfficialPath(replacement) && await fileExists(replacement).catch(() => false)
+      ? { present: true, value: path.resolve(replacement) }
+      : { present: false, value: null };
+  }
   for (const key of [...keys].reverse()) {
     if (!equal(await adapter.get(key), snapshot.next[key])) throw new Error(`environment changed since bootstrap apply: ${key}`);
-    await adapter.set(key, snapshot.prior[key]);
+    await adapter.set(key, prior[key]);
   }
   await rollbackBootstrapFile(snapshot.bootstrapFile);
-  return { restored: true };
+  return { restored: true, cliPath: prior[CODEX_CLI_PATH] };
 }
 
 export async function writeCompatibilityReceipt(file, { officialPath, officialVersion, desktopPackageVersion, patchedPath, probeResult, approvedPatchHashes = [] } = {}) {

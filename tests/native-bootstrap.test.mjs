@@ -27,7 +27,14 @@ try {
   result = build(['-municode', '-mwindows', '-O2', path.join(repo, 'native', 'bootstrap', 'bootstrap.c'), '-o', release, '-lbcrypt', '-lshell32']);
   assert.equal(result.status, 0, result.stderr);
   const releaseStrings = (await readFile(release)).toString('latin1');
-  assert.doesNotMatch(releaseStrings, /CODEX_BOOTSTRAP_TEST_(?:OFFICIAL|PARENT_IMAGE)/, 'release build excludes all test-only backend/parent bypasses');
+  assert.doesNotMatch(releaseStrings, /CODEX_BOOTSTRAP_TEST_/, 'release build excludes all test-only backend/parent bypasses');
+  const releaseResolution = spawnSync(release, ['--codex-native-resolve-official-cli-v1'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+  assert.equal(releaseResolution.status, 0, releaseResolution.stderr);
+  assert.match(releaseResolution.stdout.trim(), /^[A-Z]:\\.*WindowsApps\\OpenAI\.Codex_.*\\app\\resources\\codex\.exe$/i, 'production rollback resolver finds the current registered desktop CLI');
+  for (const [versionCase, expected] of [['valid', '11111'], ['wrong-field', '11110'], ['prefix', '11110']]) {
+    const parser = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_VERSION_CASE: versionCase } });
+    assert.equal(parser.stdout.slice(0, 5), expected, `version parser ${versionCase} case: ${parser.stdout}`);
+  }
 
   const packageRoot = path.join(root, 'test package', 'WindowsApps', 'OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0', 'app');
   const parentImage = path.join(packageRoot, 'Codex.exe');
@@ -38,6 +45,7 @@ try {
   const parentProbe = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_PARENT_IMAGE: parentImage } });
   assert.equal(parentProbe.status, 0, parentProbe.stderr);
   assert.equal(parentProbe.stdout, `package=26.1021.3705.0|exe=${packageCli}`, 'test-only injected desktop image metadata resolves the matching packaged official CLI');
+
 
   const original = spawnSync(harness, ['argument with spaces', '中文路径'], {
     encoding: 'utf8', windowsHide: true, timeout: 10000,
@@ -56,7 +64,7 @@ try {
   }));
   const request = '{"id":1,"method":"initialize","params":{"clientInfo":{"name":"test","version":"1"}}}\n{"id":2,"method":"config/read","params":{"includeLayers":true}}\n';
   const officialResponse = '{"id":1,"result":{"userAgent":"official"}}\n{"id":2,"result":{"config":{}}}\n';
-  for (const mode of ['exit', 'garbage', 'malformed', 'hang', 'error', 'wrong-version']) {
+  for (const mode of ['exit', 'garbage', 'malformed', 'hang', 'error', 'wrong-version', 'wrong-field-version', 'version-prefix']) {
     const started = Date.now();
     const fallback = spawnSync(harness, ['app-server'], {
       input: request, encoding: 'utf8', windowsHide: true, timeout: 7000,
@@ -83,7 +91,32 @@ try {
   assert.equal(liveFailure.status, 2, 'a failure after successful probe exits normally instead of replaying requests to official');
   assert.equal(liveFailure.stdout.replaceAll('\r\n', '\n'), 'patched stream already consumed\n', 'formal patched stream is never followed by an official duplicate response');
   assert.equal(JSON.parse(await readFile(path.join(runtime, 'upgrade-status.json'), 'utf8')).state, 'disabled', 'late process failure disables future child routing');
-  assert.equal((await readFile(path.join(root, 'patch-started.marker'), 'utf8')).trim().split(/\r?\n/).length, 10, 'failed probes never start a formal patched process; only healthy probes do');
+
+  const currentResolution = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_RESOLVE_ONLY: '1' } });
+  assert.equal(currentResolution.status, 0, currentResolution.stderr);
+  const currentResolutionRecord = Object.fromEntries(currentResolution.stdout.trim().split('|').map((entry) => { const i=entry.indexOf('='); return [entry.slice(0,i),entry.slice(i+1)]; }));
+  assert.match(currentResolutionRecord.exe, /^[A-Z]:\\.*WindowsApps\\OpenAI\.Codex_.*\\app\\resources\\codex\.exe$/i, 'current machine resolves a real official package path without assuming C:');
+  assert.equal(currentResolutionRecord.source, 'parent', 'actual Codex parent image is resolved before package enumeration');
+  console.log(`PASS actual machine package resolution: ${currentResolutionRecord.source} ${currentResolutionRecord.exe}`);
+  const parentUnavailable = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_RESOLVE_ONLY: '1', CODEX_BOOTSTRAP_TEST_SKIP_PARENT: '1' } });
+  assert.equal(parentUnavailable.status, 0, parentUnavailable.stderr);
+  const fallbackResolution = Object.fromEntries(parentUnavailable.stdout.trim().split('|').map((entry) => { const i=entry.indexOf('='); return [entry.slice(0,i),entry.slice(i+1)]; }));
+  assert.equal(fallbackResolution.source, 'registered-package', 'registered-package API recovers when ancestor image access is unavailable');
+
+  const virtualRegisteredRoot = 'D:\\Apps\\WindowsApps\\OpenAI.Codex_26.1024.5000.0_x64__2p2nqsd0c76g0';
+  const alternateDrive = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_RESOLVE_ONLY: '1', CODEX_BOOTSTRAP_TEST_REGISTERED_ROOTS: virtualRegisteredRoot } });
+  assert.equal(alternateDrive.status, 0, alternateDrive.stderr);
+  const alternateRecord = Object.fromEntries(alternateDrive.stdout.trim().split('|').map((entry) => { const i=entry.indexOf('='); return [entry.slice(0,i),entry.slice(i+1)]; }));
+  assert.equal(alternateRecord.exe, `${virtualRegisteredRoot}\\app\\resources\\codex.exe`, 'registered package path resolution accepts a package on a non-C drive');
+
+  const missingPackage = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_CLI_PATH: 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe', CODEX_BOOTSTRAP_TEST_FORCE_NO_OFFICIAL: '1', CODEX_BOOTSTRAP_TEST_RUNTIME_ROOT: runtime, CODEX_HOME: root } });
+  assert.equal(missingPackage.status, 126, 'missing official installation is distinguished as unrecoverable');
+  assert.equal(missingPackage.stdout, '', 'a stale CODEX_CLI_PATH is never blindly launched as fallback');
+  const missingStatus = JSON.parse(await readFile(path.join(runtime, 'upgrade-status.json'), 'utf8'));
+  assert.equal(missingStatus.state, 'disabled', 'unresolved package writes local degraded status before returning');
+  assert.match(missingStatus.reason, /官方 CLI|桌面包|重新安装/);
+
+  assert.equal((await readFile(path.join(root, 'patch-started.marker'), 'utf8')).trim().split(/\r?\n/).length, 12, 'failed probes never start a formal patched process; only healthy probes do');
   console.log('PASS native bootstrap: isolated app-server probe, clean official fallback, untouched desktop request');
 } finally {
   await rm(root, { recursive: true, force: true });

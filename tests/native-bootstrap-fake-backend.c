@@ -15,11 +15,13 @@ static int app_server(int argc) {
   if (_wcsicmp(selected, L"garbage") == 0) { fputs("this is not JSON\n", stdout); fflush(stdout); return 0; }
   if (_wcsicmp(selected, L"malformed") == 0) { fputs("{\"id\":1,\"result\":{\"userAgent\":\"broken\"}\n", stdout); fflush(stdout); return 0; }
   if (_wcsicmp(selected, L"wrong-version") == 0) { fputs("{\"id\":1,\"result\":{\"userAgent\":\"0.163.0\"}}\n", stdout); fflush(stdout); return 0; }
+  if (_wcsicmp(selected, L"wrong-field-version") == 0) { fputs("{\"id\":1,\"result\":{\"userAgent\":\"codex-cli/0.163.0\",\"other\":\"0.164.0-alpha.11.1\"}}\n", stdout); fflush(stdout); if(!fgets(line,sizeof(line),stdin))return 4;fputs("{\"id\":2,\"result\":{\"config\":{}}}\n",stdout);fflush(stdout);return 0; }
+  if (_wcsicmp(selected, L"version-prefix") == 0) { fputs("{\"id\":1,\"result\":{\"userAgent\":\"codex-cli/0.164.0-alpha.11.10 (windows)\"}}\n", stdout); fflush(stdout); if(!fgets(line,sizeof(line),stdin))return 4;fputs("{\"id\":2,\"result\":{\"config\":{}}}\n",stdout);fflush(stdout);return 0; }
   if (_wcsicmp(selected, L"live-exit") == 0) { fputs("{\"id\":1,\"result\":{\"userAgent\":\"0.164.0-alpha.11.1\"}}\n",stdout);fflush(stdout);if(!fgets(line,sizeof(line),stdin))return 4;fputs("{\"id\":2,\"result\":{\"config\":{}}}\n",stdout);fflush(stdout);return 0; }
   if (_wcsicmp(selected, L"error") == 0) { fputs("{\"id\":1,\"error\":{\"code\":-1,\"message\":\"bad init\"}}\n", stdout); fflush(stdout); return 0; }
   if (_wcsicmp(selected, L"exit") == 0) return 2;
   if (_wcsicmp(selected, L"success") == 0) {
-    fputs("{\"id\":1,\"result\":{\"userAgent\":\"0.164.0-alpha.11.1\"}}\n", stdout); fflush(stdout);
+    fputs("{\"id\":1,\"result\":{\"userAgent\":\"codex-cli/0.164.0-alpha.11.1 (windows)\"}}\n", stdout); fflush(stdout);
     if (!fgets(line, sizeof(line), stdin)) return 4;
     fputs("{\"id\":2,\"result\":{\"config\":{}}}\n", stdout); fflush(stdout);
     return 0;

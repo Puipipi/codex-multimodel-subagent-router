@@ -22,7 +22,7 @@ try {
   assert.equal(plan.next.CODEX_CLI_PATH.value, bootstrapPath, 'new installs point only to the native bootstrap');
   const snapshot = await applyBootstrapEnvironment(plan, adapter);
   assert.equal(env.get('CODEX_CLI_PATH').value, bootstrapPath);
-  await rollbackBootstrapEnvironment(snapshot, adapter);
+  await rollbackBootstrapEnvironment(snapshot, adapter, { isRegularFile: async () => true });
   assert.equal(env.get('CODEX_CLI_PATH').value, officialPath, 'CAS rollback restores the original official CLI path');
 
   const userOwned = await planBootstrapEnvironment({ bootstrapPath, currentEnvironment: { CODEX_CLI_PATH: 'C:\\Tools\\private-codex.exe' }, journalPath }).then(() => null, (error) => error);
@@ -41,6 +41,23 @@ try {
   assert.equal(await readFile(persistent, 'utf8'), 'versioned native bootstrap', 'installer stages bootstrap under persistent CODEX_HOME runtime');
   await rollbackBootstrapEnvironment(deployed, adapter);
   await assert.rejects(() => readFile(persistent), { code: 'ENOENT' }, 'CAS rollback removes only the bootstrap it deployed');
+
+  const movedOldPath = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe';
+  const movedNewPath = 'D:\\Apps\\WindowsApps\\OpenAI.Codex_26.1024.5000.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe';
+  env.set('CODEX_CLI_PATH', { present: true, value: movedOldPath });
+  const movedPlan = await planBootstrapEnvironment({ bootstrapPath, currentEnvironment: Object.fromEntries(env), journalPath });
+  const movedSnapshot = await applyBootstrapEnvironment(movedPlan, adapter);
+  await rollbackBootstrapEnvironment(movedSnapshot, adapter, {
+    isRegularFile: async (candidate) => candidate === movedNewPath,
+    resolveCurrentOfficialPath: async () => movedNewPath,
+  });
+  assert.equal(env.get('CODEX_CLI_PATH').value, movedNewPath, 'rollback resolves the currently registered official package when the prior package moved');
+
+  env.set('CODEX_CLI_PATH', { present: true, value: movedOldPath });
+  const missingPlan = await planBootstrapEnvironment({ bootstrapPath, currentEnvironment: Object.fromEntries(env), journalPath });
+  const missingSnapshot = await applyBootstrapEnvironment(missingPlan, adapter);
+  await rollbackBootstrapEnvironment(missingSnapshot, adapter, { isRegularFile: async () => false });
+  assert.deepEqual(env.get('CODEX_CLI_PATH'), { present: false, value: null }, 'rollback unsets its owned override instead of restoring a removed package path');
   console.log('PASS bootstrap environment ownership, prior snapshot and CAS rollback');
 } finally {
   await rm(root, { recursive: true, force: true });
