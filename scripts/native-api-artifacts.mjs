@@ -75,7 +75,6 @@ export function buildApiRoleToml(profile) {
     "",
     "[features]",
     "unbounded_connection_retries = false",
-    "multi_agent_v2_dynamic_tools = true",
     "",
   );
   return lines.join("\n");

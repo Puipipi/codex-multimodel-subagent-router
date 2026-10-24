@@ -472,44 +472,6 @@ try {
   equal(applyTasks.registers, 1, "Apply registers the owned API task");
   equal(applyTasks.starts, 0, "Apply never starts a gateway or model request");
   const applyJournalPath = applyPaths.journal(applyProfile.profileId);
-  const applyRolePath = path.join(applyHome, "agents", `native_api_${applyProfile.profileId}.toml`);
-  const installedRoleText = await readFile(applyRolePath, "utf8");
-  assert.match(installedRoleText, /multi_agent_v2_dynamic_tools = true/);
-  const legacyRoleBytes = Buffer.from(installedRoleText.replace(/^multi_agent_v2_dynamic_tools = true\r?\n/m, ""));
-  assert.notEqual(legacyRoleBytes.toString("utf8"), installedRoleText, "fixture models an owned role installed before dynamic tools were enabled");
-  const legacyJournalRaw = JSON.parse(await readFile(applyJournalPath, "utf8"));
-  const originalRolePrior = JSON.stringify(legacyJournalRaw.files.role.prior);
-  legacyJournalRaw.files.role.next = { $buffer: legacyRoleBytes.toString("base64") };
-  await writeFile(applyRolePath, legacyRoleBytes);
-  await writeFile(applyJournalPath, `${JSON.stringify(legacyJournalRaw, null, 2)}\n`);
-  let changeRoleDuringRepair = true;
-  const raceApplyDeps = {
-    ...applyDeps,
-    taskAdapter: {
-      status: async () => {
-        if (changeRoleDuringRepair) {
-          changeRoleDuringRepair = false;
-          await writeFile(applyRolePath, "manual role edit during Apply\n");
-        }
-        return applyTasks.status();
-      },
-      register: (...args) => applyTasks.register(...args),
-      start: (...args) => applyTasks.start(...args),
-      unregister: (...args) => applyTasks.unregister(...args),
-    },
-  };
-  await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, raceApplyDeps), /changed during repair|role changed/i,
-    "explicit Apply refuses to overwrite a role changed after its ownership snapshot");
-  equal(await readFile(applyRolePath, "utf8"), "manual role edit during Apply\n", "role CAS preserves a concurrent manual edit");
-  await writeFile(applyRolePath, legacyRoleBytes);
-  const roleRefresh = await applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps);
-  equal(roleRefresh.applied, true, "explicit Apply CAS-refreshes a known legacy owned role");
-  equal(roleRefresh.appliedProfiles.includes(applyProfile.profileId), true, "role refresh is reported as applied");
-  assert.match(await readFile(applyRolePath, "utf8"), /multi_agent_v2_dynamic_tools = true/);
-  const refreshedJournalRaw = JSON.parse(await readFile(applyJournalPath, "utf8"));
-  equal(Buffer.from(refreshedJournalRaw.files.role.next.$buffer, "base64").equals(await readFile(applyRolePath)), true,
-    "role journal next image advances with the CAS-written role");
-  equal(JSON.stringify(refreshedJournalRaw.files.role.prior), originalRolePrior, "role refresh preserves the original rollback image");
   const applyJournalBytes = await readFile(applyJournalPath);
   const applyJournal = JSON.parse(applyJournalBytes.toString("utf8"));
   applyJournal.paths.versionDir = path.join(tempRoot, "other-runtime");
@@ -517,6 +479,7 @@ try {
   await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps),
     /different runtime|rollback|reinstall/i);
   await writeFile(applyJournalPath, applyJournalBytes);
+  const applyRolePath = path.join(applyHome, "agents", `native_api_${applyProfile.profileId}.toml`);
   const applyRoleBytes = await readFile(applyRolePath);
   await writeFile(applyRolePath, "tampered active role\n");
   await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps),
