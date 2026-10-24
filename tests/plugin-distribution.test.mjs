@@ -20,7 +20,7 @@ const powershell = process.env.POWERSHELL_EXE || "powershell.exe";
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8" }).trim();
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const manifest = {
-  name: "sol-luna-deepseek-router", version: "0.12.2", mcpServers: "./.mcp.json",
+  name: "sol-luna-deepseek-router", version: "0.12.3", mcpServers: "./.mcp.json",
 };
 const marketplace = {
   name: "fixture-registry", plugins: [{ name: manifest.name, source: { source: "local", path: "./" } }],
@@ -91,7 +91,7 @@ try {
   const outputDir = path.join(root, "external distributions 文件夹");
   const output = path.join(outputDir, "router candidate.zip");
   const result = await packagePlugin({ source, out: output });
-  assert.equal(result.version, "0.12.2");
+  assert.equal(result.version, "0.12.3");
   assert.equal(result.registryId, "fixture-registry");
   assert.equal(result.sourceCommit, git(source, "rev-parse", "HEAD"));
   assert.ok(result.fileCount >= 15, "runtime inventory is nonempty and includes required modules");

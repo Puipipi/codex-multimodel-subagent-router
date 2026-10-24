@@ -25,7 +25,7 @@ import {
   OwnershipStore, WorkspaceLeases, TERMINAL_STATUSES, canonicalWorkspace, hashThread, normalizeWorkspace, resolveStateDir, workspaceKey,
 } from './plugin-state.mjs';
 
-const VERSION = '0.12.2';
+const VERSION = '0.12.3';
 const PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25']);
 const PASSIVE_STATUSES = new Set([...TERMINAL_STATUSES]);
 const LIST_STATUSES = new Set(['starting', 'running', 'interrupting', 'idle', 'completed', 'interrupted', 'error', 'context_exhausted', 'closed']);

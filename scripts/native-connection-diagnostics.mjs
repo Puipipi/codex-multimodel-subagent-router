@@ -83,7 +83,7 @@ function safeFailure() {
 async function loadState(stateFile) {
   try {
     const value = JSON.parse(await readFile(stateFile, "utf8"));
-    return value && typeof value === "object" && Array.isArray(value.events) ? { available: true, cursor: { rowid: Number.isSafeInteger(value.cursor?.rowid) ? value.cursor.rowid : 0, maxTimestampMs: Number.isFinite(value.cursor?.maxTimestampMs) ? value.cursor.maxTimestampMs : 0 }, events: value.events.map((event) => sanitizeEvent(event)).filter(Boolean).slice(-MAX_EVENTS) } : null;
+    return value && typeof value === "object" && Array.isArray(value.events) ? { available: true, collectorSchemaVersion: Number.isSafeInteger(value.collectorSchemaVersion) ? value.collectorSchemaVersion : null, cursor: { rowid: Number.isSafeInteger(value.cursor?.rowid) ? value.cursor.rowid : 0, maxTimestampMs: Number.isFinite(value.cursor?.maxTimestampMs) ? value.cursor.maxTimestampMs : 0 }, events: value.events.map((event) => sanitizeEvent(event)).filter(Boolean).slice(-MAX_EVENTS) } : null;
   } catch { return null; }
 }
 async function atomicWrite(stateFile, snapshot) {
@@ -113,7 +113,7 @@ async function collectLocked({ codexHome, stateFile, now, parentThreadId, regist
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='logs'").all();
     if (!tables.length) return safeFailure();
     const columns = new Set(db.prepare("PRAGMA table_info(logs)").all().map((r) => String(r.name)));
-    if (!columns.has("ts") || !columns.has("target")) return safeFailure();
+    if (!columns.has("ts") || !columns.has("target") || (parentThreadId && !columns.has("thread_id"))) return safeFailure();
     const bodyCol = columns.has("feedback_log_body") ? "feedback_log_body" : (columns.has("message") ? "message" : null);
     if (!bodyCol) return safeFailure();
     const select = ["rowid AS _rowid", "ts", columns.has("ts_nanos") ? "ts_nanos" : "0 AS ts_nanos", "target", `${bodyCol} AS event_body`, columns.has("thread_id") ? "thread_id" : "NULL AS thread_id"].join(", ");
@@ -123,17 +123,23 @@ async function collectLocked({ codexHome, stateFile, now, parentThreadId, regist
     const latestTime = Number(db.prepare("SELECT COALESCE(MAX(ts),0) AS ts FROM logs").get().ts) * 1000;
     const rotated = Number(maxRow) < previousCursor || (previousTime > 0 && latestTime > 0 && latestTime < previousTime - 1000);
     const floorSec = Math.floor((Number(now) - WINDOW_MS) / 1000);
-    const initializeFromRecent = !prior || rotated;
+    const initializeFromRecent = !prior || prior.collectorSchemaVersion !== 2 || rotated;
+    const scopedThreadIds = parentThreadId == null ? [] : [...new Set([String(parentThreadId), ...registeredChildThreadIds.map(String)])];
+    const targetClause = RESPONSE_TARGET_PREFIXES.map(() => "(target = ? OR target GLOB ?)").join(" OR ");
+    const targetParams = RESPONSE_TARGET_PREFIXES.flatMap((prefix) => [prefix, `${prefix}::*`]);
+    const threadClause = scopedThreadIds.length ? ` AND thread_id IN (${scopedThreadIds.map(() => "?").join(",")})` : "";
     const rows = initializeFromRecent
-      ? db.prepare(`SELECT ${select} FROM logs WHERE ts >= ? ORDER BY rowid DESC LIMIT ${MAX_ROWS}`).all(floorSec).reverse()
-      : db.prepare(`SELECT ${select} FROM logs WHERE rowid > ? AND ts >= ? ORDER BY rowid ASC LIMIT ${MAX_ROWS}`).all(previousCursor, floorSec);
+      ? db.prepare(`SELECT ${select} FROM logs WHERE ts >= ? AND (${targetClause})${threadClause} ORDER BY rowid DESC LIMIT ${MAX_ROWS}`).all(floorSec, ...targetParams, ...scopedThreadIds).reverse()
+      : db.prepare(`SELECT ${select} FROM logs WHERE rowid > ? AND ts >= ? AND (${targetClause})${threadClause} ORDER BY rowid ASC LIMIT ${MAX_ROWS}`).all(previousCursor, floorSec, ...targetParams, ...scopedThreadIds);
     const events = rows.map((row) => makeEvent(row, parentThreadId, registeredChildThreadIds)).filter(Boolean);
-    const allEvents = [...(rotated ? [] : (prior?.events ?? [])), ...events].slice(-MAX_EVENTS);
+    const priorEvents = initializeFromRecent ? [] : (prior?.events ?? []).filter((event) => !scopedThreadIds.length || event.correlation !== "other_or_unknown");
+    const allEvents = [...priorEvents, ...events].slice(-MAX_EVENTS);
     const nextCursor = initializeFromRecent || rows.length < MAX_ROWS
       ? Number(maxRow)
       : Number(rows.at(-1)._rowid);
     const snapshot = {
       available: true,
+      collectorSchemaVersion: 2,
       rootCause: "uncertain",
       cursor: { rowid: nextCursor, maxTimestampMs: rotated ? latestTime : Math.max(previousTime, latestTime) },
       events: allEvents,
