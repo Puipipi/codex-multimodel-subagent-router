@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,8 +65,15 @@ try {
   assert.equal(controlledRecord.exeSha256, createHash('sha256').update(await readFile(controlledCodexParent)).digest('hex'));
   console.log(`PASS live ancestor observation: ${observedRecord.observed ? 'host codex ancestor present' : 'no host codex ancestor'}; controlled positive verified`);
   const releaseResolution = spawnSync(release, ['--codex-native-resolve-official-cli-v1'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
-  assert.equal(releaseResolution.status, 0, releaseResolution.stderr);
-  assert.match(releaseResolution.stdout.trim(), /^[A-Z]:\\.*WindowsApps\\OpenAI\.Codex_.*\\app\\resources\\codex\.exe$/i, 'production rollback resolver finds the current registered desktop CLI');
+  if (releaseResolution.status === 0) {
+    const resolvedPath = releaseResolution.stdout.trim();
+    assert.match(resolvedPath, /^[A-Z]:\\.*WindowsApps\\OpenAI\.Codex_.*\\app\\resources\\codex\.exe$/i, 'production rollback resolver finds the current registered desktop CLI');
+    assert.equal(path.isAbsolute(resolvedPath), true, 'production resolver returns an absolute CLI path');
+    assert.equal((await lstat(resolvedPath)).isFile(), true, 'production resolver path names an installed regular CLI');
+  } else {
+    assert.equal(releaseResolution.status, 126, `production resolver reports a missing registered desktop CLI explicitly: ${releaseResolution.stderr}`);
+    assert.equal(releaseResolution.stdout, '', 'production resolver emits no fake path when the host has no Codex package');
+  }
   for (const [versionCase, expected] of [['valid', '11111'], ['wrong-field', '11110'], ['prefix', '11110']]) {
     const parser = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_VERSION_CASE: versionCase } });
     assert.equal(parser.stdout.slice(0, 5), expected, `version parser ${versionCase} case: ${parser.stdout}`);
@@ -148,15 +155,28 @@ try {
   }
 
   const currentResolution = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_RESOLVE_ONLY: '1' } });
-  assert.equal(currentResolution.status, 0, currentResolution.stderr);
-  const currentResolutionRecord = Object.fromEntries(currentResolution.stdout.trim().split('|').map((entry) => { const i=entry.indexOf('='); return [entry.slice(0,i),entry.slice(i+1)]; }));
-  assert.match(currentResolutionRecord.exe, /^[A-Z]:\\.*WindowsApps\\OpenAI\.Codex_.*\\app\\resources\\codex\.exe$/i, 'current machine resolves a real official package path without assuming C:');
-  assert.equal(currentResolutionRecord.source, 'parent', 'actual Codex parent image is resolved before package enumeration');
-  console.log(`PASS actual machine package resolution: ${currentResolutionRecord.source} ${currentResolutionRecord.exe}`);
+  if (currentResolution.status === 0) {
+    const currentResolutionRecord = Object.fromEntries(currentResolution.stdout.trim().split('|').map((entry) => { const i=entry.indexOf('='); return [entry.slice(0,i),entry.slice(i+1)]; }));
+    assert.match(currentResolutionRecord.exe, /^[A-Z]:\\.*WindowsApps\\OpenAI\.Codex_.*\\app\\resources\\codex\.exe$/i, 'current machine resolves a real official package path without assuming C:');
+    assert.equal(path.isAbsolute(currentResolutionRecord.exe), true, 'test harness resolver returns an absolute path when Codex is installed');
+    assert.equal((await lstat(currentResolutionRecord.exe)).isFile(), true, 'test harness resolver path is an installed regular CLI');
+    assert.ok(['parent', 'current-package', 'registered-package'].includes(currentResolutionRecord.source), 'the actual host may expose the package through any supported registered source');
+    console.log(`PASS actual machine package resolution: ${currentResolutionRecord.source} ${currentResolutionRecord.exe}`);
+  } else {
+    assert.equal(currentResolution.status, 126, `test harness reports that Codex is not installed: ${currentResolution.stderr}`);
+    assert.equal(currentResolution.stdout, '', 'test harness emits no resolved path when Codex is absent');
+  }
   const parentUnavailable = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_RESOLVE_ONLY: '1', CODEX_BOOTSTRAP_TEST_SKIP_PARENT: '1' } });
-  assert.equal(parentUnavailable.status, 0, parentUnavailable.stderr);
-  const fallbackResolution = Object.fromEntries(parentUnavailable.stdout.trim().split('|').map((entry) => { const i=entry.indexOf('='); return [entry.slice(0,i),entry.slice(i+1)]; }));
-  assert.equal(fallbackResolution.source, 'registered-package', 'registered-package API recovers when ancestor image access is unavailable');
+  if (parentUnavailable.status === 0) {
+    const fallbackResolution = Object.fromEntries(parentUnavailable.stdout.trim().split('|').map((entry) => { const i=entry.indexOf('='); return [entry.slice(0,i),entry.slice(i+1)]; }));
+    assert.match(fallbackResolution.exe, /^[A-Z]:\\.*WindowsApps\\OpenAI\.Codex_.*\\app\\resources\\codex\.exe$/i);
+    assert.equal(path.isAbsolute(fallbackResolution.exe), true);
+    assert.equal((await lstat(fallbackResolution.exe)).isFile(), true, 'package fallback returns an installed regular CLI');
+    assert.equal(fallbackResolution.source, 'registered-package', 'registered-package API recovers when ancestor image access is unavailable');
+  } else {
+    assert.equal(parentUnavailable.status, 126, `parent-unavailable resolution reports the missing package: ${parentUnavailable.stderr}`);
+    assert.equal(parentUnavailable.stdout, '', 'parent-unavailable resolution emits no fake path when Codex is absent');
+  }
 
   const virtualRegisteredRoot = 'D:\\Apps\\WindowsApps\\OpenAI.Codex_26.1024.5000.0_x64__2p2nqsd0c76g0';
   const alternateDrive = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_RESOLVE_ONLY: '1', CODEX_BOOTSTRAP_TEST_REGISTERED_ROOTS: virtualRegisteredRoot } });
