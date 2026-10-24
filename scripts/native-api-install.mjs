@@ -1117,6 +1117,7 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
   if (!task.exists || !task.owned || task.specMatches !== true || !task.enabled) return false;
   const journalPath = journal.paths.journalPath;
   if (!journalPath) return false;
+  const writeRepairArtifact = dependencies.writeRepairArtifact || atomicWrite;
   return withFileLock(`${journalPath}.repair-lock`, async () => {
     const journalBefore = await readRegularOrAbsent(journalPath, "native API install journal");
     if (!journalBefore || encodeJournal(decodeJournal(journalBefore.toString("utf8"))) !== encodeJournal(journal)) {
@@ -1130,28 +1131,43 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
     }
     if (!sameBytes(roleBeforeWrite, roleBefore)) throw new Error("native API role changed during repair; preserving the later change");
     const previousRoleNext = journal.files.role.next;
-    if (refreshRole) await atomicWrite(journal.files.role.path, roleNext);
-    if (refreshRole) journal.files.role.next = roleNext;
-    if (catalogNext) {
-      if (catalogNeedsWrite) await atomicWrite(journal.files.catalog.path, catalogNext);
-      journal.files.catalog.next = catalogNext;
-    }
-    if (refreshRole || catalogNext) {
-      try { await writeJournal(journalPath, journal); }
-      catch (error) {
-        if (refreshRole) {
-          try {
-            const roleCurrent = await readRegularOrAbsent(journal.files.role.path, "native API role");
-            if (!sameBytes(roleCurrent, roleNext)) throw new Error("native API role changed during journal update; preserving the later change");
-            await atomicWrite(journal.files.role.path, roleBefore);
-          } catch (rollbackError) {
-            journal.files.role.next = previousRoleNext;
-            throw new AggregateError([error, rollbackError], "native API role refresh failed and requires recovery");
-          }
-        }
-        journal.files.role.next = previousRoleNext;
-        throw error;
+    const previousCatalogNext = journal.files.catalog.next;
+    let roleWritten = false;
+    let catalogWritten = false;
+    try {
+      if (refreshRole) {
+        await writeRepairArtifact(journal.files.role.path, roleNext);
+        roleWritten = true;
+        journal.files.role.next = roleNext;
       }
+      if (catalogNext) {
+        if (catalogNeedsWrite) {
+          await writeRepairArtifact(journal.files.catalog.path, catalogNext);
+          catalogWritten = true;
+        }
+        journal.files.catalog.next = catalogNext;
+      }
+      if (refreshRole || catalogNext) await writeJournal(journalPath, journal);
+    } catch (error) {
+      const rollbackErrors = [];
+      if (catalogWritten) {
+        try {
+          const catalogCurrent = await readRegularOrAbsent(journal.files.catalog.path, "native API catalog");
+          if (!sameBytes(catalogCurrent, catalogNext)) throw new Error("native API catalog changed during journal update; preserving the later change");
+          await writeRepairArtifact(journal.files.catalog.path, catalogBefore);
+        } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+      }
+      if (roleWritten) {
+        try {
+          const roleCurrent = await readRegularOrAbsent(journal.files.role.path, "native API role");
+          if (!sameBytes(roleCurrent, roleNext)) throw new Error("native API role changed during repair; preserving the later change");
+          await writeRepairArtifact(journal.files.role.path, roleBefore);
+        } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+      }
+      journal.files.role.next = previousRoleNext;
+      journal.files.catalog.next = previousCatalogNext;
+      if (rollbackErrors.length) throw new AggregateError([error, ...rollbackErrors], "native API artifact repair failed and requires recovery");
+      throw error;
     }
     if (nextConfig !== currentConfig) await atomicWrite(journal.config.path, Buffer.from(nextConfig, "utf8"));
     return true;

@@ -479,8 +479,15 @@ try {
   assert.notEqual(legacyRoleBytes.toString("utf8"), installedRoleText, "fixture models an owned role installed before dynamic tools were enabled");
   const legacyJournalRaw = JSON.parse(await readFile(applyJournalPath, "utf8"));
   const originalRolePrior = JSON.stringify(legacyJournalRaw.files.role.prior);
+  const originalCatalogPrior = JSON.stringify(legacyJournalRaw.files.catalog.prior);
+  const applyCatalogPath = legacyJournalRaw.files.catalog.path;
+  const installedCatalog = JSON.parse(await readFile(applyCatalogPath, "utf8"));
+  delete installedCatalog.models[0].model_messages;
+  const legacyCatalogBytes = Buffer.from(`${JSON.stringify(installedCatalog, null, 2)}\n`);
+  legacyJournalRaw.files.catalog.next = { $buffer: legacyCatalogBytes.toString("base64") };
   legacyJournalRaw.files.role.next = { $buffer: legacyRoleBytes.toString("base64") };
   await writeFile(applyRolePath, legacyRoleBytes);
+  await writeFile(applyCatalogPath, legacyCatalogBytes);
   await writeFile(applyJournalPath, `${JSON.stringify(legacyJournalRaw, null, 2)}\n`);
   let changeRoleDuringRepair = true;
   const raceApplyDeps = {
@@ -502,6 +509,38 @@ try {
     "explicit Apply refuses to overwrite a role changed after its ownership snapshot");
   equal(await readFile(applyRolePath, "utf8"), "manual role edit during Apply\n", "role CAS preserves a concurrent manual edit");
   await writeFile(applyRolePath, legacyRoleBytes);
+  await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, {
+    ...applyDeps,
+    writeRepairArtifact: async (file, bytes) => {
+      if (file === applyCatalogPath) throw new Error("injected catalog repair write failure");
+      await writeFile(file, bytes);
+    },
+  }), /injected catalog repair write failure/, "catalog failure occurs after the role write and must abort refresh");
+  equal(await readFile(applyRolePath, "utf8"), legacyRoleBytes.toString("utf8"), "catalog write failure CAS-rolls the role back to its prior owned bytes");
+  equal((await readFile(applyCatalogPath)).equals(legacyCatalogBytes), true, "failed catalog write leaves the owned legacy catalog unchanged");
+  const failedRefreshJournal = JSON.parse(await readFile(applyJournalPath, "utf8"));
+  equal(Buffer.from(failedRefreshJournal.files.role.next.$buffer, "base64").equals(legacyRoleBytes), true,
+    "catalog write failure keeps the journal role next image aligned with the restored role");
+  equal(Buffer.from(failedRefreshJournal.files.catalog.next.$buffer, "base64").equals(legacyCatalogBytes), true,
+    "catalog write failure preserves its prior journal next image");
+  equal(JSON.stringify(failedRefreshJournal.files.role.prior), originalRolePrior, "failed refresh does not alter the original role rollback image");
+  equal(JSON.stringify(failedRefreshJournal.files.catalog.prior), originalCatalogPrior, "failed refresh does not alter the original catalog rollback image");
+  await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, {
+    ...applyDeps,
+    writeRepairArtifact: async (file, bytes) => {
+      if (file === applyCatalogPath) {
+        await writeFile(applyRolePath, "manual role edit after role write\n");
+        throw new Error("injected catalog repair write failure after manual edit");
+      }
+      await writeFile(file, bytes);
+    },
+  }), /requires recovery/, "role rollback detects a manual edit made after its own write");
+  equal(await readFile(applyRolePath, "utf8"), "manual role edit after role write\n", "CAS recovery preserves the later role edit");
+  const manualRecoveryJournal = JSON.parse(await readFile(applyJournalPath, "utf8"));
+  equal(Buffer.from(manualRecoveryJournal.files.role.next.$buffer, "base64").equals(legacyRoleBytes), true,
+    "manual role edit remains visibly different from the unchanged owned journal image");
+  equal(JSON.stringify(manualRecoveryJournal.files.role.prior), originalRolePrior, "manual-change recovery preserves the original role rollback image");
+  await writeFile(applyRolePath, legacyRoleBytes);
   const roleRefresh = await applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps);
   equal(roleRefresh.applied, true, "explicit Apply CAS-refreshes a known legacy owned role");
   equal(roleRefresh.appliedProfiles.includes(applyProfile.profileId), true, "role refresh is reported as applied");
@@ -509,6 +548,8 @@ try {
   const refreshedJournalRaw = JSON.parse(await readFile(applyJournalPath, "utf8"));
   equal(Buffer.from(refreshedJournalRaw.files.role.next.$buffer, "base64").equals(await readFile(applyRolePath)), true,
     "role journal next image advances with the CAS-written role");
+  equal(Buffer.from(refreshedJournalRaw.files.catalog.next.$buffer, "base64").equals(await readFile(applyCatalogPath)), true,
+    "successful explicit Apply advances the legacy catalog with its owned role");
   equal(JSON.stringify(refreshedJournalRaw.files.role.prior), originalRolePrior, "role refresh preserves the original rollback image");
   const applyJournalBytes = await readFile(applyJournalPath);
   const applyJournal = JSON.parse(applyJournalBytes.toString("utf8"));
