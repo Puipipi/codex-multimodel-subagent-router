@@ -177,9 +177,21 @@ export function readDesktopPackageVersion(exePath) {
   return match[1];
 }
 
-export async function probePatchedAppServer({ exePath, codexHome, cwd, cliVersion, timeoutMs = 10_000, AppServer } = {}) {
-  if (typeof AppServer !== "function") throw new Error("AppServer implementation must be supplied");
-  const server = new AppServer({ exe: exePath, codexHome, cwd });
+function hasExactVersionToken(userAgent, cliVersion) {
+  if (typeof userAgent !== "string" || typeof cliVersion !== "string" || !cliVersion) return false;
+  const isVersionChar = (value) => value !== undefined && /[A-Za-z0-9.+-]/.test(value);
+  let offset = userAgent.indexOf(cliVersion);
+  while (offset !== -1) {
+    const end = offset + cliVersion.length;
+    if (!isVersionChar(userAgent[offset - 1]) && !isVersionChar(userAgent[end])) return true;
+    offset = userAgent.indexOf(cliVersion, offset + 1);
+  }
+  return false;
+}
+
+export async function probePatchedAppServer({ exePath, codexHome, cwd, cliVersion, timeoutMs = 10_000, AppServer: AppServerImpl = AppServer } = {}) {
+  if (typeof AppServerImpl !== "function") throw new Error("AppServer implementation must be available");
+  const server = new AppServerImpl({ exe: exePath, codexHome, cwd });
   let initialized = false;
   let timer;
   try {
@@ -189,7 +201,7 @@ export async function probePatchedAppServer({ exePath, codexHome, cwd, cliVersio
       clientInfo: { name: "native-bootstrap-probe", title: "Native Bootstrap Probe", version: "1" },
       capabilities: { experimentalApi: true },
     }, timeoutMs);
-    if (typeof result?.userAgent !== "string" || !result.userAgent.includes(cliVersion)) throw new Error("app-server initialize returned an unexpected CLI identity");
+    if (!hasExactVersionToken(result?.userAgent, cliVersion)) throw new Error("app-server initialize returned an unexpected CLI identity");
     const config = await server.call("config/read", { includeLayers: true, cwd }, timeoutMs);
     if (!config?.config || typeof config.config !== "object") throw new Error("app-server config/read returned an invalid configuration");
     initialized = true;
@@ -201,9 +213,9 @@ export async function probePatchedAppServer({ exePath, codexHome, cwd, cliVersio
   }
 }
 
-export async function probeAndWriteCompatibilityReceipt({ officialPath, patchedPath, runtimeRoot, receiptPath = path.join(runtimeRoot, "compatibility.json"), approvedPatchHashes = [], timeoutMs = 10_000 } = {}) {
-  const officialVersion = readCodexCliVersion(officialPath);
-  const desktopPackageVersion = readDesktopPackageVersion(officialPath);
+export async function probeAndWriteCompatibilityReceipt({ officialPath, patchedPath, runtimeRoot, receiptPath = path.join(runtimeRoot, "compatibility.json"), approvedPatchHashes = [], timeoutMs = 10_000, AppServer: AppServerImpl = AppServer, readVersion = readCodexCliVersion, readPackageVersion = readDesktopPackageVersion } = {}) {
+  const officialVersion = readVersion(officialPath);
+  const desktopPackageVersion = readPackageVersion(officialPath);
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "codex-bootstrap-compatibility-"));
   const cwd = path.join(tempHome, "workspace");
   const codexHome = path.join(tempHome, "codex-home");
@@ -211,7 +223,7 @@ export async function probeAndWriteCompatibilityReceipt({ officialPath, patchedP
   await mkdir(codexHome, { recursive: true });
   await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-6.1-sol"\nmodel_provider = "openai"\napproval_policy = "never"\n', { flag: "wx" });
   try {
-    const probeResult = await probePatchedAppServer({ exePath: patchedPath, codexHome, cwd, cliVersion: officialVersion, timeoutMs });
+    const probeResult = await probePatchedAppServer({ exePath: patchedPath, codexHome, cwd, cliVersion: officialVersion, timeoutMs, AppServer: AppServerImpl });
     return await writeCompatibilityReceipt(receiptPath, { officialPath, officialVersion, desktopPackageVersion, patchedPath, probeResult, approvedPatchHashes });
   } finally {
     await rm(tempHome, { recursive: true, force: true });

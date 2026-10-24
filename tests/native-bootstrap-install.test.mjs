@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { applyBootstrapEnvironment, planBootstrapEnvironment, rollbackBootstrapEnvironment } from '../scripts/native-bootstrap-install.mjs';
+import { applyBootstrapEnvironment, planBootstrapEnvironment, probeAndWriteCompatibilityReceipt, probePatchedAppServer, rollbackBootstrapEnvironment } from '../scripts/native-bootstrap-install.mjs';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'bootstrap-environment-test-'));
 try {
@@ -60,6 +61,48 @@ try {
   const missingSnapshot = await applyBootstrapEnvironment(missingPlan, adapter);
   await rollbackBootstrapEnvironment(missingSnapshot, adapter, { isRegularFile: async () => false });
   assert.deepEqual(env.get('CODEX_CLI_PATH'), { present: false, value: null }, 'rollback unsets its owned override instead of restoring a removed package path');
+
+  const cliVersion = '0.164.0-alpha.11.1';
+  let fakeCloseCalls = 0;
+  const fakeServer = (userAgent, extra = {}) => class {
+    async start() {}
+    async call(method) {
+      if (method === 'initialize') return { userAgent, ...extra };
+      if (method === 'config/read') return { config: { model: 'gpt-6.1-sol' } };
+      throw new Error(`unexpected app-server method ${method}`);
+    }
+    async close() { fakeCloseCalls += 1; }
+  };
+  const probeBase = { exePath: 'unused-by-fake-server.exe', codexHome: root, cwd: root, cliVersion, timeoutMs: 1_000 };
+  assert.deepEqual(await probePatchedAppServer({ ...probeBase, AppServer: fakeServer(`codex-cli/${cliVersion} (windows)`) }), {
+    status: 'passed', probe: 'app-server-initialize', cliVersion,
+  }, 'a delimited exact version token in result.userAgent is accepted');
+  await assert.rejects(() => probePatchedAppServer({ ...probeBase, AppServer: fakeServer(`codex-cli/${cliVersion}0 (windows)`) }), /unexpected CLI identity/i,
+    'a version-prefix collision is rejected');
+  await assert.rejects(() => probePatchedAppServer({ ...probeBase, AppServer: fakeServer('codex-cli/0.163.0 (windows)', { other: cliVersion }) }), /unexpected CLI identity/i,
+    'a correct version in an unrelated initialize field cannot satisfy the check');
+  assert.ok(fakeCloseCalls >= 3, 'probe closes each app-server instance after success or rejection');
+
+  const receiptRoot = path.join(root, 'real receipt root');
+  const receiptPatchedPath = path.join(receiptRoot, 'versions', 'patched', 'codex.exe');
+  const receiptOfficialPath = path.join(root, 'WindowsApps', 'OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0', 'app', 'resources', 'codex.exe');
+  await mkdir(path.dirname(receiptOfficialPath), { recursive: true });
+  await mkdir(path.dirname(receiptPatchedPath), { recursive: true });
+  const officialBytes = Buffer.from('official cli bytes');
+  const patchedBytes = Buffer.from('patched cli bytes');
+  const patchedHash = createHash('sha256').update(patchedBytes).digest('hex');
+  await writeFile(receiptOfficialPath, officialBytes);
+  await writeFile(receiptPatchedPath, patchedBytes);
+  const receipt = await probeAndWriteCompatibilityReceipt({
+    officialPath: receiptOfficialPath, patchedPath: receiptPatchedPath, runtimeRoot: receiptRoot,
+    approvedPatchHashes: [patchedHash], readVersion: () => cliVersion, readPackageVersion: () => '26.1021.3705.0',
+    AppServer: fakeServer(`codex-cli/${cliVersion} (windows)`),
+  });
+  assert.equal(receipt.compatibility?.status, 'passed');
+  assert.equal(receipt.compatibility?.cliVersion, cliVersion);
+  assert.equal(receipt.patchedSha256, patchedHash);
+  assert.deepEqual(JSON.parse(await readFile(path.join(receiptRoot, 'compatibility.json'), 'utf8')), receipt,
+    'the high-level default receipt path uses the configured AppServer and writes the canonical nested receipt');
   console.log('PASS bootstrap environment ownership, prior snapshot and CAS rollback');
 } finally {
   await rm(root, { recursive: true, force: true });

@@ -5,6 +5,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeCompatibilityReceipt } from '../scripts/native-bootstrap-install.mjs';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'native-bootstrap-test-'));
 const repo = fileURLToPath(new URL('..', import.meta.url));
@@ -73,13 +74,14 @@ try {
   assert.equal(original.stdout, 'argc=3|argument with spaces|中文路径|', 'native bootstrap preserves arguments and stdout without protocol text');
   assert.equal(original.stderr, '', 'native bootstrap keeps diagnostics off stderr');
 
-  const officialSha256 = createHash('sha256').update(await readFile(backend)).digest('hex');
   await writeFile(path.join(runtime, 'codex-patched.exe'), await readFile(patched));
-  await writeFile(path.join(runtime, 'compatibility.json'), JSON.stringify({
-    schemaVersion: 1, officialSha256, officialVersion: '0.164.0-alpha.11.1', desktopPackageVersion: '26.1021.3705.0',
-    patchedPath: path.join(runtime, 'codex-patched.exe'), patchedSha256,
-    compatibility: { status: 'passed', probe: 'app-server-initialize', cliVersion: '0.164.0-alpha.11.1' },
-  }));
+  const receiptPath = path.join(runtime, 'compatibility.json');
+  const validReceipt = await writeCompatibilityReceipt(receiptPath, {
+    officialPath: backend, officialVersion: '0.164.0-alpha.11.1', desktopPackageVersion: '26.1021.3705.0',
+    patchedPath: path.join(runtime, 'codex-patched.exe'),
+    probeResult: { status: 'passed', probe: 'app-server-initialize', cliVersion: '0.164.0-alpha.11.1' },
+    approvedPatchHashes: [patchedSha256],
+  });
   const request = '{"id":1,"method":"initialize","params":{"clientInfo":{"name":"test","version":"1"}}}\n{"id":2,"method":"config/read","params":{"includeLayers":true}}\n';
   const officialResponse = '{"id":1,"result":{"userAgent":"official"}}\n{"id":2,"result":{"config":{}}}\n';
   for (const mode of ['exit', 'garbage', 'malformed', 'hang', 'error', 'wrong-version', 'wrong-field-version', 'version-prefix']) {
@@ -109,6 +111,24 @@ try {
   assert.equal(liveFailure.status, 2, 'a failure after successful probe exits normally instead of replaying requests to official');
   assert.equal(liveFailure.stdout.replaceAll('\r\n', '\n'), 'patched stream already consumed\n', 'formal patched stream is never followed by an official duplicate response');
   assert.equal(JSON.parse(await readFile(path.join(runtime, 'upgrade-status.json'), 'utf8')).state, 'disabled', 'late process failure disables future child routing');
+
+  const baselinePatchStarts = (await readFile(path.join(root, 'patch-started.marker'), 'utf8')).trim().split(/\r?\n/).length;
+  const invalidReceiptVariants = [
+    ['nested failure', { status: 'passed', probe: 'app-server-initialize', cliVersion: '0.164.0-alpha.11.1', ...validReceipt, compatibility: { ...validReceipt.compatibility, status: 'failed' } }],
+    ['nested version mismatch', { status: 'passed', probe: 'app-server-initialize', cliVersion: '0.164.0-alpha.11.1', ...validReceipt, compatibility: { ...validReceipt.compatibility, cliVersion: '0.163.0' } }],
+    ['flat-only legacy receipt', { status: 'passed', probe: 'app-server-initialize', cliVersion: '0.164.0-alpha.11.1', ...validReceipt, compatibility: undefined }],
+  ];
+  for (const [label, badReceipt] of invalidReceiptVariants) {
+    await writeFile(receiptPath, JSON.stringify(badReceipt));
+    const fallback = spawnSync(harness, ['app-server'], {
+      input: request, encoding: 'utf8', windowsHide: true, timeout: 7000,
+      env: { ...process.env, CODEX_BOOTSTRAP_TEST_OFFICIAL: backend, CODEX_BOOTSTRAP_TEST_PACKAGE_VERSION: '26.1021.3705.0', CODEX_BOOTSTRAP_TEST_RUNTIME_ROOT: runtime, CODEX_HOME: root, PATCHED_MODE: 'success', PATCH_MARKER: path.join(root, 'patch-started.marker') },
+    });
+    assert.equal(fallback.status, 0, `${label}: ${fallback.stderr}`);
+    assert.equal(fallback.stdout.replaceAll('\r\n', '\n'), officialResponse, `${label} must not override the canonical compatibility object`);
+    assert.equal(JSON.parse(await readFile(path.join(runtime, 'upgrade-status.json'), 'utf8')).state, 'disabled', `${label} disables patched selection`);
+    assert.equal((await readFile(path.join(root, 'patch-started.marker'), 'utf8')).trim().split(/\r?\n/).length, baselinePatchStarts, `${label} must not launch the patched executable`);
+  }
 
   const currentResolution = spawnSync(harness, [], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CODEX_BOOTSTRAP_TEST_RESOLVE_ONLY: '1' } });
   assert.equal(currentResolution.status, 0, currentResolution.stderr);

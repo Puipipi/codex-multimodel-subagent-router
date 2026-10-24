@@ -197,12 +197,16 @@ static int json_string(const char *json,const char *key,char *out,size_t cap) {
   char name[96];_snprintf(name,sizeof(name),"\"%s\"",key);const char *p=strstr(json,name);if(!p)return 0;p=strchr(p,':');if(!p)return 0;p++;while(*p==' '||*p=='\t')p++;if(*p!='\"')return 0;p++;
   size_t n=0;while(*p&&*p!='\"'&&n+1<cap){if(*p=='\\'&&p[1])p++;out[n++]=*p++;}if(*p!='\"')return 0;out[n]=0;return 1;
 }
+static int json_member_value(const char *object,const char *name,const char **value);
+static int json_string_member(const char *object,const char *name,const char **value,size_t *valueLen);
 static int json_number_one(const char *json,const char *key) {char name[96];_snprintf(name,sizeof(name),"\"%s\"",key);const char*p=strstr(json,name);if(!p)return 0;p=strchr(p,':');if(!p)return 0;while(*++p==' '||*p=='\t');return *p=='1'&&(p[1]==','||p[1]=='}');}
 static int beneath(const wchar_t *root,const wchar_t *candidate) {wchar_t a[MAX_PATH_CHARS],b[MAX_PATH_CHARS];if(!GetFullPathNameW(root,MAX_PATH_CHARS,a,NULL)||!GetFullPathNameW(candidate,MAX_PATH_CHARS,b,NULL))return 0;size_t n=wcslen(a);if(a[n-1]!=L'\\'){a[n++]=L'\\';a[n]=0;}return _wcsnicmp(a,b,n)==0;}
 static int compatible_patch(const Official *official,const wchar_t *runtimeRoot,wchar_t patch[MAX_PATH_CHARS],char expectedVersion[128]) {
   if(!APPROVED_PATCH_SHA256[0])return 0;
   wchar_t receiptPath[MAX_PATH_CHARS];_snwprintf(receiptPath,MAX_PATH_CHARS,L"%s\\compatibility.json",runtimeRoot);char *j=read_text(receiptPath);if(!j)return 0;
-  char officialHash[65],patchHash[65],recordedOfficial[65],recordedVersion[128],recordedPackage[128],probeStatus[32],probeName[64],probeVersion[128],recordedApproved[65],actualVersion[128];
+  char officialHash[65],patchHash[65],recordedOfficial[65],recordedVersion[128],recordedPackage[128],probeVersion[128],recordedApproved[65],actualVersion[128];
+  const char *compatibility=NULL,*probeStatus=NULL,*probeName=NULL,*probeVersionValue=NULL;
+  size_t probeStatusLen=0,probeNameLen=0,probeVersionLen=0;
 
   int ok=0;
   if(!json_number_one(j,"schemaVersion"))goto done;
@@ -216,10 +220,13 @@ static int compatible_patch(const Official *official,const wchar_t *runtimeRoot,
   if(!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,patchUtf8,-1,patch,MAX_PATH_CHARS))goto done;
   if(!beneath(runtimeRoot,patch)||!regular_file(patch)||!sha256_file(patch,patchHash))goto done;
   if(!json_string(j,"patchedSha256",recordedApproved,sizeof(recordedApproved))||strcmp(patchHash,recordedApproved)||_stricmp(patchHash,APPROVED_PATCH_SHA256))goto done;
-  if(!json_string(j,"status",probeStatus,sizeof(probeStatus))||strcmp(probeStatus,"passed"))goto done;
-  if(!json_string(j,"probe",probeName,sizeof(probeName))||strcmp(probeName,"app-server-initialize"))goto done;
+  if(!json_member_value(j,"compatibility",&compatibility)||*compatibility!='{')goto done;
+  if(!json_string_member(compatibility,"status",&probeStatus,&probeStatusLen)||probeStatusLen!=6||memcmp(probeStatus,"passed",6))goto done;
+  if(!json_string_member(compatibility,"probe",&probeName,&probeNameLen)||probeNameLen!=sizeof("app-server-initialize")-1||memcmp(probeName,"app-server-initialize",sizeof("app-server-initialize")-1))goto done;
   if(!json_string(j,"officialVersion",recordedVersion,sizeof(recordedVersion))||strcmp(recordedVersion,actualVersion))goto done;
-  if(!json_string(j,"cliVersion",probeVersion,sizeof(probeVersion))||strcmp(recordedVersion,probeVersion))goto done;
+  if(!json_string_member(compatibility,"cliVersion",&probeVersionValue,&probeVersionLen)||probeVersionLen>=sizeof(probeVersion))goto done;
+  memcpy(probeVersion,probeVersionValue,probeVersionLen);probeVersion[probeVersionLen]=0;
+  if(strcmp(recordedVersion,probeVersion))goto done;
   // Prevent selecting the official executable itself as a patched child.
   if(same_path(official->exe,patch))goto done;
   strcpy(expectedVersion,recordedVersion);ok=1;
