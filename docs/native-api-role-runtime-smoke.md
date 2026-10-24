@@ -23,6 +23,8 @@ node tests/native-api-role-cli-smoke.mjs --binary 'C:\path\to\ci-validated\codex
 
 ## 验收范围
 
-真实运行要求父模型收到原始任务并发出 `spawn_agent`，子代理以本机 `native_api` role 启动，收到带标记的任务；随后子代理通过真实 `exec_command` 工具调用 PowerShell 创建证明文件，工具结果返回给子代理，子代理和父任务都完成。脚本通过 `thread/list` 与 `thread/read` 核实父子关系、角色、工具调用/输出和最终消息，并核对证明文件字节及 SHA-256。输出只包含验收布尔值、请求计数和哈希，不包含提示词、响应正文、会话 ID、URL 或凭据。
+真实运行要求父模型收到任务并以真实 `spawn_agent` 启动 `native_api` 子代理。测试在 `thread/start` 注册固定 schema 的只读 `fixture_echo` 工具；子代理必须从真实模型请求中的 `tools` 看到该工具，并以 `function_call` 请求固定 marker。app-server 再通过真实 `item/tool/call` JSON-RPC 向测试客户端请求执行。客户端只在工具名、marker 和非 root thread 均匹配时返回固定文本；未知 server request 不响应。子代理收到工具结果后完成，父任务等待并完成。
 
-这验证 CLI/app-server 的本地原生 API 子代理和工具调用链，不验证 Codex 桌面 UI、已安装插件或线上模型行为。`--mock-self-test` 只验证 mock/gateway 的本地协议，不代表真实 app-server 运行成功。native API profile 禁用 WebSocket 与重试；此测试也不声称验证 WS 重试或 HTTP fallback。WS close/retry 场景需要单独的窄测试。
+脚本以 `thread/list` 核实子代理角色和 parent thread，以 `thread/read` 核实真实 `dynamicToolCall` 项的参数、成功状态、结果和最终消息。输出不包含提示词、响应正文、会话 ID、URL 或凭据。所有模型响应来自 loopback mock；外网代理在本地拒绝连接，不调用任何外部模型。
+
+这验证 CLI/app-server 的本地原生 API 子代理、动态工具客户端回调和历史记录链，不验证 Codex 桌面 UI、已安装插件或线上模型行为。只读工具不检查 builtin shell 或文件写权限；PowerShell、exec_command、apply_patch 和真实文件变更链均未通过此测试验收。`--mock-self-test` 只验证 mock/gateway 的本地协议，不代表真实 app-server 运行成功。此测试也不验证 WS 重试或 HTTP fallback；WS close/retry 场景需要单独的窄测试。

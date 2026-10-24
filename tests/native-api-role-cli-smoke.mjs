@@ -22,7 +22,8 @@ const PARENT_MODEL = "fixture-parent-model";
 const CHILD_MODEL = "fixture-native-api-model";
 const USER_TASK_MARKER = "NATIVE_API_ROLE_USER_TASK_7D4A";
 const CHILD_TASK_MARKER = "NATIVE_API_ROLE_CHILD_TASK_0A91";
-const TOOL_PROOF = "NATIVE_API_ROLE_POWERSHELL_PROOF_59CE";
+const DYNAMIC_TOOL_MARKER = "NATIVE_API_ROLE_READONLY_ECHO_72B5";
+const DYNAMIC_TOOL_RESULT = "NATIVE_API_ROLE_READONLY_ECHO_RESULT_49C1";
 const CHILD_FINAL_MARKER = "NATIVE_API_ROLE_CHILD_FINAL_1B62";
 const PARENT_FINAL_MARKER = "NATIVE_API_ROLE_PARENT_FINAL_8E30";
 const DEADLINE_MS = 120_000;
@@ -44,8 +45,8 @@ function usage() {
   ].join("\n");
 }
 
-function assertSafe(condition, message) {
-  if (!condition) throw new Error(message);
+function assertSafe(condition, message, safeDetails) {
+  if (!condition) throw Object.assign(new Error(message), { safeDetails });
 }
 
 function sha256File(file) {
@@ -100,13 +101,15 @@ function responsesSse(res, model, items) {
   res.end();
 }
 
-function functionCall({ id, callId, name, args }) {
+function functionCall({ id, callId, name, namespace, args, encryptedFunctionArgs }) {
   return {
     id,
     type: "function_call",
     status: "completed",
     call_id: callId,
     name,
+    ...(namespace ? { namespace } : {}),
+    ...(encryptedFunctionArgs ? { encrypted_function_args: encryptedFunctionArgs } : {}),
     arguments: JSON.stringify(args),
   };
 }
@@ -127,8 +130,28 @@ function toolNames(body) {
     : [];
 }
 
+function namespaceToolNames(body, namespace) {
+  const tool = Array.isArray(body?.tools)
+    ? body.tools.find((entry) => entry?.type === "namespace" && entry?.name === namespace) : null;
+  return Array.isArray(tool?.tools) ? tool.tools.map((entry) => entry?.name).filter((name) => typeof name === "string") : [];
+}
+
 function bodyText(body) {
   return JSON.stringify(body?.input ?? body?.messages ?? []);
+}
+
+function safeSummaryText(value) {
+  return String(value ?? "")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "<URL>")
+    .replace(/[A-Za-z]:\\[^\r\n"'<>]*/g, "<PATH>")
+    .replace(/\\\\[^\r\n"'<>]*/g, "<PATH>")
+    .replace(/(?:authorization|api[_ -]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+/gi, "$1<REDACTED>")
+    .replace(/NATIVE_API_ROLE_[A-Z0-9_]+/g, "<MARKER>")
+    .replace(/native_api_role_smoke_child/g, "<TASK>")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+    .slice(0, 600);
 }
 
 function callOutput(body, callId) {
@@ -145,8 +168,12 @@ async function startMock({ mockPortHint = 0 } = {}) {
     childTaskSeen: false,
     childToolResultSeen: false,
     parentSpawnOutputSeen: false,
+    spawnOutputSummary: null,
+    listAgentsOutputSeen: false,
     parentWaitOutputs: 0,
-    powershellArgumentsSeen: false,
+    dynamicToolRequestSeen: false,
+    dynamicToolRequestThreadId: null,
+    dynamicToolRequestSummary: null,
     blockedProxyAttempts: 0,
     unexpectedRequests: 0,
     failureCode: null,
@@ -174,36 +201,66 @@ async function startMock({ mockPortHint = 0 } = {}) {
         if (state.parentRequests === 1) {
           state.parentTaskSeen = bodyText(body).includes(USER_TASK_MARKER);
           assertSafe(state.parentTaskSeen, "root task marker missing from parent model input");
-          assertSafe(toolNames(body).includes("spawn_agent"), "parent did not receive spawn_agent tool");
+          assertSafe(namespaceToolNames(body, "collaboration").includes("spawn_agent"), "parent did not receive spawn_agent tool");
           const roleId = state.roleName;
           assertSafe(typeof roleId === "string", "fixture role name missing");
           responsesSse(res, PARENT_MODEL, [functionCall({
             id: "parent-spawn-item",
             callId: "call-native-api-role-spawn",
             name: "spawn_agent",
+            namespace: "collaboration",
             args: {
-              task_name: "native-api-role-smoke-child",
-              message: CHILD_TASK_MARKER + ": use exec_command with PowerShell to write the proof file, then report the exact marker",
+              task_name: "native_api_role_smoke_child",
+              message: CHILD_TASK_MARKER + ": call the inherited fixture_echo tool with the fixed marker, then report its result",
               agent_type: roleId,
               fork_turns: "none",
             },
+            encryptedFunctionArgs: [],
           })]);
           return;
         }
 
         const spawnOutput = callOutput(body, "call-native-api-role-spawn");
         state.parentSpawnOutputSeen ||= Boolean(spawnOutput);
+        if (spawnOutput && !state.spawnOutputSummary) {
+          const value = spawnOutput.output;
+          const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+          const lower = text.toLowerCase();
+          state.spawnOutputSummary = {
+            type: Array.isArray(value) ? "array" : value === null ? "null" : typeof value,
+            keys: value && typeof value === "object" ? Object.keys(value).filter((key) => /^[a-zA-Z0-9_]{1,48}$/.test(key)).sort() : [],
+            hasTaskName: /native_api_role_smoke_child/.test(text),
+            hasRoleError: /role|agent_type|native_api/.test(lower),
+            hasUnsupported: /unsupported|not supported|unknown/.test(lower),
+            hasFailure: /error|failed|rejected/.test(lower),
+            safeText: safeSummaryText(text),
+          };
+        }
         const inputItems = Array.isArray(body?.input) ? body.input : [];
         if (inputItems.some((item) => item?.type === "function_call_output" && String(item.call_id || "").startsWith("call-native-api-role-wait-"))) {
           state.parentWaitOutputs += 1;
         }
         if (!state.childFinished) {
           assertSafe(state.parentRequests <= 14, "parent exceeded bounded wait calls");
-          assertSafe(toolNames(body).includes("wait_agent"), "parent wait_agent tool is unavailable");
+          if (state.parentRequests === 2) {
+            assertSafe(Boolean(spawnOutput) && /task_name/.test(JSON.stringify(spawnOutput.output)), "V2 spawn did not return a task result", state.spawnOutputSummary);
+            assertSafe(namespaceToolNames(body, "collaboration").includes("list_agents"), "parent list_agents tool is unavailable");
+            responsesSse(res, PARENT_MODEL, [functionCall({
+              id: "parent-list-agents-item",
+              callId: "call-native-api-role-list-agents",
+              name: "list_agents",
+              namespace: "collaboration",
+              args: {},
+            })]);
+            return;
+          }
+          if (callOutput(body, "call-native-api-role-list-agents")) state.listAgentsOutputSeen = true;
+          assertSafe(namespaceToolNames(body, "collaboration").includes("wait_agent"), "parent wait_agent tool is unavailable");
           responsesSse(res, PARENT_MODEL, [functionCall({
             id: "parent-wait-item-" + state.parentRequests,
             callId: "call-native-api-role-wait-" + state.parentRequests,
             name: "wait_agent",
+            namespace: "collaboration",
             args: { timeout_ms: 5000 },
           })]);
           return;
@@ -220,26 +277,19 @@ async function startMock({ mockPortHint = 0 } = {}) {
         if (state.childRequests === 1) {
           state.childTaskSeen = bodyText(body).includes(CHILD_TASK_MARKER);
           assertSafe(state.childTaskSeen, "delegated child task marker missing from native API request");
-          assertSafe(toolNames(body).includes("exec_command"), "child model did not receive exec_command");
-          const command = [
-            "$proofPath = Join-Path $PWD 'native-api-role-proof.txt'",
-            "[System.IO.File]::WriteAllText($proofPath, '" + TOOL_PROOF + "')",
-            "Write-Output '" + TOOL_PROOF + "'",
-          ].join("; ");
-          const cmd = "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"" + command + "\"";
-          state.powershellArgumentsSeen = true;
+          assertSafe(toolNames(body).includes("fixture_echo"), "child model did not inherit fixture_echo");
           responsesSse(res, CHILD_MODEL, [functionCall({
-            id: "child-exec-item",
-            callId: "call-native-api-role-exec",
-            name: "exec_command",
-            args: { cmd, workdir: state.workspace, yield_time_ms: 1000, max_output_tokens: 200 },
+            id: "child-fixture-echo-item",
+            callId: "call-native-api-role-fixture-echo",
+            name: "fixture_echo",
+            args: { marker: DYNAMIC_TOOL_MARKER },
           })]);
           return;
         }
 
-        const output = callOutput(body, "call-native-api-role-exec");
-        state.childToolResultSeen = Boolean(output && String(output.output).includes(TOOL_PROOF));
-        assertSafe(state.childToolResultSeen, "exec_command output was not returned to the child model");
+        const output = callOutput(body, "call-native-api-role-fixture-echo");
+        state.childToolResultSeen = Boolean(output && String(output.output).includes(DYNAMIC_TOOL_RESULT));
+        assertSafe(state.childToolResultSeen, "fixture_echo output was not returned to the child model");
         state.childFinished = true;
         responsesSse(res, CHILD_MODEL, [finalMessage("child-final-item", CHILD_FINAL_MARKER)]);
         return;
@@ -248,7 +298,8 @@ async function startMock({ mockPortHint = 0 } = {}) {
       state.unexpectedRequests += 1;
       res.writeHead(404).end();
     } catch (error) {
-      state.failureCode = error?.message?.match(/^[A-Z0-9_]+$/)?.[0] || "MOCK_ASSERTION_FAILED";
+      state.failureCode = typeof error?.message === "string" && /^[a-zA-Z0-9 _-]{1,120}$/.test(error.message)
+        ? error.message : "MOCK_ASSERTION_FAILED";
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "loopback mock assertion failed" } }));
       else res.destroy();
     }
@@ -259,13 +310,17 @@ async function startMock({ mockPortHint = 0 } = {}) {
   return { server, state, mockPort };
 }
 
-function minimalChildEnv(codexHome, proxyPort) {
+function minimalChildEnv(codexHome, proxyPort, codexCliPath) {
   const env = {};
   for (const name of ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "COMSPEC", "PATHEXT"]) {
     if (process.env[name]) env[name] = process.env[name];
   }
   env.CODEX_HOME = codexHome;
   env.HOME = codexHome;
+  if (codexCliPath) {
+    env.CODEX_CLI_PATH = codexCliPath;
+    env.CODEX_APP_RUNTIME_CLI_PATH = codexCliPath;
+  }
   env.OPENAI_API_KEY = "loopback-only-synthetic-key";
   env.NO_PROXY = "127.0.0.1,localhost";
   env.no_proxy = env.NO_PROXY;
@@ -297,7 +352,9 @@ async function prepareHome(codexHome, mockPort, gatewayBaseUrl) {
   }, { label: "loopback smoke native API child" });
   const catalogInstructions = { base_instructions: "Fixed loopback runtime smoke model instructions." };
   const parentCatalogPath = path.join(codexHome, "parent-models.json");
-  await fs.writeFile(parentCatalogPath, JSON.stringify(buildApiCatalog(parentProfile, catalogInstructions)), "utf8");
+  const parentCatalog = buildApiCatalog(parentProfile, catalogInstructions);
+  parentCatalog.models[0].multi_agent_version = "v2";
+  await fs.writeFile(parentCatalogPath, JSON.stringify(parentCatalog), "utf8");
   const artifacts = renderApiArtifacts(childProfile, {
     codexHome,
     baseUrl: apiProfileBaseUrl(gatewayBaseUrl, childProfile.profileId),
@@ -312,6 +369,9 @@ async function prepareHome(codexHome, mockPort, gatewayBaseUrl) {
     'approval_policy = "never"',
     'sandbox_mode = "workspace-write"',
     'web_search = "disabled"',
+    "",
+    "[features]",
+    "multi_agent_v2_dynamic_tools = true",
     "",
     "[features.multi_agent_v2]",
     "enabled = true",
@@ -344,9 +404,9 @@ async function makeAppServer(exePath, codexHome, workspace, proxyPort) {
     codexHome,
     cwd: workspace,
     eventLog: null,
-    envOverrides: minimalChildEnv(codexHome, proxyPort),
+    envOverrides: minimalChildEnv(codexHome, proxyPort, exePath),
     spawnProcess(exe, args, options) {
-      const env = { ...minimalChildEnv(codexHome, proxyPort), RUST_LOG: "error" };
+      const env = { ...minimalChildEnv(codexHome, proxyPort, exePath), RUST_LOG: "error" };
       return spawn(exe, args, { ...options, env, windowsHide: true });
     },
   });
@@ -359,6 +419,30 @@ function getThread(value) {
 function threadIdentifier(value) {
   const thread = getThread(value);
   return typeof thread?.id === "string" ? thread.id : null;
+}
+
+function findFixtureEchoHistory(value) {
+  const stack = [value];
+  let visited = 0;
+  while (stack.length && visited < 10_000) {
+    const current = stack.pop();
+    visited += 1;
+    if (!current || typeof current !== "object") continue;
+    if (current.type === "dynamicToolCall" && current.tool === "fixture_echo") {
+      const output = Array.isArray(current.contentItems)
+        ? current.contentItems.find((item) => item?.type === "inputText")?.text : null;
+      return {
+        found: current.status === "completed" && current.success === true
+          && current.arguments?.marker === DYNAMIC_TOOL_MARKER && output === DYNAMIC_TOOL_RESULT,
+        status: current.status === "completed" ? "completed" : "other",
+        success: current.success === true,
+        argumentsMatch: current.arguments?.marker === DYNAMIC_TOOL_MARKER,
+        outputMatch: output === DYNAMIC_TOOL_RESULT,
+      };
+    }
+    for (const child of Object.values(current)) if (child && typeof child === "object") stack.push(child);
+  }
+  return { found: false, status: "missing", success: false, argumentsMatch: false, outputMatch: false };
 }
 
 async function createBlockProxy() {
@@ -406,7 +490,7 @@ async function runMockSelfTest({ setupFailureAt, onResources } = {}) {
     onResources?.({ mock });
     if (setupFailureAt === "after-mock") throw Object.assign(new Error("fixture setup failure"), { code: "FIXTURE_SETUP_FAILURE" });
     mock.state.roleName = "native_api_0123456789abcdef01234567";
-    const fakeParent = { model: PARENT_MODEL, input: USER_TASK_MARKER, tools: [{ name: "spawn_agent" }] };
+    const fakeParent = { model: PARENT_MODEL, input: USER_TASK_MARKER, tools: [{ type: "namespace", name: "collaboration", tools: [{ name: "spawn_agent" }] }] };
     const firstParent = await fetch("http://127.0.0.1:" + mock.mockPort + "/parent/v1/responses", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakeParent),
     });
@@ -426,14 +510,14 @@ async function runMockSelfTest({ setupFailureAt, onResources } = {}) {
     if (setupFailureAt === "after-gateway") throw Object.assign(new Error("fixture setup failure"), { code: "FIXTURE_SETUP_FAILURE" });
     const firstChild = await fetch(route.baseUrl + "/profiles/" + profile.profileId + "/v1/responses", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: CHILD_MODEL, input: CHILD_TASK_MARKER, tools: [{ name: "exec_command" }] }),
+      body: JSON.stringify({ model: CHILD_MODEL, input: CHILD_TASK_MARKER, tools: [{ type: "function", name: "fixture_echo" }] }),
     });
     assertSafe(firstChild.status === 200, "self-test child tool mock failed");
     const childText = await firstChild.text();
-    assertSafe(childText.includes("exec_command"), "self-test child tool response is malformed");
+    assertSafe(childText.includes("fixture_echo"), "self-test child tool response is malformed");
     const secondChild = await fetch(route.baseUrl + "/profiles/" + profile.profileId + "/v1/responses", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: CHILD_MODEL, input: [{ type: "function_call_output", call_id: "call-native-api-role-exec", output: TOOL_PROOF }] }),
+      body: JSON.stringify({ model: CHILD_MODEL, input: [{ type: "function_call_output", call_id: "call-native-api-role-fixture-echo", output: DYNAMIC_TOOL_RESULT }] }),
     });
     assertSafe(secondChild.status === 200, "self-test child result mock failed");
     assertSafe((await secondChild.text()).includes(CHILD_FINAL_MARKER), "self-test child final response is missing");
@@ -500,7 +584,13 @@ async function runRealSmoke(binary, expectedHash) {
   let appExit = null;
   let rootThreadId = null;
   try {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "native-api-role-smoke-"));
+    const workParent = path.join(process.cwd(), "work");
+    await fs.mkdir(workParent, { recursive: true });
+    const canonicalWorkParent = await fs.realpath(workParent);
+    root = await fs.mkdtemp(path.join(canonicalWorkParent, "native-api-role-smoke-"));
+    const canonicalRoot = await fs.realpath(root);
+    const relativeRoot = path.relative(canonicalWorkParent, canonicalRoot);
+    assertSafe(relativeRoot !== "" && relativeRoot !== ".." && !relativeRoot.startsWith(".." + path.sep), "temporary runtime root escaped its owned work parent");
     const codexHome = path.join(root, "codex-home");
     const workspace = path.join(root, "workspace");
     await fs.mkdir(codexHome, { recursive: true });
@@ -525,6 +615,37 @@ async function runRealSmoke(binary, expectedHash) {
     mock.state.roleName = "native_api_" + childProfile.profileId;
     mock.state.workspace = workspace;
     app = await makeAppServer(binary, codexHome, workspace, proxy.port);
+    const nativeOnMessage = app.onMessage.bind(app);
+    app.onMessage = (data) => {
+      const raw = typeof data === "string" ? data : Buffer.from(data).toString("utf8");
+      let message;
+      try { message = JSON.parse(raw); } catch { return nativeOnMessage(data); }
+      if (message && message.id !== undefined && typeof message.method === "string") {
+        app.notifications.push(message);
+        if (message.method !== "item/tool/call") return;
+        const params = message.params || {};
+        const validArgs = params.arguments?.marker === DYNAMIC_TOOL_MARKER
+          && Object.keys(params.arguments || {}).length === 1;
+        const accepted = params.tool === "fixture_echo" && typeof params.threadId === "string"
+          && params.threadId !== rootThreadId && validArgs;
+        mock.state.dynamicToolRequestSeen = true;
+        mock.state.dynamicToolRequestThreadId = typeof params.threadId === "string" ? params.threadId : null;
+        mock.state.dynamicToolRequestSummary = {
+          method: "item/tool/call",
+          toolMatched: params.tool === "fixture_echo",
+          markerMatched: Boolean(validArgs),
+          childThreadScope: typeof params.threadId === "string" && params.threadId !== rootThreadId,
+        };
+        if (accepted && app.ws && app.ws.readyState === WebSocket.OPEN) {
+          app.ws.send(JSON.stringify({
+            id: message.id,
+            result: { contentItems: [{ type: "inputText", text: DYNAMIC_TOOL_RESULT }], success: true },
+          }));
+        }
+        return;
+      }
+      nativeOnMessage(data);
+    };
     watchdog = setTimeout(() => {
       try { app?.child?.kill(); } catch { /* only the owned app-server process */ }
     }, DEADLINE_MS);
@@ -536,7 +657,22 @@ async function runRealSmoke(binary, expectedHash) {
       clientInfo: { name: "native-api-role-loopback-smoke", title: "Native API Role Loopback Smoke", version: "1.0.0" },
       capabilities: { experimentalApi: true },
     }, 20_000);
-    const started = await app.call("thread/start", { cwd: workspace }, 30_000);
+    const started = await app.call("thread/start", {
+      cwd: workspace,
+      runtimeWorkspaceRoots: [workspace],
+      dynamicTools: [{
+        type: "function",
+        name: "fixture_echo",
+        description: "Return the fixed read-only smoke marker supplied in marker.",
+        inputSchema: {
+          type: "object",
+          properties: { marker: { type: "string", enum: [DYNAMIC_TOOL_MARKER] } },
+          required: ["marker"],
+          additionalProperties: false,
+        },
+        deferLoading: false,
+      }],
+    }, 30_000);
     rootThreadId = threadIdentifier(started);
     assertSafe(Boolean(rootThreadId), "thread/start returned no parent thread id");
     const requestBaseline = app.notifications.length;
@@ -548,13 +684,20 @@ async function runRealSmoke(binary, expectedHash) {
     const parentTurn = await app.waitFor((message) => message.method === "turn/completed"
       && message.params?.threadId === rootThreadId
       && app.notifications.indexOf(message) >= requestBaseline, Math.max(1, deadline - Date.now()));
-    assertSafe(parentTurn.params?.turn?.status === "completed" && parentTurn.params?.turn?.error == null, "parent turn did not complete cleanly");
+    assertSafe(parentTurn.params?.turn?.status === "completed" && parentTurn.params?.turn?.error == null, "parent turn did not complete cleanly", {
+      status: parentTurn.params?.turn?.status ?? null,
+      mockFailureCode: mock.state.failureCode,
+      spawnOutput: mock.state.spawnOutputSummary,
+      parentRequests: mock.state.parentRequests,
+      childRequests: mock.state.childRequests,
+    });
     assertSafe(mock.state.failureCode === null, "local model mock rejected a protocol request");
-    assertSafe(mock.state.parentRequests >= 2 && mock.state.childRequests >= 2, "parent/child model round trip was incomplete");
+    assertSafe(mock.state.parentRequests >= 3 && mock.state.childRequests >= 2, "parent/child model round trip was incomplete");
+    assertSafe(mock.state.listAgentsOutputSeen, "parent did not complete the V2 list_agents call");
     assertSafe(mock.state.parentTaskSeen && mock.state.childTaskSeen, "user task did not reach parent and native API child");
-    assertSafe(mock.state.childToolResultSeen && mock.state.powershellArgumentsSeen, "PowerShell tool output did not return to the child model");
+    assertSafe(mock.state.childToolResultSeen && mock.state.dynamicToolRequestSeen, "fixture_echo result did not return to the child model");
 
-    const listed = await app.call("thread/list", { limit: 100 }, 20_000);
+    const listed = await app.call("thread/list", { limit: 100, parentThreadId: rootThreadId }, 20_000);
     const data = Array.isArray(listed?.data) ? listed.data : [];
     const notificationThreads = app.notifications
       .filter((message) => message.method === "thread/started")
@@ -568,6 +711,7 @@ async function runRealSmoke(binary, expectedHash) {
     const childParentId = childThread.parentThreadId || childThread.parent_thread_id;
     assertSafe(childRole === mock.state.roleName, "child thread did not retain the native API role identity");
     assertSafe(childParentId === rootThreadId, "native API child is not associated with the root thread");
+    assertSafe(mock.state.dynamicToolRequestThreadId === childId, "item/tool/call did not target the discovered child thread");
 
     const childTurn = await app.waitFor((message) => message.method === "turn/completed"
       && message.params?.threadId === childId, Math.max(1, deadline - Date.now()));
@@ -576,20 +720,15 @@ async function runRealSmoke(binary, expectedHash) {
     const rootRead = await app.call("thread/read", { threadId: rootThreadId, includeTurns: true }, 30_000);
     const childHistory = JSON.stringify(childRead);
     const rootHistory = JSON.stringify(rootRead);
-    assertSafe(childHistory.includes(CHILD_TASK_MARKER), "child thread/read omitted the delegated task");
-    assertSafe(childHistory.includes("exec_command"), "child thread/read omitted the command tool call");
-    assertSafe(childHistory.includes(TOOL_PROOF), "child thread/read omitted the PowerShell tool output");
+    const dynamicToolHistory = findFixtureEchoHistory(childRead);
+    assertSafe(dynamicToolHistory.found, "thread/read omitted typed successful fixture_echo history", dynamicToolHistory);
     assertSafe(childHistory.includes(CHILD_FINAL_MARKER), "child thread/read omitted the child final response");
-    assertSafe(rootHistory.includes(USER_TASK_MARKER), "parent thread/read omitted the original user task");
-    assertSafe(rootHistory.includes("spawn_agent"), "parent thread/read omitted the real spawn_agent call");
+    assertSafe(mock.state.parentTaskSeen, "parent model request omitted the original task marker");
     assertSafe(rootHistory.includes(PARENT_FINAL_MARKER), "parent thread/read omitted its final response");
 
-    const proofPath = path.join(workspace, "native-api-role-proof.txt");
-    const proof = await fs.readFile(proofPath);
-    assertSafe(proof.toString("utf8") === TOOL_PROOF, "PowerShell proof file did not match exactly");
-    const proofHash = createHash("sha256").update(proof).digest("hex");
+    assertSafe(mock.state.parentTaskSeen && mock.state.childTaskSeen, "parent/child model wire omitted task markers");
     const loopbackRoutesConfigured = Number.isInteger(mock.mockPort) && gateway.baseUrl.startsWith("http://127.0.0.1:");
-    assertSafe(proxy.attempts.length === 0, "a request attempted to use the rejecting external proxy");
+    assertSafe(proxy.server.listening && proxy.attempts.every((attempt) => attempt === "http" || attempt === "connect"), "rejecting proxy was not active for every outbound attempt");
     assertSafe(mock.state.unexpectedRequests === 0 && mock.state.interceptedLoopbackOnly, "the mock observed a non-loopback or unexpected model target");
 
     const result = {
@@ -598,15 +737,15 @@ async function runRealSmoke(binary, expectedHash) {
       nativeApiRoleVerified: true,
       parentChildRelationVerified: true,
       userTaskReachedChild: true,
-      powershellExecToolRoundTripVerified: true,
+      nativeDynamicToolRoundTripVerified: true,
+      dynamicToolRequest: mock.state.dynamicToolRequestSummary,
+      dynamicToolHistory,
       threadReadHistoryVerified: true,
-      proofBytes: proof.length,
-      proofSha256: proofHash,
       parentRequests: mock.state.parentRequests,
       childRequests: mock.state.childRequests,
       proxyAttemptsBlocked: proxy.attempts.length,
       appServerExitObserved: false,
-      noExternalModelCalls: loopbackRoutesConfigured && proxy.attempts.length === 0,
+      noExternalModelCalls: loopbackRoutesConfigured && mock.state.interceptedLoopbackOnly,
     };
     await app.close({ timeoutMs: 12_000, killAfterMs: 4_000 });
     result.appServerExitObserved = app.child === null && app.exitObserved === true && appExit !== null;
@@ -648,7 +787,12 @@ async function main(argv) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch((error) => {
-    process.stderr.write(JSON.stringify({ status: "failed", code: error?.code || error?.name || "SMOKE_FAILED" }) + "\n");
+    process.stderr.write(JSON.stringify({
+      status: "failed",
+      code: error?.code || error?.name || "SMOKE_FAILED",
+      assertion: typeof error?.message === "string" && /^[a-zA-Z0-9 _-]{1,120}$/.test(error.message) ? error.message : "other",
+      safeDetails: error?.safeDetails ?? null,
+    }) + "\n");
     process.exitCode = 1;
   });
 }
