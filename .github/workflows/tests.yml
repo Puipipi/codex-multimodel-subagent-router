@@ -55,6 +55,8 @@ jobs:
           }
       - name: Native gateway tests (mocked/free, no model)
         shell: pwsh
+        env:
+          CC: gcc
         run: |
           $tests = @(
             'native-routing',
@@ -67,9 +69,10 @@ jobs:
             'native-current-model',
             'native-execution-lifecycle',
             'native-connection-diagnostics',
+            'native-bootstrap',
             'native-bootstrap-install',
             'native-upgrade-guard',
-            'native-bootstrap',
+            'native-bootstrap-maintenance',
             'native-isolated-config',
             'native-isolated-files',
             'native-isolated-smoke',

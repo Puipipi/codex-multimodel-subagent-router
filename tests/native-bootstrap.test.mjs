@@ -9,7 +9,7 @@ import { writeCompatibilityReceipt } from '../scripts/native-bootstrap-install.m
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'native-bootstrap-test-'));
 const repo = fileURLToPath(new URL('..', import.meta.url));
-const gcc = 'C:/Program Files/mingw64/bin/gcc.exe';
+const gcc = process.env.CC?.trim() || 'gcc';
 const backend = path.join(root, 'fake backend.exe');
 const patched = path.join(root, 'fake patched backend.exe');
 const harness = path.join(root, 'codex bootstrap harness.exe');
@@ -18,18 +18,22 @@ const capabilityFixture = path.join(root, 'codex bootstrap capability fixture.ex
 const runtime = path.join(root, 'runtime with spaces');
 try {
   await mkdir(runtime, { recursive: true });
-  const build = (args) => spawnSync(gcc, args, { encoding: 'utf8', windowsHide: true });
+  const compilerVersion = spawnSync(gcc, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+  assert.equal(compilerVersion.status, 0, `cannot run configured C compiler ${gcc}: ${compilerVersion.error ? `${compilerVersion.error.code}: ${compilerVersion.error.message}` : compilerVersion.stderr || `exit ${compilerVersion.status}`}`);
+  const build = (args) => spawnSync(gcc, args, { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  const assertBuild = (result, target) => assert.equal(result.status, 0,
+    `${target} build using ${gcc} failed: ${result.error ? `${result.error.code}: ${result.error.message}` : result.stderr || `exit ${result.status}`}`);
   let result = build(['-municode', '-mconsole', path.join(repo, 'tests', 'native-bootstrap-fake-backend.c'), '-o', backend]);
-  assert.equal(result.status, 0, result.stderr);
+  assertBuild(result, 'official fake backend');
   result = build(['-DPATCHED_FAKE', '-municode', '-mconsole', path.join(repo, 'tests', 'native-bootstrap-fake-backend.c'), '-o', patched]);
-  assert.equal(result.status, 0, result.stderr);
+  assertBuild(result, 'patched fake backend');
   const patchedSha256 = createHash('sha256').update(await readFile(patched)).digest('hex');
   result = build([`-DAPPROVED_PATCH_SHA256=\"${patchedSha256}\"`, '-DTEST_HARNESS', '-municode', '-mwindows', '-O2', path.join(repo, 'native', 'bootstrap', 'bootstrap.c'), '-o', harness, '-lbcrypt', '-lshell32']);
-  assert.equal(result.status, 0, result.stderr);
+  assertBuild(result, 'bootstrap harness');
   result = build(['-municode', '-mwindows', '-O2', path.join(repo, 'native', 'bootstrap', 'bootstrap.c'), '-o', release, '-lbcrypt', '-lshell32']);
-  assert.equal(result.status, 0, result.stderr);
+  assertBuild(result, 'release bootstrap');
   result = build([`-DAPPROVED_PATCH_SHA256=\"${'1'.repeat(64)}\"`, '-DAPPROVED_RUNTIME_VERSION=\"0.164.0-alpha.11.1\"', '-DAPPROVED_SOURCE_COMMIT=\"6905ecede7816e91373e9eabda3f6b0368fc747b\"', '-municode', '-mwindows', '-O2', path.join(repo, 'native', 'bootstrap', 'bootstrap.c'), '-o', capabilityFixture, '-lbcrypt', '-lshell32']);
-  assert.equal(result.status, 0, result.stderr);
+  assertBuild(result, 'capability fixture');
   const releaseStrings = (await readFile(release)).toString('latin1');
   assert.doesNotMatch(releaseStrings, /CODEX_BOOTSTRAP_TEST_/, 'release build excludes all test-only backend/parent bypasses');
   const capabilities = spawnSync(release, ['--bootstrap-capabilities'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
