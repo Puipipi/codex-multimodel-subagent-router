@@ -272,6 +272,7 @@ try {
   assert.match(configA, /\[model_providers\.deepseek-native\]/);
   const roleA = await readFile(path.join(codexHome, "agents", `native_api_${profileA.profileId}.toml`), "utf8");
   assert.match(roleA, /unbounded_connection_retries = false/);
+  assert.match(roleA, /multi_agent_v2_dynamic_tools = true/, "installed API role enables native prepared-session dynamic tools");
   assert.doesNotMatch(roleA, /API_A_KEY|in-memory-only/);
   checks += 1;
   const catalogA = JSON.parse(await readFile(path.join(codexHome, `sol-luna-native-models-${profileA.profileId}.json`), "utf8"));

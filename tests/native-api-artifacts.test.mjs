@@ -58,6 +58,7 @@ assert.match(role, new RegExp(`name = "native_api_${profile.profileId}"`));
 assert.match(role, /model = "exact\/wire-model"/);
 assert.match(role, /model_reasoning_effort = "high"/);
 assert.match(role, /unbounded_connection_retries = false/);
+assert.match(role, /multi_agent_v2_dynamic_tools = true/, "native API role explicitly enables prepared-session dynamic tools");
 assert.doesNotMatch(role, /baseUrl|credential|EXAMPLE_API_KEY|developer_instructions|context_window|web_search/);
 checks += 1;
 
@@ -114,6 +115,7 @@ const composed = composeApiConfig(root, { profileIds: [profile.profileId], gatew
 assert.match(composed, /^model = "gpt-6\.1-sol"/m);
 assert.match(composed, /\[model_providers\.deepseek-native\]/);
 assert.match(composed, new RegExp(`\\[agents\\.${ids.roleName}\\]`));
+assert.doesNotMatch(composed, /multi_agent_v2_dynamic_tools/, "dynamic-tool capability stays in the role file and never enters root config");
 assert.ok(composed.includes(`config_file = ${JSON.stringify(rendered.rolePath)}`), "registration points to the precise generated role file");
 equal(composeApiConfig(composed, { profileIds: [profile.profileId], gatewayBaseUrl, codexHome }), composed, "compose is idempotent");
 equal(composeApiConfig(composed, { profileIds: [], gatewayBaseUrl, codexHome }), `${root}\n`, "removing the API block preserves foreign configuration");

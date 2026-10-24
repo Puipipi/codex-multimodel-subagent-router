@@ -10,6 +10,7 @@ import {
   apiGatewayBaseUrl,
   apiIdentifiers,
   apiProfileBaseUrl,
+  buildApiRoleToml,
   composeApiConfig,
   effectiveContextWindow,
   hasModelInstructions,
@@ -1064,7 +1065,13 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
     await (dependencies.verifyGatewaySource || verifyGatewaySource)(journal.source, { runtimeRoot: journal.paths.gatewaySourceRoot });
   }
   if (!samePath(journal.files.role.path, nativeApiRolePath(codexHome, journal.profile.profileId))) return false;
-  if (!sameBytes(await readRegularOrAbsent(journal.files.role.path, "managed file"), journal.files.role.next)) return false;
+  const roleBefore = await readRegularOrAbsent(journal.files.role.path, "managed file");
+  if (!sameBytes(roleBefore, journal.files.role.next)) return false;
+  if (!profile || profile.profileId !== journal.profile.profileId || profile.model !== journal.profile.model) return false;
+  const roleNext = Buffer.from(buildApiRoleToml(profile), "utf8");
+  const legacyRoleNext = Buffer.from(roleNext.toString("utf8").replace(/^multi_agent_v2_dynamic_tools = true\r?\n/m, ""), "utf8");
+  const refreshRole = !sameBytes(roleBefore, roleNext);
+  if (refreshRole && !sameBytes(roleBefore, legacyRoleNext)) return false;
   const catalogBefore = await readRegularOrAbsent(journal.files.catalog.path, "managed file");
   const catalogMatchesJournal = sameBytes(catalogBefore, journal.files.catalog.next);
   if (!journal.gateway.launcher || !sameBytes(
@@ -1104,7 +1111,7 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
     else if (catalogMatchesJournal && !catalogHasInstructions(catalogBefore)) catalogNeedsWrite = true;
     else return false;
   }
-  if (nextConfig === currentConfig && !refreshCatalog) return false;
+  if (nextConfig === currentConfig && !refreshCatalog && !refreshRole) return false;
   const tasks = dependencies.taskAdapter || createWindowsTaskSchedulerAdapter();
   const task = await statusOwnedGatewayTask(journal.gateway.taskPlan, tasks);
   if (!task.exists || !task.owned || task.specMatches !== true || !task.enabled) return false;
@@ -1117,13 +1124,34 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
     }
     const configBeforeWrite = await readRegularOrAbsent(journal.config.path, "Codex config");
     const catalogBeforeWrite = await readRegularOrAbsent(journal.files.catalog.path, "native API catalog");
+    const roleBeforeWrite = await readRegularOrAbsent(journal.files.role.path, "native API role");
     if (!sameBytes(configBeforeWrite, configBytes) || !sameBytes(catalogBeforeWrite, catalogBefore)) {
       throw new Error("native API config or catalog changed during repair; preserving the later change");
     }
+    if (!sameBytes(roleBeforeWrite, roleBefore)) throw new Error("native API role changed during repair; preserving the later change");
+    const previousRoleNext = journal.files.role.next;
+    if (refreshRole) await atomicWrite(journal.files.role.path, roleNext);
+    if (refreshRole) journal.files.role.next = roleNext;
     if (catalogNext) {
       if (catalogNeedsWrite) await atomicWrite(journal.files.catalog.path, catalogNext);
       journal.files.catalog.next = catalogNext;
-      await writeJournal(journalPath, journal);
+    }
+    if (refreshRole || catalogNext) {
+      try { await writeJournal(journalPath, journal); }
+      catch (error) {
+        if (refreshRole) {
+          try {
+            const roleCurrent = await readRegularOrAbsent(journal.files.role.path, "native API role");
+            if (!sameBytes(roleCurrent, roleNext)) throw new Error("native API role changed during journal update; preserving the later change");
+            await atomicWrite(journal.files.role.path, roleBefore);
+          } catch (rollbackError) {
+            journal.files.role.next = previousRoleNext;
+            throw new AggregateError([error, rollbackError], "native API role refresh failed and requires recovery");
+          }
+        }
+        journal.files.role.next = previousRoleNext;
+        throw error;
+      }
     }
     if (nextConfig !== currentConfig) await atomicWrite(journal.config.path, Buffer.from(nextConfig, "utf8"));
     return true;
@@ -1272,7 +1300,7 @@ async function applyApiConfigurationUnlocked({ settings, expectedSha256 } = {}, 
     restartRequired: applied.length > 0 || bootstrap?.restartRequired === true,
     detail: applied.length > 0
       ? repairedProfiles.length
-        ? "API 角色目录或 provider 注册已修复；受管启动器已验证或复用，需要完整重启 Codex。"
+        ? "API 角色、目录或 provider 注册已修复；受管启动器已验证或复用，需要完整重启 Codex。"
         : "API role/catalog/provider 与 Task 事务已应用；受管启动器已验证或启用，需要完整重启 Codex。"
       : bootstrap ? "API 配置已安装；受管启动器已验证或复用，需要完整重启 Codex。" : "API 配置已安装；没有新增角色。",
     appliedProfiles: applied,
