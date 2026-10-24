@@ -22,7 +22,7 @@ match(openaiYaml, /display_name: "Sol 主控 · 多模型峰谷子代理"/, 'the
 match(openaiYaml, /default_prompt: "[^"]*\$sol-luna-deepseek-router/, 'the skill default prompt names the canonical skill');
 match(openaiYaml, /policy:\s*\n\s*allow_implicit_invocation: true/, 'the existing skill invocation policy is preserved');
 match(manifest.version, /^\d+\.\d+\.\d+$/, 'the manifest uses strict semver');
-equal(manifest.version, '0.12.0', 'the plugin manifest is the 0.12.0 candidate');
+equal(manifest.version, '0.12.1', 'the plugin manifest is the 0.12.1 candidate');
 for (const file of [
   'scripts/native-current-model.mjs',
   'scripts/native-execution-lifecycle.mjs',

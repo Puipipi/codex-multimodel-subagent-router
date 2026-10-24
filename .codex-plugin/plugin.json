@@ -1,6 +1,6 @@
 {
   "name": "sol-luna-deepseek-router",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Sol-led routing to native Luna, isolated DeepSeek, and user-configured OpenAI-compatible API profiles, with immutable child bindings and explicit lifecycle controls.",
   "author": {
     "name": "Puipipi",

@@ -4,14 +4,14 @@
 
 包内保留插件清单、市场注册信息、MCP 配置、技能、hook、UI、运行脚本、运行所需文档、许可证及 `native/bootstrap` 中跟踪的源码/二进制。CI 专用锁归一化器、CLI 源码 patcher、测试、evidence、procedures、计划和本机环境文件不会打包。`package-manifest.json` 记录相对路径、字节数和 SHA-256，以及版本、registry ID 和源提交；它不记录本机绝对路径，也不对自身做递归哈希。ZIP 创建后由 Windows .NET 解压流逐项核对实际内容哈希，再以不覆盖方式写入目标。受限目录不跟随 Git symlink；输出目录必须与源树分离。
 
-当前 0.12.0 源中的 `native/bootstrap` 有跟踪的 C 源和 EXE，没有单独的编译来源收据。包清单会记录这两个文件的确切哈希和仓库 commit，但这不证明 EXE 可由该 C 源可复现构建。
+当前 0.12.1 源中的 `native/bootstrap` 有跟踪的 C 源和 EXE，没有单独的编译来源收据。包清单会记录这两个文件的确切哈希和仓库 commit，但这不证明 EXE 可由该 C 源可复现构建。
 
 打包使用本机 Windows PowerShell 和 .NET ZIP 支持，不安装新依赖，也不调用模型。Windows 是该 ZIP helper 的受支持平台；非 Windows 上的分发测试会明确显示 `SKIP`，真实 ZIP 创建和解压哈希验收由 Windows 测试作业负责。只支持 `.zip`，不会覆盖已有输出文件。
 
 ```powershell
 node scripts/package-plugin.mjs `
   --source 'C:\path\to\clean\plugin-worktree' `
-  --out 'C:\path\outside\source\distributions\sol-luna-0.12.0.zip'
+  --out 'C:\path\outside\source\distributions\sol-luna-0.12.1.zip'
 ```
 
 输出 JSON 提供 ZIP 路径、字节数、SHA-256、包版本、registry ID 和源 commit。完整文件清单及逐项哈希在 ZIP 内的 `package-manifest.json`。
