@@ -42,11 +42,11 @@ try {
     ['SOL_LUNA_NATIVE_INSTALL_JOURNAL', {present: true, value: bootstrapJournalPath}],
   ]);
   const envAdapter = {get: async key => environment.get(key) ?? {present: false, value: null}, set: async (key, value) => environment.set(key, value)};
-  const clearResult = await clearOwnedBootstrapOverride({env: {SOL_LUNA_NATIVE_INSTALL_JOURNAL: bootstrapJournalPath}, environmentAdapter: envAdapter, readDeepseekJournal: async () => bootstrapJournal});
+  const clearResult = await clearOwnedBootstrapOverride({env: {CODEX_HOME: codexHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: bootstrapJournalPath}, environmentAdapter: envAdapter, readDeepseekJournal: async () => bootstrapJournal});
   equal(clearResult.cleared, true, 'off clears only the exact owned bootstrap override');
   equal((await envAdapter.get('CODEX_CLI_PATH')).present, false, 'next launch will resolve the official Codex path');
   environment.set('CODEX_CLI_PATH', {present: true, value: 'C:\\custom\\codex.exe'});
-  const customResult = await clearOwnedBootstrapOverride({env: {SOL_LUNA_NATIVE_INSTALL_JOURNAL: bootstrapJournalPath}, environmentAdapter: envAdapter, readDeepseekJournal: async () => bootstrapJournal});
+  const customResult = await clearOwnedBootstrapOverride({env: {CODEX_HOME: codexHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: bootstrapJournalPath}, environmentAdapter: envAdapter, readDeepseekJournal: async () => bootstrapJournal});
   equal(customResult.preserved, true, 'user-managed CLI path is preserved');
   equal((await envAdapter.get('CODEX_CLI_PATH')).value, 'C:\\custom\\codex.exe', 'CAS does not overwrite a later manual path');
 
@@ -90,6 +90,35 @@ try {
   ok(noChildren.stopped, 'idle owned-service cleanup completes');
   equal(apiStops, 0, 'cleanup does not guess an API service when no profile is installed');
   equal(deepseekStops, 0, 'cleanup does not discover an unjournaled gateway');
+
+  const removedLegacyJournalPath = path.join(root, 'removed-deepseek', 'install.json');
+  let missingLegacyGatewayStops = 0;
+  const missingLegacyStop = await stopOwnedIdleExecutions({settings: {profiles: {}}, ...stopDependencies,
+    env: {...env, SOL_LUNA_NATIVE_INSTALL_JOURNAL: removedLegacyJournalPath},
+    resolveDeepseekJournal: value => value.SOL_LUNA_NATIVE_INSTALL_JOURNAL,
+    readDeepseekJournal: async () => { throw Object.assign(new Error('missing legacy journal'), {code: 'ENOENT'}); },
+    stopDeepseek: async () => { missingLegacyGatewayStops += 1; return {stopped: true}; }});
+  equal(missingLegacyStop.stopped, true, 'a missing legacy journal does not block off when no verified service remains');
+  equal(missingLegacyStop.legacyRecordMissing, true, 'a missing legacy journal is reported as skipped');
+  equal(missingLegacyGatewayStops, 0, 'missing legacy ownership never stops an unjournaled DeepSeek service');
+
+  const invalidLegacyStop = await stopOwnedIdleExecutions({settings: {profiles: {}}, ...stopDependencies,
+    env: {...env, SOL_LUNA_NATIVE_INSTALL_JOURNAL: removedLegacyJournalPath},
+    resolveDeepseekJournal: value => value.SOL_LUNA_NATIVE_INSTALL_JOURNAL,
+    readDeepseekJournal: async () => { throw new SyntaxError('invalid legacy journal'); },
+    stopDeepseek: async () => { missingLegacyGatewayStops += 1; return {stopped: true}; }});
+  equal(invalidLegacyStop.stopped, false, 'an existing but invalid legacy journal keeps off failed closed');
+  equal(invalidLegacyStop.reason, 'stop_failed', 'an invalid legacy journal is not misclassified as missing');
+  equal(missingLegacyGatewayStops, 0, 'invalid legacy ownership does not stop an unverified DeepSeek service');
+
+  const inaccessibleLegacyStop = await stopOwnedIdleExecutions({settings: {profiles: {}}, ...stopDependencies,
+    env: {...env, SOL_LUNA_NATIVE_INSTALL_JOURNAL: removedLegacyJournalPath},
+    resolveDeepseekJournal: value => value.SOL_LUNA_NATIVE_INSTALL_JOURNAL,
+    readDeepseekJournal: async () => { throw Object.assign(new Error('inaccessible legacy journal'), {code: 'EACCES'}); },
+    stopDeepseek: async () => { missingLegacyGatewayStops += 1; return {stopped: true}; }});
+  equal(inaccessibleLegacyStop.stopped, false, 'an inaccessible legacy journal keeps off failed closed');
+  equal(inaccessibleLegacyStop.reason, 'stop_failed', 'permission failure is not misclassified as missing');
+  equal(missingLegacyGatewayStops, 0, 'permission failure never stops an unverified DeepSeek service');
 
   const apiDir = path.join(root, 'owned-api');
   const ownedJournalPath = nativeApiPaths(apiDir).journal('b'.repeat(24));
@@ -194,6 +223,17 @@ try {
   equal(gatewayActive.deferred, true, 'active gateway-backed native child defers idle gateway stop');
   equal(ownedStops, 3, 'active gateway-backed child prevents the journaled service stop');
   await tasks.finish({parentThreadId: 'parent', childThreadId: 'api-child'});
+
+  const apiStopWithMissingLegacy = await stopOwnedIdleExecutions({settings: {profiles: {[profileId]: {}}}, apiDir,
+    env: {...env, SOL_LUNA_NATIVE_INSTALL_JOURNAL: removedLegacyJournalPath},
+    resolveDeepseekJournal: value => value.SOL_LUNA_NATIVE_INSTALL_JOURNAL,
+    readDeepseekJournal: async () => { throw Object.assign(new Error('missing legacy journal'), {code: 'ENOENT'}); },
+    taskAdapter, nativeTasks: tasks, ownershipStore: ownership, readApiJournal: async () => journalRecord,
+    stopApi: async () => { ownedStops += 1; return {stopped: true}; },
+    stopDeepseek: async () => { missingLegacyGatewayStops += 1; return {stopped: true}; }});
+  equal(apiStopWithMissingLegacy.stopped, true, 'a missing legacy journal does not block cleanup of another verified service');
+  equal(ownedStops, 4, 'the verified API service still stops with a missing legacy journal');
+  equal(missingLegacyGatewayStops, 0, 'the missing legacy service remains unprobed and unstopped');
 
   await ownership.claim('dsh-child', 'parent', {status: 'running'});
   const dshActive = await stopOwnedIdleExecutions({settings: {profiles: {}}, ...stopDependencies});

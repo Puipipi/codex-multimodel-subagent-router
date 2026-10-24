@@ -164,7 +164,7 @@ function isError(response) {
 try {
   const init = await server.handle({jsonrpc: '2.0', id: 0, method: 'initialize', params: {protocolVersion: '2025-06-18'}});
   equal(init.result.serverInfo.name, 'sol-luna-deepseek-router', 'initialize identifies the plugin server');
-  equal(init.result.serverInfo.version, '0.12.1', 'initialize reports the integrated plugin version');
+  equal(init.result.serverInfo.version, '0.12.2', 'initialize reports the integrated plugin version');
   equal(init.result.protocolVersion, '2025-06-18', 'initialize negotiates a supported protocol');
   match(init.result.instructions, /_meta\.threadId/, 'initialize documents the trusted identity requirement');
   match(init.result.instructions, /not native Codex children/, 'initialize states the native-child limitation');

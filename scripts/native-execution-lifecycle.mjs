@@ -128,6 +128,7 @@ async function stopOwnedIdleExecutionsUnlocked({
     try { bootstrapOverride = await clearOwnedBootstrapOverride({env, readDeepseekJournal}); }
     catch { bootstrapOverride = {cleared: false, message: '受管 CLI 覆盖状态无法确认；请在路由设置中重试。'}; }
     const services = [];
+    let legacyRecordMissing = false;
     const profiles = settings?.profiles && typeof settings.profiles === 'object' ? Object.keys(settings.profiles) : [];
     for (const profileId of profiles) {
       if (!/^[a-f0-9]{24}$/.test(profileId)) continue;
@@ -147,13 +148,20 @@ async function stopOwnedIdleExecutionsUnlocked({
 
     const deepseekJournal = resolveDeepseekJournal(env);
     if (deepseekJournal) {
-      const journal = await readDeepseekJournal(deepseekJournal);
-      if (journal?.phase !== 'active' || !samePath(journal.paths?.journalPath, deepseekJournal)) {
+      let journal;
+      try { journal = await readDeepseekJournal(deepseekJournal); }
+      catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+        legacyRecordMissing = true;
+      }
+      if (!legacyRecordMissing && (journal?.phase !== 'active' || !samePath(journal.paths?.journalPath, deepseekJournal))) {
         return unavailableStop('DeepSeek 安装身份无法确认；未停止后台服务。', 'journal_unverified');
       }
-      const result = await disableOwnedTaskService({journal, taskAdapter, label: 'DeepSeek'});
-      if (result?.stopped !== true) return result;
-      services.push({label: 'DeepSeek', stop: () => stopDeepseek({paths: gatewayPaths(journal.paths.gatewayDir)})});
+      if (!legacyRecordMissing) {
+        const result = await disableOwnedTaskService({journal, taskAdapter, label: 'DeepSeek'});
+        if (result?.stopped !== true) return result;
+        services.push({label: 'DeepSeek', stop: () => stopDeepseek({paths: gatewayPaths(journal.paths.gatewayDir)})});
+      }
     }
 
     const active = await activeDelegationCount({nativeTasks, ownershipStore});
@@ -166,8 +174,13 @@ async function stopOwnedIdleExecutionsUnlocked({
         return unavailableStop(`${service.label} 后台网关未能确认停止；请在设置中重试。`, result?.reason || 'stop_unconfirmed');
       }
     }
+    const notices = [
+      bootstrapOverride?.message,
+      ...(legacyRecordMissing ? ['旧版 DeepSeek 安装记录已缺失；跳过未登记的旧服务。'] : []),
+    ].filter(Boolean);
     return {stopped: true, deferred: false, servicesStopped: services.length, bootstrapOverride,
-      ...(bootstrapOverride?.message ? {message: bootstrapOverride.message} : {})};
+      ...(legacyRecordMissing ? {legacyRecordMissing: true} : {}),
+      ...(notices.length ? {message: notices.join(' ')} : {})};
   } catch {
     return unavailableStop('后台执行器状态无法确认或停止失败；设置已关闭，请在路由设置中重试。', 'stop_failed');
   }
