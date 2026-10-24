@@ -22,8 +22,8 @@ try {
   assert.equal(plan.next.CODEX_CLI_PATH.value, bootstrapPath, 'new installs point only to the native bootstrap');
   const snapshot = await applyBootstrapEnvironment(plan, adapter);
   assert.equal(env.get('CODEX_CLI_PATH').value, bootstrapPath);
-  await rollbackBootstrapEnvironment(snapshot, adapter, { isRegularFile: async () => true });
-  assert.equal(env.get('CODEX_CLI_PATH').value, officialPath, 'CAS rollback restores the original official CLI path');
+  await rollbackBootstrapEnvironment(snapshot, adapter);
+  assert.deepEqual(env.get('CODEX_CLI_PATH'), { present: false, value: null }, 'CAS rollback removes its owned WindowsApps pin so desktop resolves the active package');
 
   const userOwned = await planBootstrapEnvironment({ bootstrapPath, currentEnvironment: { CODEX_CLI_PATH: 'C:\\Tools\\private-codex.exe' }, journalPath }).then(() => null, (error) => error);
   assert.match(userOwned?.message ?? '', /user-managed backend/i, 'a manual nonowned CODEX_CLI_PATH is never overwritten');
@@ -43,15 +43,17 @@ try {
   await assert.rejects(() => readFile(persistent), { code: 'ENOENT' }, 'CAS rollback removes only the bootstrap it deployed');
 
   const movedOldPath = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe';
-  const movedNewPath = 'D:\\Apps\\WindowsApps\\OpenAI.Codex_26.1024.5000.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe';
   env.set('CODEX_CLI_PATH', { present: true, value: movedOldPath });
   const movedPlan = await planBootstrapEnvironment({ bootstrapPath, currentEnvironment: Object.fromEntries(env), journalPath });
   const movedSnapshot = await applyBootstrapEnvironment(movedPlan, adapter);
-  await rollbackBootstrapEnvironment(movedSnapshot, adapter, {
-    isRegularFile: async (candidate) => candidate === movedNewPath,
-    resolveCurrentOfficialPath: async () => movedNewPath,
-  });
-  assert.equal(env.get('CODEX_CLI_PATH').value, movedNewPath, 'rollback resolves the currently registered official package when the prior package moved');
+  await rollbackBootstrapEnvironment(movedSnapshot, adapter);
+  assert.deepEqual(env.get('CODEX_CLI_PATH'), { present: false, value: null }, 'rollback removes the owned override so the desktop app resolves its current official package');
+
+  env.set('CODEX_CLI_PATH', { present: true, value: movedOldPath });
+  const retainedOldPlan = await planBootstrapEnvironment({ bootstrapPath, currentEnvironment: Object.fromEntries(env), journalPath });
+  const retainedOldSnapshot = await applyBootstrapEnvironment(retainedOldPlan, adapter);
+  await rollbackBootstrapEnvironment(retainedOldSnapshot, adapter);
+  assert.deepEqual(env.get('CODEX_CLI_PATH'), { present: false, value: null }, 'rollback does not pin a retained old WindowsApps kernel when a newer package is registered');
 
   env.set('CODEX_CLI_PATH', { present: true, value: movedOldPath });
   const missingPlan = await planBootstrapEnvironment({ bootstrapPath, currentEnvironment: Object.fromEntries(env), journalPath });
