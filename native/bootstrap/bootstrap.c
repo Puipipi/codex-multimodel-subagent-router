@@ -15,10 +15,19 @@
 #ifndef APPROVED_PATCH_SHA256
 #define APPROVED_PATCH_SHA256 ""
 #endif
+#ifndef APPROVED_RUNTIME_VERSION
+#define APPROVED_RUNTIME_VERSION ""
+#endif
+#ifndef APPROVED_SOURCE_COMMIT
+#define APPROVED_SOURCE_COMMIT ""
+#endif
 #define MAX_PATH_CHARS 32768
 #define MAX_RECEIPT 16384
 #define PROBE_TIMEOUT_MS 1800
 static const wchar_t *RESOLVE_OFFICIAL_ARGUMENT = L"--codex-native-resolve-official-cli-v1";
+static const wchar_t *RESOLVE_OFFICIAL_ARGUMENT_V2 = L"--bootstrap-resolve-official-cli";
+static const wchar_t *OBSERVE_BACKEND_ARGUMENT = L"--bootstrap-observe-backend";
+static const wchar_t *CAPABILITIES_ARGUMENT = L"--bootstrap-capabilities";
 static const wchar_t *FAMILY_SUFFIX = L"_x64__2p2nqsd0c76g0";
 static const wchar_t *PACKAGE_FAMILY = L"OpenAI.Codex_2p2nqsd0c76g0";
 static const char *STATUS_NO_OFFICIAL = "未能定位可启动的 Codex 官方桌面 CLI，原生分工已停用。Codex 桌面包可能已卸载或不可访问；请修复/重新安装 Codex，随后重新启动桌面应用。";
@@ -124,6 +133,43 @@ static int sha256_file(const wchar_t *path,char out[65]) {
   for(int i=0;i<32;i++) sprintf(out+i*2,"%02x",digest[i]);
   out[64]=0; ok=1;
 done: if(h)BCryptDestroyHash(h);if(object)HeapFree(GetProcessHeap(),0,object);if(alg)BCryptCloseAlgorithmProvider(alg,0);CloseHandle(f);return ok;
+}
+static int write_stdout(const char *text) {
+  HANDLE out=GetStdHandle(STD_OUTPUT_HANDLE);if(!out||out==INVALID_HANDLE_VALUE)return 0;DWORD wrote=0;DWORD n=(DWORD)strlen(text);return WriteFile(out,text,n,&wrote,NULL)&&wrote==n;
+}
+static char *json_escape_wide(const wchar_t *value) {
+  int bytes=WideCharToMultiByte(CP_UTF8,0,value,-1,NULL,0,NULL,NULL);if(bytes<=1)return NULL;char *utf8=(char*)HeapAlloc(GetProcessHeap(),0,(SIZE_T)bytes);if(!utf8)return NULL;
+  if(!WideCharToMultiByte(CP_UTF8,0,value,-1,utf8,bytes,NULL,NULL)){HeapFree(GetProcessHeap(),0,utf8);return NULL;}
+  size_t cap=(size_t)bytes*6+1;char *escaped=(char*)HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,cap);if(!escaped){HeapFree(GetProcessHeap(),0,utf8);return NULL;}size_t at=0;
+  for(const unsigned char *p=(const unsigned char*)utf8;*p;p++){if(*p=='"'||*p=='\\'){escaped[at++]='\\';escaped[at++]=(char)*p;}else if(*p<0x20){static const char hex[]="0123456789abcdef";escaped[at++]='\\';escaped[at++]='u';escaped[at++]='0';escaped[at++]='0';escaped[at++]=hex[*p>>4];escaped[at++]=hex[*p&15];}else escaped[at++]=(char)*p;}
+  HeapFree(GetProcessHeap(),0,utf8);return escaped;
+}
+static int find_parent_codex(wchar_t *out) {
+  HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);if(snap==INVALID_HANDLE_VALUE)return 0;PROCESSENTRY32W e;e.dwSize=sizeof(e);DWORD pid=GetCurrentProcessId(),parent=0;
+  if(Process32FirstW(snap,&e))do{if(e.th32ProcessID==pid){parent=e.th32ParentProcessID;break;}}while(Process32NextW(snap,&e));
+  for(int i=0;i<16&&parent;i++){
+    HANDLE proc=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,parent);wchar_t image[MAX_PATH_CHARS];DWORD size=MAX_PATH_CHARS;int found=0;
+    if(proc&&QueryFullProcessImageNameW(proc,0,image,&size)){wchar_t *base=wcsrchr(image,L'\\');base=base?base+1:image;if(_wcsicmp(base,L"codex.exe")==0&&regular_file(image)){wcscpy(out,image);found=1;}}
+    PROCESSENTRY32W p;p.dwSize=sizeof(p);DWORD next=0;if(Process32FirstW(snap,&p))do{if(p.th32ProcessID==parent){next=p.th32ParentProcessID;break;}}while(Process32NextW(snap,&p));if(proc)CloseHandle(proc);if(found){CloseHandle(snap);return 1;}parent=next;
+  }
+  CloseHandle(snap);return 0;
+}
+static int emit_capabilities(void) {
+  char json[1024];
+#ifdef TEST_HARNESS
+  const char *testBuild="true";
+#else
+  const char *testBuild="false";
+#endif
+  if(APPROVED_PATCH_SHA256[0])_snprintf(json,sizeof(json),"{\"schemaVersion\":1,\"testBuild\":%s,\"runtimeVersion\":\"%s\",\"sourceCommit\":\"%s\",\"approvedPatchHashes\":[\"%s\"]}\n",testBuild,APPROVED_RUNTIME_VERSION,APPROVED_SOURCE_COMMIT,APPROVED_PATCH_SHA256);
+  else _snprintf(json,sizeof(json),"{\"schemaVersion\":1,\"testBuild\":%s,\"runtimeVersion\":\"%s\",\"sourceCommit\":\"%s\",\"approvedPatchHashes\":[]}\n",testBuild,APPROVED_RUNTIME_VERSION,APPROVED_SOURCE_COMMIT);
+  return write_stdout(json);
+}
+static int emit_observed_backend(void) {
+  wchar_t exe[MAX_PATH_CHARS];char digest[65];if(!find_parent_codex(exe))return write_stdout("{\"schemaVersion\":1,\"observed\":false,\"exePath\":null,\"exeSha256\":null}\n");
+  if(!sha256_file(exe,digest))return write_stdout("{\"schemaVersion\":1,\"observed\":false,\"exePath\":null,\"exeSha256\":null}\n");char *escaped=json_escape_wide(exe);if(!escaped)return 0;
+  size_t cap=strlen(escaped)+256;char *json=(char*)HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,cap);if(!json){HeapFree(GetProcessHeap(),0,escaped);return 0;}
+  _snprintf(json,cap,"{\"schemaVersion\":1,\"observed\":true,\"exePath\":\"%s\",\"exeSha256\":\"%s\"}\n",escaped,digest);HeapFree(GetProcessHeap(),0,escaped);int ok=write_stdout(json);HeapFree(GetProcessHeap(),0,json);return ok;
 }
 static int query_cli_version(const wchar_t *exe,char *out,size_t cap) {
   SECURITY_ATTRIBUTES sa={sizeof(sa),NULL,TRUE}; HANDLE rd=NULL,wr=NULL;
@@ -280,7 +326,9 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE prev,LPWSTR cmdline,int show) {
 #endif
   int argc=0;wchar_t **argv=CommandLineToArgvW(GetCommandLineW(),&argc);if(!argv)return 127;
   wchar_t self[MAX_PATH_CHARS];DWORD sn=GetModuleFileNameW(NULL,self,MAX_PATH_CHARS);if(!sn||sn>=MAX_PATH_CHARS){LocalFree(argv);return 127;}
-  if(argc==2&&_wcsicmp(argv[1],RESOLVE_OFFICIAL_ARGUMENT)==0){Official resolved;ZeroMemory(&resolved,sizeof(resolved));int source=OFFICIAL_NONE;if(!resolve_official(&resolved,&source)){LocalFree(argv);return 126;}int bytes=WideCharToMultiByte(CP_UTF8,0,resolved.exe,-1,NULL,0,NULL,NULL);if(bytes<=1){LocalFree(argv);return 126;}char *utf8=(char*)HeapAlloc(GetProcessHeap(),0,(SIZE_T)bytes);if(!utf8){LocalFree(argv);return 126;}WideCharToMultiByte(CP_UTF8,0,resolved.exe,-1,utf8,bytes,NULL,NULL);HANDLE out=GetStdHandle(STD_OUTPUT_HANDLE);DWORD wrote=0;BOOL ok=out&&out!=INVALID_HANDLE_VALUE&&WriteFile(out,utf8,(DWORD)(bytes-1),&wrote,NULL)&&wrote==(DWORD)(bytes-1);HeapFree(GetProcessHeap(),0,utf8);LocalFree(argv);return ok?0:126;}
+  if(argc==2&&_wcsicmp(argv[1],CAPABILITIES_ARGUMENT)==0){int ok=emit_capabilities();LocalFree(argv);return ok?0:126;}
+  if(argc==2&&_wcsicmp(argv[1],OBSERVE_BACKEND_ARGUMENT)==0){int ok=emit_observed_backend();LocalFree(argv);return ok?0:126;}
+  if(argc==2&&(_wcsicmp(argv[1],RESOLVE_OFFICIAL_ARGUMENT)==0||_wcsicmp(argv[1],RESOLVE_OFFICIAL_ARGUMENT_V2)==0)){Official resolved;ZeroMemory(&resolved,sizeof(resolved));int source=OFFICIAL_NONE;if(!resolve_official(&resolved,&source)){LocalFree(argv);return 126;}int bytes=WideCharToMultiByte(CP_UTF8,0,resolved.exe,-1,NULL,0,NULL,NULL);if(bytes<=1){LocalFree(argv);return 126;}char *utf8=(char*)HeapAlloc(GetProcessHeap(),0,(SIZE_T)bytes);if(!utf8){LocalFree(argv);return 126;}WideCharToMultiByte(CP_UTF8,0,resolved.exe,-1,utf8,bytes,NULL,NULL);HANDLE out=GetStdHandle(STD_OUTPUT_HANDLE);DWORD wrote=0;BOOL ok=out&&out!=INVALID_HANDLE_VALUE&&WriteFile(out,utf8,(DWORD)(bytes-1),&wrote,NULL)&&wrote==(DWORD)(bytes-1);HeapFree(GetProcessHeap(),0,utf8);LocalFree(argv);return ok?0:126;}
   wchar_t root[MAX_PATH_CHARS];if(!runtime_root(root,self)){LocalFree(argv);return 126;}
   Official official;ZeroMemory(&official,sizeof(official));int found=0,source=OFFICIAL_NONE;
 #ifdef TEST_HARNESS

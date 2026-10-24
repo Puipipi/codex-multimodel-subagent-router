@@ -3,6 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { AppServer } from "./native-app-server.mjs";
 import { createWindowsUserEnvironmentAdapter } from "./native-runtime-env.mjs";
 
