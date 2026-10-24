@@ -86,6 +86,18 @@ switch ($request.operation) {
     Start-ScheduledTask -TaskName $request.name
     $result = @{ started = $true }
   }
+  'disable' {
+    if (-not $record.exists) { throw 'owned task is not registered' }
+    if (-not $record.owned -or -not $record.specMatches) { throw 'task ownership or specification conflict' }
+    if ($record.enabled) { Disable-ScheduledTask -TaskName $request.name | Out-Null }
+    $result = Get-TaskRecord $request
+  }
+  'enable' {
+    if (-not $record.exists) { throw 'owned task is not registered' }
+    if (-not $record.owned -or -not $record.specMatches) { throw 'task ownership or specification conflict' }
+    if (-not $record.enabled) { Enable-ScheduledTask -TaskName $request.name | Out-Null }
+    $result = Get-TaskRecord $request
+  }
   'unregister' {
     if (-not $record.exists) { $result = @{ removed = $false } }
     elseif (-not $record.owned) { throw 'task ownership conflict' }
@@ -206,6 +218,8 @@ export function createWindowsTaskSchedulerAdapter({ runner = spawnSync, powershe
     status: async (plan) => invoke("status", plan),
     register: async (plan) => invoke("register", plan),
     start: async (plan) => invoke("start", plan),
+    disable: async (plan) => invoke("disable", plan),
+    enable: async (plan) => invoke("enable", plan),
     unregister: async (plan) => invoke("unregister", plan),
   });
 }
@@ -308,6 +322,34 @@ export async function startOwnedGatewayTask(plan, adapter) {
   if (!current.enabled) throw new Error("owned gateway task is disabled");
   if (typeof adapter.start !== "function") throw new Error("Task Scheduler start is unavailable");
   return adapter.start(plan);
+}
+
+export async function disableOwnedGatewayTask(plan, adapter) {
+  const current = await inspect(plan, adapter);
+  requireMatchingSpec(current);
+  if (!current.exists) return {disabled: false, reason: 'not_registered'};
+  if (!current.owned) throw new Error("gateway task ownership conflict; refusing to disable the task");
+  if (!current.enabled) return {disabled: true, alreadyDisabled: true};
+  if (typeof adapter.disable !== 'function') throw new Error('Task Scheduler disable is unavailable');
+  await adapter.disable(plan);
+  const verified = await inspect(plan, adapter);
+  requireMatchingSpec(verified);
+  if (!verified.exists || !verified.owned || verified.enabled) throw new Error('owned gateway task disable could not be verified');
+  return {disabled: true, alreadyDisabled: false};
+}
+
+export async function enableOwnedGatewayTask(plan, adapter) {
+  const current = await inspect(plan, adapter);
+  requireMatchingSpec(current);
+  if (!current.exists) throw new Error('owned gateway task is not registered');
+  if (!current.owned) throw new Error('gateway task ownership conflict; refusing to enable the task');
+  if (current.enabled) return {enabled: true, alreadyEnabled: true};
+  if (typeof adapter.enable !== 'function') throw new Error('Task Scheduler enable is unavailable');
+  await adapter.enable(plan);
+  const verified = await inspect(plan, adapter);
+  requireMatchingSpec(verified);
+  if (!verified.exists || !verified.owned || !verified.enabled) throw new Error('owned gateway task enable could not be verified');
+  return {enabled: true, alreadyEnabled: false};
 }
 
 export async function unregisterOwnedGatewayTask(plan, adapter) {

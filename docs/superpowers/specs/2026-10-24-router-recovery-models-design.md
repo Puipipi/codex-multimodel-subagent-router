@@ -14,6 +14,15 @@ Task 1 adds an enable/disable switch, same-model and catalog-native child select
 - Users can always type an exact API model. A separate, explicit “Get model list” action may query the selected profile's `<baseUrl>/models`; no automatic discovery on open/save. Use the profile credential resolver, reject redirects before forwarding authorization, enforce a timeout, and preserve typed model input on errors. No key value may enter settings, logs, tool output, or model-list results.
 - Keep the existing DSH account auto-detection and manual environment/file credential references.
 
+## Integrated lifecycle decisions (Task 4)
+
+- Keep `enabled` separate from `mode`; a user-off value and an upgrade-guard `disabled` status both stop new automatic dispatch. Missing guard status means unmanaged, while malformed/unreadable status fails closed. Preserve history and let existing children finish.
+- On disable, inspect only persisted owned API/DeepSeek journals and matching owned Task Scheduler tasks. Defer service shutdown while a gateway-backed native child or plugin-owned DSH task is active; Luna children do not keep an unrelated gateway alive. Disable owned scheduled triggers before stopping a verified idle local gateway. Retry after terminal callbacks, not by polling. Never kill Codex or DSH.
+- Re-enabling an API/DeepSeek dispatch may re-enable only its journal-matched owned task, then it must pass the existing dispatch readiness checks. Native Luna/same/catalog models do not require a gateway.
+- The user-off state is stored only in the router settings `enabled` field. Disabling may CAS-clear an exact owned `CODEX_CLI_PATH`; it does not rewrite the C-owned upgrade status. A guard-reported compatibility failure remains intact. API/DeepSeek runtime readiness must be proven from the running CLI image by the next runtime-gate task; an old healthy receipt/status alone is insufficient.
+- `same` uses trusted caller thread metadata from `CODEX_THREAD_ID`/`CODEX_SESSION_ID`, or a trusted per-request MCP `_meta.threadId`; resolve only the model/provider metadata columns in Codex `state_5.sqlite`. Do not read conversation turns or fall back to `config.toml`. A verified database row wins; a conflicting hook or explicit model fails.
+- The disable path may remove only an exact owned CLI override from the legacy isolated-install journal after compare-before-set; a later user-selected path is preserved. Current process is not killed or hot-swapped, and the next launch resolves the official app. No live environment change is applied here.
+
 ## Boundaries and non-goals
 
 Task 1 provides the settings, routing, UI, and lifecycle guard seams only. Task 2 owns stopping idle background lifecycle work when disabled; the change must not claim that existing background services are already stopped. Task 3 owns reconnect diagnostics. Task 4 owns integrated verification and installation. No real provider request is allowed; discovery is tested with a local mock HTTP server.

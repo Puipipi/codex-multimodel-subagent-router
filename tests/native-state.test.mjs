@@ -23,9 +23,11 @@ function runCli(args, env = {}) {
   const errFd = openSync(err, "w");
   let result;
   try {
+    const childEnv = {...process.env};
+    delete childEnv.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
     result = spawnSync(process.execPath, [cliPath, ...args], {
       cwd: repoRoot,
-      env: { ...process.env, CODEX_THREAD_ID: "trusted-parent-A", ...env },
+      env: { ...childEnv, CODEX_THREAD_ID: "trusted-parent-A", CODEX_HOME: path.join(dir, "codex-home"), LOCALAPPDATA: path.join(dir, "local"), SOL_LUNA_PLUGIN_STATE: path.join(dir, "plugin-state"), ...env },
       stdio: ["ignore", outFd, errFd],
       windowsHide: true,
     });
@@ -47,6 +49,23 @@ try {
   await mkdir(workspaceB, { recursive: true });
   const stateDir = path.join(root, "state");
   const tasks = new NativeTasks({ stateDir });
+  const dispatchTasks = new NativeTasks({stateDir: path.join(root, "dispatch-reservations")});
+  await dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "api-dispatch-001", executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model"});
+  equal(await dispatchTasks.hasActiveGatewayExecutions(), true, "pending API dispatch reservation keeps the gateway alive before child bind");
+  await assert.rejects(dispatchTasks.reserveDispatch({parentThreadId: "parent-B", taskNonce: "api-dispatch-001", executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model"}), /different execution/);
+  checks += 1;
+  await dispatchTasks.begin({parentThreadId: "parent-A", childThreadId: "dispatch-child", taskNonce: "api-dispatch-001", model: "mock-api-model", binding: {executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model", role: "native_api_abcdefabcdefabcdefabcdef", providerId: "api-native-abcdefabcdefabcdefabcdef"}});
+  equal(await dispatchTasks.hasActiveGatewayExecutions(), true, "atomic bind replaces the pending reservation with an active gateway child");
+  equal((await dispatchTasks.cancelDispatch({parentThreadId: "parent-A", taskNonce: "api-dispatch-001"})).missing, true, "cancel cannot target an intent after atomic bind moved it to a real child");
+  await dispatchTasks.finish({parentThreadId: "parent-A", childThreadId: "dispatch-child"});
+  equal(await dispatchTasks.hasActiveGatewayExecutions(), false, "terminal child clears gateway activity after bind");
+  await dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "api-dispatch-002", executor: "deepseek", model: "deepseek/deepseek-flash"});
+  equal((await dispatchTasks.cancelDispatch({parentThreadId: "parent-A", taskNonce: "api-dispatch-002"})).cancelled, true, "confirmed pre-spawn failure explicitly cancels its pending gateway intent");
+  equal(await dispatchTasks.hasActiveGatewayExecutions(), false, "cancelled gateway intent no longer blocks idle shutdown");
+  await dispatchTasks.reserveDispatch({parentThreadId: "trusted-parent-A", taskNonce: "cli-dispatch-cancel-01", executor: "deepseek", model: "deepseek/deepseek-flash"});
+  const cancelCli = runCli(["dispatch-cancel", "--task-nonce", "cli-dispatch-cancel-01", "--state-dir", path.join(root, "dispatch-reservations")]);
+  equal(cancelCli.status, 0, "native-state exposes the explicit confirmed pre-spawn cancellation path");
+  equal(JSON.parse(cancelCli.stdout).task.cancelled, true, "dispatch-cancel removes only the trusted parent's pending intent");
   await tasks.begin({ parentThreadId: "parent-A", childThreadId: "child-A", model: "deepseek/deepseek-flash", workspace: workspaceA, taskNonce: "task-nonce-A" });
   await tasks.begin({ parentThreadId: "parent-B", childThreadId: "child-B", model: "gpt-6-luna", workspace: workspaceB, taskNonce: "task-nonce-B" });
   const profileId = "abcdefabcdefabcdefabcdef";

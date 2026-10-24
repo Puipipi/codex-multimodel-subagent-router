@@ -63,10 +63,14 @@ export class NativeTasks {
 
   async _read() {
     const value = await readJson(this.file);
-    if (!value) return { version: 1, tasks: {} };
+    if (!value) return { version: 1, tasks: {}, dispatches: {} };
     if (!value.tasks || typeof value.tasks !== "object" || Array.isArray(value.tasks)) {
       throw new Error("Native task state is corrupt; refusing to act");
     }
+    if (value.dispatches !== undefined && (!value.dispatches || typeof value.dispatches !== 'object' || Array.isArray(value.dispatches))) {
+      throw new Error("Native dispatch reservation state is corrupt; refusing to act");
+    }
+    value.dispatches ??= {};
     return value;
   }
 
@@ -117,7 +121,49 @@ export class NativeTasks {
         created_at: existing?.created_at ?? at,
         updated_at: at,
       };
+      if (task && data.dispatches[task]) {
+        const reservation = data.dispatches[task];
+        if (!reservation || reservation.owner !== hashThread(parent) || reservation.executor !== bound?.executor
+            || (reservation.executor === 'api' && reservation.profile_id !== bound?.profileId)
+            || reservation.model !== (bound?.model ?? model)) {
+          throw new Error('gateway dispatch reservation does not match the child binding');
+        }
+        delete data.dispatches[task];
+      }
       return { ...data.tasks[child], owner: undefined };
+    });
+  }
+
+  async reserveDispatch({parentThreadId, taskNonce, executor, profileId = null, model}) {
+    const owner = hashThread(parentId(parentThreadId));
+    const task = nonce(taskNonce);
+    if (!['api', 'deepseek'].includes(executor)) throw new Error('only gateway-backed executors can reserve dispatch');
+    if (executor === 'api' && !/^[a-f0-9]{24}$/.test(profileId || '')) throw new Error('API dispatch reservation requires a profile id');
+    if (executor === 'deepseek' && profileId !== null) throw new Error('DeepSeek dispatch reservation cannot have an API profile');
+    if (typeof model !== 'string' || !model.trim()) throw new Error('dispatch reservation requires an exact model');
+    return this._mutate(data => {
+      const existing = data.dispatches[task];
+      if (existing && (existing.owner !== owner || existing.executor !== executor || existing.profile_id !== profileId || existing.model !== model.trim())) {
+        throw new Error('dispatch task nonce is already reserved for a different execution');
+      }
+      const reservation = existing ?? {owner, task_nonce: task, executor, profile_id: profileId, model: model.trim(), state: 'pending', created_at: new Date().toISOString()};
+      data.dispatches[task] = reservation;
+      return {...reservation, owner: undefined};
+    });
+  }
+
+  async cancelDispatch({parentThreadId, taskNonce}) {
+    const owner = hashThread(parentId(parentThreadId));
+    const task = nonce(taskNonce);
+    return this._mutate(data => {
+      const existing = data.dispatches[task];
+      if (!existing) return {cancelled: false, missing: true};
+      if (existing.owner !== owner) throw new Error('dispatch reservation belongs to another parent chat');
+      const activeChild = Object.values(data.tasks).some(record => record.task_nonce === task
+        && !['idle', 'completed', 'error', 'interrupted', 'context_exhausted', 'closed'].includes(record.status));
+      if (activeChild) throw new Error('dispatch reservation is already bound to an active child; refusing cancellation');
+      delete data.dispatches[task];
+      return {cancelled: true};
     });
   }
 
@@ -158,6 +204,22 @@ export class NativeTasks {
     const data = await this._read();
     const task = data.tasks[child];
     return Boolean(task && task.child_thread_id === child);
+  }
+
+  async list() {
+    const data = await this._read();
+    return Object.values(data.tasks).map(task => ({...task, owner: undefined}));
+  }
+
+  async hasActiveGatewayExecutions() {
+    const data = await this._read();
+    if (Object.values(data.dispatches).some(dispatch => ['api', 'deepseek'].includes(dispatch?.executor))) return true;
+    return Object.values(data.tasks).some(task => {
+      const executor = task.binding?.executor;
+      const legacyDeepseek = !executor && typeof task.model === 'string' && /deepseek/i.test(task.model);
+      const gatewayExecutor = executor === 'deepseek' || executor === 'api' || legacyDeepseek;
+      return gatewayExecutor && !['idle', 'completed', 'error', 'interrupted', 'context_exhausted', 'closed'].includes(task.status);
+    });
   }
 }
 
@@ -243,8 +305,8 @@ export class NativeWriterLease {
 }
 
 function trustedParent() {
-  const value = process.env.CODEX_THREAD_ID?.trim();
-  if (!value) throw new Error("CODEX_THREAD_ID is required; ownership must come from the trusted Codex environment, not an arbitrary --parent argument");
+  const value = process.env.CODEX_THREAD_ID?.trim() || process.env.CODEX_SESSION_ID?.trim();
+  if (!value) throw new Error("CODEX_THREAD_ID or CODEX_SESSION_ID is required; ownership must come from the trusted Codex environment, not an arbitrary --parent argument");
   return value;
 }
 
@@ -293,21 +355,20 @@ async function main(argv) {
     return;
   }
   if (command === "record") {
-    if (get("executor") !== "api") throw new Error("record is only for an explicit API read-only child binding");
+    const executor = get("executor") || "api";
+    if (!new Set(["api", "deepseek"]).has(executor)) throw new Error("record is only for a gateway-backed read-only child binding");
     const child = get("child");
+    const profileId = executor === "api" ? get("profile-id") : null;
+    const model = get("model");
     const task = await new NativeTasks({ stateDir }).begin({
       parentThreadId: parent,
       childThreadId: child,
-      model: get("model"),
+      model,
       workspace,
       taskNonce,
-      binding: {
-        executor: "api",
-        profileId: get("profile-id"),
-        role: get("role"),
-        providerId: get("provider-id"),
-        model: get("model"),
-      },
+      binding: executor === "api"
+        ? {executor, profileId, role: get("role"), providerId: get("provider-id"), model}
+        : {executor, role: "native_deepseek", model},
     });
     process.stdout.write(`${JSON.stringify({ task })}\n`);
     return;
@@ -315,14 +376,25 @@ async function main(argv) {
   if (command === "complete") {
     const child = get("child");
     const task = await new NativeTasks({ stateDir }).finish({ parentThreadId: parent, childThreadId: child, status: get("status") || "completed" });
-    process.stdout.write(`${JSON.stringify({ task })}\n`);
+    const {finalizePendingDisable} = await import("./native-execution-lifecycle.mjs");
+    const cleanup = await finalizePendingDisable({stateDir});
+    process.stdout.write(`${JSON.stringify({ task, ...(cleanup.stopped === false && cleanup.skipped !== true && cleanup.deferred !== true ? {cleanup} : {}) })}\n`);
     return;
   }
   if (command === "finish") {
     const child = get("child");
     const task = await new NativeTasks({ stateDir }).finish({ parentThreadId: parent, childThreadId: child, status: get("status") || "completed" });
     const released = await new NativeWriterLease({ stateDir }).release({ workspace, parentThreadId: parent, taskNonce });
-    process.stdout.write(`${JSON.stringify({ task, released })}\n`);
+    const {finalizePendingDisable} = await import("./native-execution-lifecycle.mjs");
+    const cleanup = await finalizePendingDisable({stateDir});
+    process.stdout.write(`${JSON.stringify({ task, released, ...(cleanup.stopped === false && cleanup.skipped !== true && cleanup.deferred !== true ? {cleanup} : {}) })}\n`);
+    return;
+  }
+  if (command === "dispatch-cancel") {
+    const task = await new NativeTasks({stateDir}).cancelDispatch({parentThreadId: parent, taskNonce});
+    const {finalizePendingDisable} = await import("./native-execution-lifecycle.mjs");
+    const cleanup = await finalizePendingDisable({stateDir});
+    process.stdout.write(`${JSON.stringify({task, ...(cleanup.stopped === false && cleanup.skipped !== true && cleanup.deferred !== true ? {cleanup} : {})})}\n`);
     return;
   }
   if (command === "who") {
@@ -336,7 +408,7 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify({ binding })}\n`);
     return;
   }
-  throw new Error("usage: native-state.mjs <reserve|bind|finish|record|complete|who|binding> --workspace PATH [--task-nonce ID] [--child ID] [--model MODEL] [--executor NAME --profile-id ID --role ROLE --provider-id ID] [--state-dir PATH]");
+  throw new Error("usage: native-state.mjs <reserve|bind|finish|record|complete|dispatch-cancel|who|binding> --workspace PATH [--task-nonce ID] [--child ID] [--model MODEL] [--executor NAME --profile-id ID --role ROLE --provider-id ID] [--state-dir PATH]");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

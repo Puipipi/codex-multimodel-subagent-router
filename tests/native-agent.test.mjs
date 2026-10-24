@@ -5,7 +5,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveNativeAgent } from "../scripts/native-agent.mjs";
+import { prepareGatewayDispatch, resolveNativeAgent } from "../scripts/native-agent.mjs";
+import { NativeTasks } from "../scripts/native-state.mjs";
 import { mergeCatalog } from "../scripts/native-catalog.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -14,6 +15,49 @@ const cliPath = path.join(repoRoot, "scripts", "native-agent.mjs");
 let checks = 0;
 const equal = (actual, expected, message) => { assert.equal(actual, expected, message); checks += 1; };
 const ok = (value, message) => { assert.ok(value, message); checks += 1; };
+
+const dispatchRoot = await mkdtemp(path.join(os.tmpdir(), "native-agent-gateway-dispatch-"));
+try {
+  const tasks = new NativeTasks({stateDir: dispatchRoot});
+  const order = [];
+  const prepared = await prepareGatewayDispatch({
+    result: {executor: "api", profile_id: "abcdefabcdefabcdefabcdef", resolved_model: "mock-api-model"},
+    executor: "api", profileId: "abcdefabcdefabcdefabcdef", taskNonce: "dispatch-preflight-001", parentThreadId: "parent-chat",
+    tasks,
+    assertEnabled: async () => { order.push("enabled"); },
+    ensureReady: async () => { order.push("ready"); },
+  });
+  equal(order.join(","), "enabled,ready,enabled", "gateway dispatch checks enablement before and after setup");
+  equal(prepared.dispatch_reservation.task_nonce, "dispatch-preflight-001", "spawn result carries its pending dispatch identity");
+  equal(await tasks.hasActiveGatewayExecutions(), true, "pending gateway dispatch protects the gateway before child bind");
+  await tasks.begin({parentThreadId: "parent-chat", childThreadId: "api-child", taskNonce: "dispatch-preflight-001", model: "mock-api-model", binding: {
+    executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model",
+    role: "native_api_abcdefabcdefabcdefabcdef", providerId: "api-native-abcdefabcdefabcdefabcdef",
+  }});
+  equal(await tasks.hasActiveGatewayExecutions(), true, "binding atomically replaces the dispatch intent with the active child");
+  const failedTasks = new NativeTasks({stateDir: path.join(dispatchRoot, "cancelled")});
+  let finalizationCount = 0;
+  await assert.rejects(prepareGatewayDispatch({
+    result: {resolved_model: "mock-api-model"}, executor: "api", profileId: "abcdefabcdefabcdefabcdef",
+    taskNonce: "dispatch-preflight-002", parentThreadId: "parent-chat", tasks: failedTasks,
+    assertEnabled: async () => {}, ensureReady: async () => { throw new Error("mock setup failed"); },
+    onCancelled: async () => { finalizationCount += 1; },
+  }), /mock setup failed/);
+  checks += 1;
+  equal(await failedTasks.hasActiveGatewayExecutions(), false, "confirmed setup failure cancels its pending intent");
+  const disabledTasks = new NativeTasks({stateDir: path.join(dispatchRoot, "disabled")});
+  await assert.rejects(prepareGatewayDispatch({
+    result: {resolved_model: "mock-api-model"}, executor: "api", profileId: "abcdefabcdefabcdefabcdef",
+    taskNonce: "dispatch-preflight-003", parentThreadId: "parent-chat", tasks: disabledTasks,
+    assertEnabled: async () => { throw new Error("disabled during setup"); },
+    onCancelled: async () => { finalizationCount += 1; },
+  }), /disabled during setup/);
+  checks += 1;
+  equal(await disabledTasks.hasActiveGatewayExecutions(), false, "disabled preflight cancels only its unbound gateway intent");
+  equal(finalizationCount, 2, "cancelled preflight requests pending-disable finalization");
+} finally {
+  await rm(dispatchRoot, {recursive: true, force: true});
+}
 
 const cache = {
   models: [
@@ -61,7 +105,7 @@ function runCli(args, env = {}) {
     delete childEnv.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
     result = spawnSync(process.execPath, [cliPath, ...args], {
       cwd: repoRoot,
-      env: { ...childEnv, ...env },
+      env: { ...childEnv, CODEX_THREAD_ID: "native-agent-test-parent", LOCALAPPDATA: path.join(dir, "local"), SOL_LUNA_PLUGIN_STATE: path.join(dir, "plugin-state"), ...env },
       stdio: ["ignore", outFd, errFd],
       windowsHide: true,
     });
@@ -112,15 +156,17 @@ try {
   equal(isolatedDefault.stderr.includes(inheritedHostJournal), false, "default test subprocess cannot inherit a host journal path");
   checks += 2;
   const envJournal = path.join(root, "env-only-journal.json");
-  const envOnly = runCli(["--executor", "deepseek"], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: envJournal });
+  const envOnly = runCli(["--executor", "deepseek", "--task-nonce", "env-ds-task-0001"], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: envJournal });
   equal(envOnly.status, 2, "env-only journal proceeds to the unchanged activation gate");
-  equal(envOnly.stderr.includes(envJournal), true, "env-only journal path reaches the activation gate");
+  assert.match(envOnly.stderr, /DeepSeek install journal is missing/);
+  equal(envOnly.stderr.includes(envJournal), false, "failed gate does not echo a private journal path");
   checks += 1;
   const explicitJournal = path.join(root, "explicit-journal.json");
   const ignoredEnvJournal = path.join(root, "ignored-env-journal.json");
-  const explicitWins = runCli(["--executor", "deepseek", "--install-journal", explicitJournal], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: ignoredEnvJournal });
+  const explicitWins = runCli(["--executor", "deepseek", "--install-journal", explicitJournal, "--task-nonce", "explicit-ds-task-1"], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: ignoredEnvJournal });
   equal(explicitWins.status, 2, "explicit journal proceeds to the unchanged activation gate");
-  equal(explicitWins.stderr.includes(explicitJournal), true, "explicit journal path reaches the activation gate");
+  assert.match(explicitWins.stderr, /DeepSeek install journal is missing/);
+  equal(explicitWins.stderr.includes(explicitJournal), false, "explicit journal failure does not echo its private path");
   equal(explicitWins.stderr.includes(ignoredEnvJournal), false, "explicit journal takes precedence over environment fallback");
   checks += 2;
   const emptyExplicit = runCli(["--executor", "deepseek", "--install-journal", ""], { CODEX_HOME: emptyHome, SOL_LUNA_NATIVE_INSTALL_JOURNAL: envJournal });

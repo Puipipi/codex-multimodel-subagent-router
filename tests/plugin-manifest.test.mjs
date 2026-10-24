@@ -22,7 +22,19 @@ match(openaiYaml, /display_name: "Sol 主控 · 多模型峰谷子代理"/, 'the
 match(openaiYaml, /default_prompt: "[^"]*\$sol-luna-deepseek-router/, 'the skill default prompt names the canonical skill');
 match(openaiYaml, /policy:\s*\n\s*allow_implicit_invocation: true/, 'the existing skill invocation policy is preserved');
 match(manifest.version, /^\d+\.\d+\.\d+$/, 'the manifest uses strict semver');
-equal(manifest.version, '0.11.4', 'the plugin manifest is the 0.11.4 candidate');
+equal(manifest.version, '0.12.0', 'the plugin manifest is the 0.12.0 candidate');
+for (const file of [
+  'scripts/native-current-model.mjs',
+  'scripts/native-execution-lifecycle.mjs',
+  'scripts/native-upgrade-status.mjs',
+  'scripts/native-connection-diagnostics.mjs',
+  'scripts/native-bootstrap-install.mjs',
+  'scripts/native-upgrade-guard.mjs',
+  'native/bootstrap/bootstrap.c',
+  'native/bootstrap/codex-bootstrap.exe',
+]) {
+  ok(existsSync(new URL(`../${file}`, import.meta.url)), `${file} is present in the installable plugin source tree`);
+}
 ok(manifest.description.length > 20, 'the manifest describes the plugin');
 equal(manifest.author.name, 'Puipipi', 'the manifest names the author');
 match(manifest.repository, /^https:\/\//, 'the repository is an https URL');

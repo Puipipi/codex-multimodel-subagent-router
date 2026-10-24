@@ -250,7 +250,7 @@ footer p + p { margin-top: 3px; }
     <div>
       <p class="eyebrow">SOL / ROUTER</p>
       <h1>路由设置</h1>
-      <p class="lede">给新任务选择执行器。保存只改路由文件，不启动模型。</p>
+      <p class="lede">给新任务选择执行器。保存路由会立即关闭新分工，并请求清理本插件拥有的空闲后台执行器；API 配置应用仍需单独操作。</p>
     </div>
     <button id="refresh" class="ghost small" type="button">重新载入</button>
   </header>
@@ -277,11 +277,16 @@ footer p + p { margin-top: 3px; }
 
   <div id="host-warning" class="warning" role="alert" hidden></div>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
+  <section class="block" aria-labelledby="diagnostics-title">
+    <div class="section-head"><div><h2 id="diagnostics-title">连接诊断</h2><p>仅点击后读取有限的本地错误分类，不调用模型或 API。</p></div>
+      <button id="connection-diagnostics" class="ghost small" type="button">运行连接诊断</button></div>
+    <output id="connection-diagnostics-result" class="status-detail" aria-live="polite"></output>
+  </section>
 
   <form id="router-form" novalidate>
     <div class="check-row" style="margin-bottom:14px">
       <label class="check-row"><input id="router-enabled" type="checkbox"><span>启用自动子代理分工</span></label>
-      <span class="hint">关闭时保留全部设置，并停止新的自动、计划、一次性及粘性子代理派发。</span>
+      <span class="hint">关闭时保留全部设置并停止新派发；本插件会停用已确认所有权的空闲网关，活动任务结束后再清理，并仅解除本插件拥有的 CLI 覆盖供下次启动使用官方 Codex。当前进程不热切换；失败可再次保存关闭状态重试。</span>
     </div>
     <fieldset class="block">
       <legend>模式</legend>
@@ -741,7 +746,7 @@ footer p + p { margin-top: 3px; }
       verify.dataset.state = "off";
       byId("executor-status-detail").textContent = guardDisabled && settings.enabled !== false
         ? "生命周期守卫已停用自动分工；用户设置仍保持启用。现有 child 与后台空闲执行器状态由生命周期单独报告。"
-        : "配置保留，新的自动子代理派发已关闭；现有 child 与后台空闲执行器状态由生命周期单独报告。";
+        : "配置保留，新的自动子代理派发已关闭；已请求停用本插件拥有的后台计划任务，并在活动任务完成后停止空闲网关。";
       return;
     }
     let selectors = settings.mode === "fixed"
@@ -764,21 +769,27 @@ footer p + p { margin-top: 3px; }
       const missingNative = selectors.filter(selector => selector?.startsWith("native:") && !modelValues.has(selector.slice(7)));
       if (selectors.includes("luna") && !(snapshot.nativeModels || []).some(model => /luna/i.test(model?.value || ""))) missingNative.push("luna");
       const needsCatalog = selectors.some(selector => selector === "luna" || selector?.startsWith("native:"));
+      const currentMainModel = selectors.includes("same") ? snapshot.currentMainModel : null;
       setStatusLabel("install-status", "当前原生执行器");
       setStatusLabel("gateway-status", "本地网关");
-      install.dataset.state = needsCatalog && snapshot.capabilities?.nativeModelsAvailable !== true ? "unknown" : "on";
+      install.dataset.state = (needsCatalog && snapshot.capabilities?.nativeModelsAvailable !== true)
+        || (selectors.includes("same") && !currentMainModel?.model) ? "unknown" : "on";
       gateway.dataset.state = hasDeepseekGateway ? "unknown" : "off";
-      byId("install-state").textContent = needsCatalog
-        ? (snapshot.capabilities?.nativeModelsAvailable === true && missingNative.length === 0 ? "本地目录可用" : "目录未知或模型缺失")
-        : selectors.includes("same") ? "跟随当前聊天模型" : "原生执行器";
+      byId("install-state").textContent = selectors.includes("same")
+        ? (currentMainModel?.model ? `跟随 ${currentMainModel.model}` : "当前聊天模型未知")
+        : needsCatalog
+          ? (snapshot.capabilities?.nativeModelsAvailable === true && missingNative.length === 0 ? "本地目录可用" : "目录未知或模型缺失")
+          : "原生执行器";
       byId("gateway-state").textContent = hasDeepseekGateway ? "随 DeepSeek 路由" : "不需要";
       byId("restart-state").textContent = "不需要 API 角色";
       byId("restart-status").dataset.state = "off";
       byId("verify-state").textContent = "未调用";
       verify.dataset.state = "off";
       byId("executor-status-detail").textContent = needsCatalog
-        ? (missingNative.length ? `选定原生模型不在当前目录：${missingNative.join(", ")}。派发会明确失败，不会替换模型。` : "状态来自本地 Codex 模型目录；不会调用 API。")
-        : "当前路由使用原生执行器；API 角色安装状态不适用。";
+        ? `${missingNative.length ? `选定原生模型不在当前目录：${missingNative.join(", ")}。派发会明确失败，不会替换模型。` : "状态来自本地 Codex 模型目录；不会调用 API。"}${currentMainModel?.model ? ` same 跟随当前聊天模型 ${currentMainModel.model}。` : selectors.includes("same") ? " same 当前聊天模型未知，派发会明确失败。" : ""}`
+        : selectors.includes("same")
+          ? (currentMainModel?.model ? `same 将为当前聊天模型 ${currentMainModel.model} 创建独立 child；API 角色安装状态不适用。` : "无法读取当前聊天模型；same 派发会明确失败，不使用全局默认模型。")
+          : "当前路由使用原生执行器；API 角色安装状态不适用。";
       return;
     }
     setStatusLabel("install-status", "API 角色状态");
@@ -1312,6 +1323,20 @@ footer p + p { margin-top: 3px; }
   byId("router-enabled").addEventListener("change", markDirty);
   byId("router-form").addEventListener("submit", saveRoute);
   byId("refresh").addEventListener("click", loadSnapshot);
+  byId("connection-diagnostics").addEventListener("click", async () => {
+    const output = byId("connection-diagnostics-result");
+    output.textContent = "正在读取本地诊断…";
+    try {
+      const result = await callTool("router_connection_diagnostics", {});
+      if (!result.available) { output.textContent = "本地诊断暂不可用；根因仍不确定。"; return; }
+      const events = Array.isArray(result.events) ? result.events : [];
+      output.textContent = events.length
+        ? events.map(event => `${event.timestampUtc} · ${event.errorClass}${event.httpStatus ? ` · HTTP ${event.httpStatus}` : ""}${event.requestBytes ? ` · ${event.requestBytes} bytes` : ""}`).join("\n")
+        : "未找到可分类的近期连接错误；根因仍不确定。";
+    } catch (error) {
+      output.textContent = `诊断失败：${messageOf(error)}`;
+    }
+  });
   byId("reload-route").addEventListener("click", loadSnapshot);
   byId("new-profile").addEventListener("click", () => openEditor(null));
   byId("cancel-profile").addEventListener("click", closeEditor);

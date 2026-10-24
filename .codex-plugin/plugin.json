@@ -1,6 +1,6 @@
 {
   "name": "sol-luna-deepseek-router",
-  "version": "0.11.4",
+  "version": "0.12.0",
   "description": "Sol-led routing to native Luna, isolated DeepSeek, and user-configured OpenAI-compatible API profiles, with immutable child bindings and explicit lifecycle controls.",
   "author": {
     "name": "Puipipi",
@@ -25,7 +25,7 @@
   "interface": {
     "displayName": "Sol 主控 · 多模型峰谷子代理",
     "shortDescription": "Sol 主控按峰谷调度 Luna、DeepSeek 与可配置 API 子代理",
-    "longDescription": "Keeps Sol and the current conversation intact while routing new coding tasks to native Luna, an isolated native_deepseek child with its own provider and catalog, or a user-configured OpenAI-compatible API profile. API profiles are immutable and support the official DeepSeek account or manual env/file credential references. A profile may be fixed or assigned to explicit peak/valley slots; the API panel saves configuration separately from the explicit Apply action, and existing children keep their original profile. First-version API children disable Codex built-in web search. Sol and Luna retain their normal provider and live catalog. The older shared-root gateway and GPT relay remain historical compatibility only; DSH MCP tools and the read-only trace remain explicit legacy compatibility. A generic API child requires a matching runtime and registered root role; after explicit Apply, fully restart Codex and verify a real child probe before relying on the route.",
+    "longDescription": "Keeps Sol and the current conversation intact while routing new coding tasks to native Luna, an exact same-model native child, an exact catalog-native model, an isolated native_deepseek child with its own provider and catalog, or a user-configured OpenAI-compatible API profile. The global routing switch disables all new automatic, scheduled, one-time, sticky and DSH dispatch; verified plugin-owned idle gateways stop after active work finishes. API profiles are immutable; editing creates a new profile ID while existing children keep their original binding. Fixed and scheduled routes support Luna, same, exact native models, DeepSeek and immutable API profiles. API profiles support the official DeepSeek account or manual env/file credential references. The API panel saves configuration separately from explicit Apply; discovery runs only on request. First-version API children disable Codex built-in web search. Sol and Luna retain their normal provider and live model catalog. DSH MCP and trace remain explicit legacy compatibility.",
     "developerName": "Puipipi",
     "category": "Developer Tools",
     "capabilities": [

@@ -253,6 +253,7 @@ export async function handleHook({
     at,
     sessionId: routeSessionId,
     mainModel: typeof input?.model === 'string' ? input.model : undefined,
+    currentModelThreadId: recordedThreadId?.trim(),
     guardStatus,
     stateDir: resolveOverrideStateDir(overrideStateDir),
     routerSettings: settings,

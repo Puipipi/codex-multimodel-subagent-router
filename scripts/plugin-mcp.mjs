@@ -15,6 +15,7 @@ import {
   getExecutorStatus as getNativeApiExecutorStatus,
 } from './native-api-install.mjs';
 import {effectiveRouterEnabled} from './native-api-settings.mjs';
+import {finalizePendingDisable} from './native-execution-lifecycle.mjs';
 import {
   ROUTER_SETTINGS_TOOL_NAMES,
   ROUTER_SETTINGS_TOOLS,
@@ -24,7 +25,7 @@ import {
   OwnershipStore, WorkspaceLeases, TERMINAL_STATUSES, canonicalWorkspace, hashThread, normalizeWorkspace, resolveStateDir, workspaceKey,
 } from './plugin-state.mjs';
 
-const VERSION = '0.8.1';
+const VERSION = '0.12.0';
 const PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25']);
 const PASSIVE_STATUSES = new Set([...TERMINAL_STATUSES]);
 const LIST_STATUSES = new Set(['starting', 'running', 'interrupting', 'idle', 'completed', 'interrupted', 'error', 'context_exhausted', 'closed']);
@@ -308,6 +309,9 @@ export function createPluginMcp({
   applyApiConfiguration,
   guardStatus,
   stopOwnedIdleExecutions,
+  readCurrentModel,
+  readNativeModels,
+  collectDiagnostics,
 } = {}) {
   const resolvedStateDir = resolveStateDir(stateDir);
   const ownershipStore = ownership ?? new OwnershipStore({stateDir: resolvedStateDir, now});
@@ -319,6 +323,10 @@ export function createPluginMcp({
     applyApiConfiguration,
     guardStatus,
     onRoutingDisabled: stopOwnedIdleExecutions,
+    readCurrentModel,
+    readNativeModels,
+    collectDiagnostics,
+    stateDir: resolvedStateDir,
   });
 
   async function assertAutomaticDispatchEnabled() {
@@ -363,6 +371,12 @@ export function createPluginMcp({
         warnings.push(sanitizeError(`Could not release workspace writer lease: ${error.message}`));
       }
     }
+      if (TERMINAL_STATUSES.has(status)) {
+        const cleanup = await finalizePendingDisable({settingsPath: routerSettings.settingsPath, stateDir: resolvedStateDir});
+        if (cleanup.stopped === false && cleanup.skipped !== true && cleanup.deferred !== true) {
+          warnings.push(cleanup.message || '自动分工已关闭，但后台执行器停止状态无法确认；可在设置中重试。');
+        }
+      }
     if (TERMINAL_STATUSES.has(status)) traceService.revokeAgent(record.agent_id);
     return warnings;
   }
@@ -631,7 +645,7 @@ export function createPluginMcp({
             },
           },
           serverInfo: {name: 'sol-luna-deepseek-router', version: VERSION, title: 'Sol Luna DeepSeek Router'},
-          instructions: 'Every DSH tools/call must carry the trusted Codex request _meta.threadId; this server refuses to act without it. Router settings tools are direct, app-visible configuration calls and do not require a model turn. One chat owns each DSH agent and dsh_list is filtered to that chat. Retain agent ids and use dsh_wait; do not duplicate a start after a timeout. dsh_trace returns a read-only loopback URL with a short-lived access ticket, never a credential. External DSH agents are not native Codex children; the trace is the truthful external event view. The settings panel writes only router JSON; installation, full restart, and verification remain separate and unclaimed.',
+          instructions: 'Every DSH tools/call must carry the trusted Codex request _meta.threadId; this server refuses to act without it. Router settings tools are direct, app-visible configuration calls and do not require a model turn. One chat owns each DSH agent and dsh_list is filtered to that chat. Retain agent ids and use dsh_wait; do not duplicate a start after a timeout. dsh_trace returns a read-only loopback URL with a short-lived access ticket, never a credential. External DSH agents are not native Codex children; the trace is the truthful external event view. Turning routing off rejects new automatic and DSH dispatch, disables verified plugin-owned scheduled tasks, stops idle gateways after active work finishes, and clears CODEX_CLI_PATH only when it still exactly matches this plugin’s install record; a custom user path is preserved. Current Codex does not hot-switch and may need a restart to use the official path. API profile Apply, full restart, and live provider verification remain separate actions.',
         },
       };
     }
@@ -653,7 +667,9 @@ export function createPluginMcp({
       if (!tool) throw new Error(`Unknown tool: ${params.name}`);
       const args = params.arguments ?? {};
       if (ROUTER_SETTINGS_TOOL_NAMES.has(tool.name)) {
-        const {payload, text} = await routerSettings.callTool(tool.name, args);
+        let context = {};
+        try { context = {threadId: trustedThreadId(params)}; } catch { /* Settings remain usable without current-chat metadata. */ }
+        const {payload, text} = await routerSettings.callTool(tool.name, args, context);
         return {jsonrpc: '2.0', id, result: settingsToolResult(payload, text)};
       }
       const threadId = trustedThreadId(params);

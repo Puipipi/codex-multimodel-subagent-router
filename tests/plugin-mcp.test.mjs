@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import {mkdir, mkdtemp, rm} from 'node:fs/promises';
+import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createPluginMcp, trustedThreadId} from '../scripts/plugin-mcp.mjs';
@@ -155,6 +155,7 @@ function isError(response) {
 try {
   const init = await server.handle({jsonrpc: '2.0', id: 0, method: 'initialize', params: {protocolVersion: '2025-06-18'}});
   equal(init.result.serverInfo.name, 'sol-luna-deepseek-router', 'initialize identifies the plugin server');
+  equal(init.result.serverInfo.version, '0.12.0', 'initialize reports the integrated plugin version');
   equal(init.result.protocolVersion, '2025-06-18', 'initialize negotiates a supported protocol');
   match(init.result.instructions, /_meta\.threadId/, 'initialize documents the trusted identity requirement');
   match(init.result.instructions, /not native Codex children/, 'initialize states the native-child limitation');
@@ -163,6 +164,58 @@ try {
   const names = listed.result.tools.map(tool => tool.name);
   for (const name of ['dsh_start', 'dsh_status', 'dsh_wait', 'dsh_followup', 'dsh_list', 'dsh_interrupt', 'dsh_close', 'dsh_rename', 'dsh_events', 'dsh_trace']) {
     ok(names.includes(name), `tools/list includes ${name}`);
+  }
+
+  {
+    let diagnosticCaller = null;
+    const contextServer = createPluginMcp({
+      stateDir: path.join(root, 'model-context-state'),
+      settingsPath: path.join(root, 'model-context-router.json'),
+      readNativeModels: async () => [],
+      readCurrentModel: async ({threadId}) => ({model: threadId === 'chat-a' ? 'gpt-6.1-sol' : 'gpt-6-astra', provider: 'openai'}),
+      guardStatus: async () => ({state: 'unmanaged'}),
+      collectDiagnostics: async ({parentThreadId}) => { diagnosticCaller = parentThreadId; return {available: true, rootCause: 'uncertain', events: []}; },
+    });
+    try {
+      const readFor = async (threadId, id) => contextServer.handle({jsonrpc: '2.0', id, method: 'tools/call', params: {
+        name: 'router_settings_snapshot', arguments: {}, _meta: {threadId},
+      }});
+      const a1 = payload(await readFor('chat-a', 21));
+      const b = payload(await readFor('chat-b', 22));
+      const a2 = payload(await readFor('chat-a', 23));
+      equal(a1.currentMainModel.model, 'gpt-6.1-sol', 'snapshot resolves chat A from trusted per-request metadata');
+      equal(b.currentMainModel.model, 'gpt-6-astra', 'same MCP server resolves chat B independently');
+      equal(a2.currentMainModel.model, 'gpt-6.1-sol', 'interleaved requests do not retain the previous caller model');
+      const diagnostic = payload(await contextServer.handle({jsonrpc: '2.0', id: 24, method: 'tools/call', params: {
+        name: 'router_connection_diagnostics', arguments: {}, _meta: {threadId: 'chat-b'},
+      }}));
+      equal(diagnosticCaller, 'chat-b', 'explicit connection diagnostic uses the trusted MCP caller context');
+      const missingDiagnosticContext = await contextServer.handle({jsonrpc: '2.0', id: 26, method: 'tools/call', params: {
+        name: 'router_connection_diagnostics', arguments: {},
+      }});
+      ok(isError(missingDiagnosticContext), 'diagnostics refuse to collect without trusted caller metadata');
+      equal(diagnosticCaller, 'chat-b', 'missing caller metadata does not trigger another local log read');
+    } finally {
+      await contextServer.close();
+    }
+  }
+
+  {
+    const disabledSettings = path.join(root, 'diagnostics-disabled-router.json');
+    await writeFile(disabledSettings, JSON.stringify({schemaVersion: 1, enabled: false, mode: 'fixed', fixedExecutor: 'luna', schedule: {peak: 'luna', valley: 'deepseek'}, profiles: {}}));
+    let diagnosticReads = 0;
+    const diagnosticServer = createPluginMcp({
+      stateDir: path.join(root, 'diagnostics-disabled-state'), settingsPath: disabledSettings,
+      guardStatus: async () => ({state: 'unmanaged'}), readNativeModels: async () => [],
+      collectDiagnostics: async () => { diagnosticReads += 1; return {available: true, rootCause: 'uncertain', events: []}; },
+    });
+    try {
+      const disabledDiagnostic = payload(await diagnosticServer.handle({jsonrpc: '2.0', id: 25, method: 'tools/call', params: {
+        name: 'router_connection_diagnostics', arguments: {}, _meta: {threadId: 'chat-a'},
+      }}));
+      equal(disabledDiagnostic.available, false, 'disabled routing returns unavailable without reading logs');
+      equal(diagnosticReads, 0, 'disabled routing performs zero diagnostic collection I/O');
+    } finally { await diagnosticServer.close(); }
   }
 
   assert.throws(() => trustedThreadId({_meta: {}}), /Missing trusted request _meta\.threadId/);

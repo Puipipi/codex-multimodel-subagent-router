@@ -3,14 +3,20 @@ import path from 'node:path';
 import {
   createApiProfile,
   defaultRouterSettingsPath,
+  effectiveRouterEnabled,
   readRouterSettingsSnapshot,
   resolveApiCredential,
   saveRouterSettings,
   validateRouterSettings,
 } from './native-api-settings.mjs';
 import {resolveDeepSeekAuth} from './native-credentials.mjs';
-import {readNativeModelOptions} from './native-agent.mjs';
+import {readNativeModelOptions} from './native-model-catalog.mjs';
 import {listApiModels} from './native-api-models.mjs';
+import {resolveCurrentMainModel} from './native-current-model.mjs';
+import {stopOwnedIdleExecutions as stopOwnedIdleExecutionsDefault} from './native-execution-lifecycle.mjs';
+import {readUpgradeGuardStatus} from './native-upgrade-status.mjs';
+import {collectConnectionDiagnostics} from './native-connection-diagnostics.mjs';
+import os from 'node:os';
 
 export const ROUTER_SETTINGS_URI = 'ui://router/settings';
 export const ROUTER_SETTINGS_MIME = 'text/html;profile=mcp-app';
@@ -41,6 +47,7 @@ export const ROUTER_SETTINGS_TOOL_NAMES = new Set([
   'router_settings_save_profile',
   'router_settings_check_credential',
   'router_settings_list_api_models',
+  'router_connection_diagnostics',
   'router_settings_executor_status',
   'router_settings_apply',
 ]);
@@ -98,11 +105,17 @@ const snapshotOutputSchema = {
         required: ['value', 'title', 'reasoningEfforts'],
       },
     },
+    currentMainModel: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: {model: {type: 'string'}, provider: {type: ['string', 'null']}},
+      required: ['model', 'provider'],
+    },
     providerPresets: {type: 'object'},
     capabilities: {type: 'object'},
     status: {type: 'object'},
   },
-  required: ['schema', 'settings', 'sha256', 'saved', 'selectors', 'nativeModels', 'providerPresets', 'capabilities', 'status'],
+  required: ['schema', 'settings', 'sha256', 'saved', 'selectors', 'nativeModels', 'currentMainModel', 'providerPresets', 'capabilities', 'status'],
 };
 
 const saveOutputSchema = {
@@ -184,7 +197,7 @@ export const ROUTER_SETTINGS_TOOLS = [
   {
     name: 'router_settings_update',
     title: '更新路由设置',
-    description: 'Update changed routing settings from the structured settings surface. CAS is used under the settings file lock.',
+    description: 'Update changed routing settings from the structured settings surface. CAS is used under the settings file lock. Turning routing off rejects new dispatch and requests shutdown of verified plugin-owned idle gateway services; active children finish first.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -228,7 +241,7 @@ export const ROUTER_SETTINGS_TOOLS = [
   {
     name: 'router_settings_save',
     title: '保存路由设置',
-    description: 'Save the complete router settings with revision compare-and-swap. A stale revision is rejected; reload before retrying.',
+    description: 'Save the complete router settings with revision compare-and-swap. Turning routing off rejects new dispatch and requests shutdown of verified plugin-owned idle gateways; active children finish first. A stale revision is rejected; reload before retrying.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -315,6 +328,27 @@ export const ROUTER_SETTINGS_TOOLS = [
     },
     outputSchema: {type: 'object', properties: {models: {type: 'array', items: {type: 'string'}}}, required: ['models']},
     annotations: {readOnlyHint: true, destructiveHint: false, openWorldHint: true},
+    _meta: SETTINGS_TOOL_META,
+  },
+  {
+    name: 'router_connection_diagnostics',
+    title: '连接诊断',
+    description: '用户明确点击后读取本机 Codex SQLite 日志中的有限错误分类，不读取消息正文，不联系模型或 API；自动分工关闭时不读取日志。',
+    inputSchema: emptyInput,
+    outputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        available: {type: 'boolean'}, rootCause: {type: 'string', enum: ['uncertain']},
+        events: {type: 'array', items: {type: 'object', additionalProperties: false, properties: {
+          timestampUtc: {type: 'string'}, target: {type: 'string'}, errorClass: {type: 'string'},
+          retryNumber: {type: ['integer', 'null']}, httpStatus: {type: ['integer', 'null']},
+          closeCode: {type: ['integer', 'null']}, requestBytes: {type: ['integer', 'null']},
+          threadHash: {type: ['string', 'null']}, processHash: {type: ['string', 'null']},
+          correlation: {type: 'string', enum: ['parent', 'registered_child', 'other_or_unknown']},
+        }, required: ['timestampUtc', 'target', 'errorClass', 'retryNumber', 'httpStatus', 'closeCode', 'requestBytes', 'threadHash', 'processHash', 'correlation']}}
+      }, required: ['available', 'rootCause', 'events'],
+    },
+    annotations: {readOnlyHint: false, destructiveHint: false, openWorldHint: false},
     _meta: SETTINGS_TOOL_META,
   },
   {
@@ -526,7 +560,7 @@ function statusFor(saved, notice) {
   };
 }
 
-function snapshotFor(snapshot, notice, capabilities = {}, nativeModels = []) {
+function snapshotFor(snapshot, notice, capabilities = {}, nativeModels = [], currentMainModel = null) {
   return {
     schema: ROUTER_SETTINGS_SCHEMA,
     settings: snapshot.settings,
@@ -534,6 +568,7 @@ function snapshotFor(snapshot, notice, capabilities = {}, nativeModels = []) {
     saved: snapshot.sha256 !== null,
     selectors: selectorOptions(snapshot.settings, nativeModels),
     nativeModels,
+    currentMainModel,
     providerPresets: API_PROVIDER_PRESETS,
     capabilities: {contextWindow: supportsContextWindow(), ...capabilities},
     status: statusFor(snapshot.sha256 !== null, notice),
@@ -708,12 +743,38 @@ export function createRouterSettingsService({
   modelListTimeoutMs = 8_000,
   guardStatus: guardStatusResolver,
   onRoutingDisabled: stopOwnedIdleExecutions,
+  stateDir,
+  readCurrentModel = resolveCurrentMainModel,
+  collectDiagnostics = collectConnectionDiagnostics,
 } = {}) {
   const getExecutorStatus = typeof statusResolver === 'function' ? statusResolver : defaultExecutorStatus;
   const applyApiConfiguration = typeof applyHandler === 'function' ? applyHandler : defaultApplyApiConfiguration;
   const applySupported = typeof applyHandler === 'function';
-  const getGuardStatus = typeof guardStatusResolver === 'function' ? guardStatusResolver : async () => null;
-  const stopIdle = typeof stopOwnedIdleExecutions === 'function' ? stopOwnedIdleExecutions : async () => null;
+  const getGuardStatus = typeof guardStatusResolver === 'function'
+    ? guardStatusResolver
+    : () => readUpgradeGuardStatus({env});
+  const stopIdle = typeof stopOwnedIdleExecutions === 'function' ? stopOwnedIdleExecutions : stopOwnedIdleExecutionsDefault;
+  async function stopRoutingIdleServices(settings) {
+    try { return await stopIdle({settings, settingsPath, stateDir, env}); }
+    catch { return {stopped: false, message: '后台执行器停止失败；路由设置已保存，请在设置中重试。'}; }
+  }
+  async function currentMainModel(context = {}) {
+    try { return await readCurrentModel({env, threadId: context.threadId ?? null}); } catch { return null; }
+  }
+  async function connectionDiagnostics(context = {}) {
+    if (typeof context.threadId !== 'string' || !context.threadId.trim()) throw new Error('连接诊断需要可信的当前会话标识；未读取日志。');
+    const [current, guard] = await Promise.all([readRouterSettingsSnapshot(settingsPath), getGuardStatus()]);
+    if (!effectiveRouterEnabled(current.settings, guard)) {
+      return {available: false, rootCause: 'uncertain', events: []};
+    }
+    return collectDiagnostics({
+      codexHome: env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+      stateDir,
+      enabled: true,
+      parentThreadId: context.threadId ?? null,
+      registeredChildThreadIds: [],
+    });
+  }
   const capabilities = {applyApiConfiguration: applySupported};
   let applying = false;
   let htmlPromise;
@@ -726,20 +787,20 @@ export function createRouterSettingsService({
     try { return await readNativeModels(); } catch { return []; }
   }
 
-  async function snapshot(notice) {
-    const [current, models, guardStatus] = await Promise.all([
-      readRouterSettingsSnapshot(settingsPath), nativeModels(), getGuardStatus(),
+  async function snapshot(notice, context = {}) {
+    const [current, models, guardStatus, activeModel] = await Promise.all([
+      readRouterSettingsSnapshot(settingsPath), nativeModels(), getGuardStatus(), currentMainModel(context),
     ]);
     return snapshotFor(current, notice, {
       ...capabilities,
       nativeModelsAvailable: models.length > 0,
       guardStatus: guardStatus || {state: 'unmanaged'},
-    }, models);
+    }, models, activeModel ? {model: activeModel.model, provider: activeModel.provider ?? null} : null);
   }
 
-  async function readSettings() {
+  async function readSettings(context = {}) {
     const current = await readRouterSettingsSnapshot(settingsPath);
-    return settingsReadResult(current.settings, await nativeModels());
+    return {...settingsReadResult(current.settings, await nativeModels()), currentMainModel: await currentMainModel(context)};
   }
 
   async function listApiProfileModels(args) {
@@ -794,8 +855,8 @@ export function createRouterSettingsService({
       expectedSha256: expected === undefined ? current.sha256 : expected,
     });
     let stopResult = null;
-    if (current.settings.enabled !== false && !saved.settings.enabled) {
-      stopResult = await stopIdle({settings: saved.settings, settingsPath});
+    if (!saved.settings.enabled || (await getGuardStatus())?.state === 'disabled') {
+      stopResult = await stopRoutingIdleServices(saved.settings);
     }
     return {
       values: valuesFor(saved.settings),
@@ -803,12 +864,12 @@ export function createRouterSettingsService({
       pending: {
         restartRequired: false,
         ...(stopResult === null ? {} : {backgroundStop: stopResult}),
-        message: '设置已保存。安装与验证状态未由本工具改变。',
+        message: stopResult?.message || '设置已保存。运行服务停止结果由后台生命周期状态确认；安装与 API 验证仍需单独报告。',
       },
     };
   }
 
-  async function saveSettings(args) {
+  async function saveSettings(args, context = {}) {
     exactObject(args, new Set(['settings', 'expectedSha256']), 'router_settings_save arguments');
     if (!plainObject(args.settings)) throw new Error('settings must be an object.');
     const expected = requireHash(args.expectedSha256, 'expectedSha256');
@@ -816,22 +877,23 @@ export function createRouterSettingsService({
     if (current.sha256 !== expected) throw new Error('router settings changed since they were read; reload before updating');
     const saved = await saveRouterSettings(settingsPath, normalizeSettingsSelectors(args.settings), {expectedSha256: expected});
     let stopResult = null;
-    if (current.settings.enabled !== false && !saved.settings.enabled) {
-      stopResult = await stopIdle({settings: saved.settings, settingsPath});
+    if (!saved.settings.enabled || (await getGuardStatus())?.state === 'disabled') {
+      stopResult = await stopRoutingIdleServices(saved.settings);
     }
     const models = await nativeModels();
     const result = snapshotFor(
       {settings: saved.settings, sha256: saved.sha256},
-      stopResult === false
+      stopResult?.message || (stopResult === false
         ? '设置已保存；后台空闲执行器停止未确认，生命周期状态需单独检查。'
-        : '设置已保存。安装、重启和 API 验证状态由生命周期单独报告。',
+        : '设置已保存。安装、重启和 API 验证状态由生命周期单独报告。'),
       {...capabilities, nativeModelsAvailable: models.length > 0},
       models,
+      await currentMainModel(context),
     );
     return {...result, previousSha256: saved.previousSha256, ...(stopResult === null ? {} : {backgroundStop: stopResult})};
   }
 
-  async function saveProfile(args) {
+  async function saveProfile(args, context = {}) {
     exactObject(args, new Set(['expectedSha256', 'basedOnProfileId', 'definition', 'label', 'aliases']), 'router_settings_save_profile arguments');
     const expected = requireHash(args.expectedSha256, 'expectedSha256');
     if (!plainObject(args.definition)) throw new Error('definition must be an object.');
@@ -906,7 +968,7 @@ export function createRouterSettingsService({
       };
     const models = await nativeModels();
     const result = snapshotFor({settings: saved.settings, sha256: saved.sha256}, pending.message,
-      {...capabilities, nativeModelsAvailable: models.length > 0}, models);
+      {...capabilities, nativeModelsAvailable: models.length > 0}, models, await currentMainModel(context));
     return {
       ...result,
       profileId,
@@ -994,7 +1056,7 @@ export function createRouterSettingsService({
     }
   }
 
-  async function callTool(name, args = {}) {
+  async function callTool(name, args = {}, context = {}) {
     switch (name) {
       case 'router_settings_open':
         requireEmpty(args, 'router_settings_open arguments');
@@ -1008,20 +1070,23 @@ export function createRouterSettingsService({
         };
       case 'router_settings_read':
         requireEmpty(args, 'router_settings_read arguments');
-        return {payload: await readSettings()};
+        return {payload: await readSettings(context)};
       case 'router_settings_update':
         return {payload: await updateSettings(args)};
       case 'router_settings_snapshot':
         requireEmpty(args, 'router_settings_snapshot arguments');
-        return {payload: await snapshot()};
+        return {payload: await snapshot(undefined, context)};
       case 'router_settings_save':
-        return {payload: await saveSettings(args)};
+        return {payload: await saveSettings(args, context)};
       case 'router_settings_save_profile':
-        return {payload: await saveProfile(args)};
+        return {payload: await saveProfile(args, context)};
       case 'router_settings_check_credential':
         return {payload: await checkCredential(args)};
       case 'router_settings_list_api_models':
         return {payload: await listApiProfileModels(args)};
+      case 'router_connection_diagnostics':
+        requireEmpty(args, 'router_connection_diagnostics arguments');
+        return {payload: await connectionDiagnostics(context)};
       case 'router_settings_executor_status':
         return {payload: await executorStatus(args)};
       case 'router_settings_apply':
@@ -1058,6 +1123,8 @@ export function createRouterSettingsService({
   return {
     settingsPath: path.resolve(settingsPath),
     callTool,
+    stopOwnedIdleExecutions: stopRoutingIdleServices,
+    connectionDiagnostics,
     listResources,
     readResource,
   };

@@ -34,6 +34,27 @@ directly until the user turns routing back on. Do not bypass this switch through
 the legacy DSH tools. The settings panel remains available while routing is
 off. A guard-reported disabled state has the same effective behavior; a
 missing/unmanaged guard does not disable native Luna routing.
+The user-off setting lives only in router settings; never rewrite the C-owned
+upgrade status to represent user intent. A guard-reported compatibility
+failure remains intact. API/DeepSeek still require the later runtime gate to
+prove that the running CLI image matches an approved receipt; a healthy old
+status or same-version label is not enough. Re-enabling native-only routing
+does not require a shim, while API remains unavailable until explicit Apply
+has an approved runtime receipt.
+
+When the user turns routing off, stop creating automatic children and do the
+file work in Sol. Saving off asks the plugin to disable only its verified
+owned scheduler tasks and stop idle local gateways. Existing native or DSH
+children are allowed to finish; the last terminal callback retries deferred
+cleanup. If cleanup cannot be verified, report the Chinese settings message
+and let the user retry by saving the off setting again. Do not kill Codex or
+DSH processes. If the user environment still points exactly at this plugin's
+owned bootstrap, clear only that `CODEX_CLI_PATH` value so the next launch
+resolves the official Codex app; preserve any later custom user value. The
+current process does not hot-switch, so restart may be required to use that
+official path. Applying an API profile remains a separate explicit action.
+The settings panel's “连接诊断” action reads only bounded local error classes
+when routing is enabled; it never runs on startup or contacts a provider.
 
 Fixed and scheduled executors may select `same` or an exact `native:<slug>` in
 addition to the existing Luna, DeepSeek, and API profile choices. `same` means
@@ -58,7 +79,8 @@ For an API profile or alias, resolve and gate it explicitly:
 
 ```powershell
 node .\scripts\route.mjs --json --executor <profileId-or-alias>
-node .\scripts\native-agent.mjs --executor <profileId> --json
+$taskNonce = [guid]::NewGuid().ToString()
+node .\scripts\native-agent.mjs --executor <profileId> --task-nonce $taskNonce --json
 ```
 
 The gate must pass before spawn. The returned `native_spawn` supplies
@@ -105,7 +127,7 @@ and DeepSeek and does not change their model-selection policies.
 
 ## Shared native writer and child-message contract
 
-This contract applies equally to native Luna and native DeepSeek write tasks. Reserve before `spawn_agent`, bind the real child immediately after spawn, and release only at explicit finish/terminal. Ownership comes from trusted `CODEX_THREAD_ID`; `--parent` is rejected as a forgery path.
+For gateway-backed API and DeepSeek routes, generate one stable nonce and run `native-agent` with it first; the gate records a gateway intent before checking/starting the local service. For a write task, then reserve the workspace before `spawn_agent`, bind the real child immediately after spawn, and release only at explicit finish/terminal. A read-only gateway child uses `record` after spawn. Luna uses only the writer lease; it never reserves a gateway. Ownership comes from trusted `CODEX_THREAD_ID` or `CODEX_SESSION_ID`; `--parent` is rejected as a forgery path. If a spawn is conclusively rejected before a child exists, run `dispatch-cancel` with the same nonce. If the spawn result is uncertain, keep the reservation until child identity/status is reconciled; never cancel a potentially live child.
 
 ```powershell
 $taskNonce = [guid]::NewGuid().ToString()
@@ -132,6 +154,7 @@ For a write-capable API child, reserve and bind the full executor identity:
 
 ```powershell
 $taskNonce = [guid]::NewGuid().ToString()
+node .\scripts\native-agent.mjs --executor <profileId> --task-nonce $taskNonce --json
 node .\scripts\native-state.mjs reserve --workspace (Get-Location).Path --task-nonce $taskNonce --model <exact-model>
 # spawn_agent with task_name, agent_type, fork_turns:none, message; omit model
 node .\scripts\native-state.mjs bind --workspace (Get-Location).Path --task-nonce $taskNonce `
@@ -139,11 +162,12 @@ node .\scripts\native-state.mjs bind --workspace (Get-Location).Path --task-nonc
   --profile-id <24hex> --role native_api_<24hex> --provider-id api-native-<24hex>
 ```
 
-For a read-only API child, record the actual child without taking a writer
-lease, then read the binding and complete only that task record:
+For a read-only API child, gate first, then record the actual child without
+taking a writer lease. `record` atomically consumes the pending gateway intent:
 
 ```powershell
 $taskNonce = [guid]::NewGuid().ToString()
+node .\scripts\native-agent.mjs --executor <profileId> --task-nonce $taskNonce --json
 node .\scripts\native-state.mjs record --workspace (Get-Location).Path --task-nonce $taskNonce `
   --child CHILD_THREAD_ID --model <exact-model> --executor api `
   --profile-id <24hex> --role native_api_<24hex> --provider-id api-native-<24hex>
@@ -155,8 +179,12 @@ node .\scripts\native-state.mjs complete --child CHILD_THREAD_ID --status comple
 release the workspace writer lease. A different parent is rejected, and a
 different model/profile cannot overwrite the original binding. For every
 follow-up, read `binding`, rerun `native-agent.mjs --executor <profileId>
---json` against that original profile, and continue the same child with
-`followup_task`. A global profile change affects only new children. Old
+--task-nonce $taskNonce --json` against that original profile. For a write
+child, reacquire its writer reservation and bind it before `followup_task`; for
+a read-only child, `record` the existing child with the same nonce and binding
+before `followup_task`. This consumes the fresh gateway intent without
+reassigning the child. A confirmed pre-follow-up rejection can use
+`dispatch-cancel`; an uncertain outcome keeps the reservation. A global profile change affects only new children. Old
 profiles cannot be removed by the settings schema; if the old profile gate
 fails, report the failure and do not silently substitute the new profile.
 
@@ -180,12 +208,13 @@ restart. See [native API executors](docs/native-api-executors.md) and the
 Use native Codex collaboration, not DSH, for the formal task. Resolve the dedicated child role first:
 
 ```powershell
-node .\scripts\native-agent.mjs --executor deepseek --json
+$taskNonce = [guid]::NewGuid().ToString()
+node .\scripts\native-agent.mjs --executor deepseek --task-nonce $taskNonce --json
 ```
 
 Before emitting the native spawn parameters, this command reads `SOL_LUNA_NATIVE_INSTALL_JOURNAL` from the managed user environment and verifies activated config, environment, launcher and owned Task Scheduler task, then starts/checks the isolated gateway. A private experiment may explicitly pass `--install-journal <path>` to override that environment value; an explicit empty value fails closed. Rerun the same gate immediately before each DeepSeek `followup_task`; if it fails, do not send the follow-up. A missing or unhealthy installation fails closed: do not register a task, start a DSH session, directly spawn the gateway, replay old work, or switch executors. It returns `agent_type: "native_deepseek"`, `fork_turns: "none"`, and an informational `resolved_model: "deepseek/deepseek-flash"`. Call `spawn_agent` with the bounded `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the child role selects its fixed DeepSeek model and `high` reasoning effort, regardless of the Sol parent’s effort setting. Keep the same child for corrections: use native `wait` for completion and `followup_task` for the same child; never spawn a replacement just because an observation window ended. The installer uses a current-user Task Scheduler task to keep the gateway independent of the DSH/Codex child process tree; DSH remains only an explicit legacy workflow and does not create native Codex child sessions. After activation, fully exit and restart Codex for future chats to inherit the new user environment; an already running app does not refresh it.
 
-Apply the shared writer and child-message contract above before this spawn; it applies to both native executors.
+Apply the shared writer and child-message contract above before this spawn. For a write task, reserve after the gate and before spawn; bind immediately after. For a read-only task, consume the intent with `record` after spawn using `--executor deepseek --model deepseek/deepseek-flash`. On a confirmed pre-spawn refusal, cancel with `native-state.mjs dispatch-cancel --task-nonce $taskNonce`.
 
 The default is one writer per workspace. Different workspaces may run in parallel. Read-only research may skip the writer lease, but a child, task, model, and parent chat must never be reassigned across chats. The native state file stores a hashed parent owner and the child thread ID; `who` filters to the trusted `CODEX_THREAD_ID`. A reservation is not auto-stolen when a short CLI exits: only an explicit `finish`/`release` or a verified terminal task clears it. If a host cannot expose enough native child identity to enforce the lease, say so and keep the task read-only rather than inventing a second scheduler.
 

@@ -45,7 +45,7 @@ function runCli(args, env = {}) {
   try {
     result = spawnSync(process.execPath, [path.join(repoRoot, "scripts", "native-agent.mjs"), ...args], {
       cwd: repoRoot,
-      env: { ...process.env, ...env },
+      env: { ...process.env, CODEX_THREAD_ID: "native-api-test-parent", LOCALAPPDATA: path.join(dir, "local"), SOL_LUNA_PLUGIN_STATE: path.join(dir, "plugin-state"), ...env },
       stdio: ["ignore", outFd, errFd],
       windowsHide: true,
     });
@@ -312,7 +312,7 @@ try {
     }, dependencies), /api_only=true/);
     flags.api_only = true;
 
-    const missingJournal = runCli(["--executor", profile.profileId, "--api-dir", path.join(tempRoot, "missing-api"), "--settings", paths.settings, "--main-model", "gpt-6.1-sol"]);
+    const missingJournal = runCli(["--executor", profile.profileId, "--api-dir", path.join(tempRoot, "missing-api"), "--settings", paths.settings, "--main-model", "gpt-6.1-sol", "--task-nonce", "missing-api-task-01"]);
     equal(missingJournal.status, 2, "native-agent API dispatch fails closed without an install");
     assert.match(missingJournal.stderr, /install journal is missing/);
     assert.doesNotMatch(missingJournal.stderr, /native DeepSeek|isolated/i);

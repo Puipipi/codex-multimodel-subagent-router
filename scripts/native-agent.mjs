@@ -4,9 +4,14 @@ import { fileURLToPath } from "node:url";
 import { PICKER_SLUG } from "./native-routing.mjs";
 import { ensureNativeDeepseekDispatch } from "./native-isolated-install.mjs";
 import { defaultRouterSettingsPath, loadRouterSettings } from "./native-api-settings.mjs";
+import { effectiveRouterEnabled } from "./native-api-settings.mjs";
 import { ensureNativeApiDispatch } from "./native-api-install.mjs";
 import { defaultNativeApiDir } from "./native-api-manager.mjs";
 import { defaultModelsCachePath } from "./native-model-catalog.mjs";
+import { resolveCurrentMainModel } from "./native-current-model.mjs";
+import { enableOwnedExecutionsForDispatch, finalizePendingDisable } from "./native-execution-lifecycle.mjs";
+import { readUpgradeGuardStatus } from "./native-upgrade-status.mjs";
+import { NativeTasks } from "./native-state.mjs";
 
 export { defaultModelsCachePath, nativeModelOptionsFromCache, readNativeModelOptions } from "./native-model-catalog.mjs";
 
@@ -69,6 +74,32 @@ export function resolveNativeAgent({ executor, mainModel, models = [], apiProfil
   };
 }
 
+export async function prepareGatewayDispatch({
+  result,
+  executor,
+  profileId = null,
+  taskNonce,
+  parentThreadId,
+  tasks,
+  assertEnabled = async () => {},
+  ensureReady = async () => {},
+  onCancelled = async () => {},
+} = {}) {
+  if (!tasks || !['api', 'deepseek'].includes(executor)) throw new Error('gateway dispatch requires a native task store and API/DeepSeek executor');
+  const model = result?.resolved_model || result?.model;
+  await tasks.reserveDispatch({parentThreadId, taskNonce, executor, profileId, model});
+  try {
+    await assertEnabled();
+    await ensureReady();
+    await assertEnabled();
+    return {...result, dispatch_reservation: {task_nonce: taskNonce, executor, profile_id: profileId}};
+  } catch (error) {
+    await tasks.cancelDispatch({parentThreadId, taskNonce}).catch(() => {});
+    await onCancelled().catch(() => {});
+    throw error;
+  }
+}
+
 async function main(argv) {
   const get = (name, fallback) => {
     const at = argv.indexOf(`--${name}`);
@@ -76,6 +107,8 @@ async function main(argv) {
   };
   const executor = get("executor");
   const mainModel = get("main-model");
+  const taskNonce = get("task-nonce");
+  const stateDir = get("state-dir");
   if (typeof executor !== "string" || !executor.trim()) {
     throw new Error("executor must be luna, deepseek, or a configured API profile; same and native:<model> are also supported");
   }
@@ -84,7 +117,32 @@ async function main(argv) {
     ? path.join(apiDir, "router.json")
     : defaultRouterSettingsPath());
   const routerSettings = await loadRouterSettings(settingsPath);
-  if (!routerSettings.enabled) throw new Error("Automatic child dispatch is disabled in router settings");
+  const guardStatus = routerSettings.enabled ? await readUpgradeGuardStatus() : null;
+  if (!effectiveRouterEnabled(routerSettings, guardStatus)) throw new Error("Automatic child dispatch is disabled by router settings or the upgrade guard");
+  async function reserveGatewayDispatch(result, dispatchExecutor, profileId = null) {
+    const parentThreadId = process.env.CODEX_THREAD_ID?.trim() || process.env.CODEX_SESSION_ID?.trim();
+    if (!parentThreadId) throw new Error("A trusted CODEX_THREAD_ID or CODEX_SESSION_ID is required before gateway dispatch");
+    if (!taskNonce || !/^[A-Za-z0-9._:-]{8,200}$/.test(taskNonce)) throw new Error("--task-nonce is required for API/DeepSeek dispatch reservations");
+    const tasks = new NativeTasks({stateDir});
+    const assertStillEnabled = async () => {
+        const latestSettings = await loadRouterSettings(settingsPath);
+        const latestGuard = latestSettings.enabled ? await readUpgradeGuardStatus() : null;
+        if (!effectiveRouterEnabled(latestSettings, latestGuard)) throw new Error("Automatic child dispatch was disabled during setup; no child was spawned");
+    };
+    const ready = async () => {
+      if (dispatchExecutor === "deepseek") {
+        const journalPath = get("install-journal") || process.env.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
+        await enableOwnedExecutionsForDispatch({executor: "deepseek", env: {...process.env, SOL_LUNA_NATIVE_INSTALL_JOURNAL: journalPath}});
+        await ensureNativeDeepseekDispatch({journalPath});
+      } else {
+        const apiJournal = get("api-journal");
+        await enableOwnedExecutionsForDispatch({executor: "api", profileId, apiDir});
+        await ensureNativeApiDispatch({profileId, apiDir, settingsPath, journalPath: apiJournal || undefined});
+      }
+    };
+    const dispatch = await prepareGatewayDispatch({result, executor: dispatchExecutor, profileId, taskNonce, parentThreadId, tasks, assertEnabled: assertStillEnabled, ensureReady: ready, onCancelled: () => finalizePendingDisable({settingsPath, stateDir})});
+    process.stdout.write(`${JSON.stringify(dispatch)}\n`);
+  }
   if (executor === "deepseek") {
     const journalFlagAt = argv.indexOf("--install-journal");
     let journalPath;
@@ -95,24 +153,17 @@ async function main(argv) {
       journalPath = process.env.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
       if (typeof journalPath !== "string" || !journalPath.trim()) throw new Error("an installed isolation journal path is required for native DeepSeek dispatch; activate the isolated installer first");
     }
-    await ensureNativeDeepseekDispatch({ journalPath });
-    process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel, models: [] }))}\n`);
+    await reserveGatewayDispatch(resolveNativeAgent({ executor, mainModel, models: [] }), "deepseek");
     return;
   }
   if (executor !== "luna" && executor !== "same" && !executor.startsWith("native:")) {
     const result = resolveNativeAgent({ executor, mainModel, apiProfiles: routerSettings.profiles });
-    const apiJournal = get("api-journal");
-    await ensureNativeApiDispatch({
-      profileId: result.profile_id,
-      apiDir,
-      settingsPath,
-      journalPath: apiJournal || undefined,
-    });
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    await reserveGatewayDispatch(result, "api", result.profile_id);
     return;
   }
   if (executor === "same") {
-    process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel }))}\n`);
+    const current = await resolveCurrentMainModel({explicitModel: mainModel});
+    process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel: current.model }))}\n`);
     return;
   }
   const cacheAt = path.resolve(get("models-cache", defaultModelsCachePath()));

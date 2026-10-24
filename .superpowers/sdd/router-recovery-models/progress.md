@@ -1,29 +1,19 @@
 # Router Recovery and Model Selection Progress
 
-## Task 1
+## Task 1 complete
 
-- Owner: model UI/routing implementation.
-- Scope: settings `enabled`; `same` and exact `native:<slug>` selection; local native model list; API provider presets and explicit mocked model discovery; canonical skill and routing/MCP/UI tests.
-- Guardrails: no config/install/service mutation; no real DeepSeek/OpenAI call; keep existing DSH/env/file credentials and immutable profile IDs; do not interrupt existing children.
-- Baseline: with isolated `LOCALAPPDATA`, `route.test.mjs` PASS 504, `route-hook.test.mjs` PASS 116, `native-agent.test.mjs` PASS 47, `native-api-settings.test.mjs` PASS 64, `plugin-router-settings.test.mjs` PASS 214.
-- Baseline caveat: the first unisolated route runs read the user's existing fixed route and failed expectations. Re-running with a fresh temporary `LOCALAPPDATA` isolated tests and passed; no live settings were changed.
-- Red evidence: before production changes, `router-recovery-models.test.mjs` failed because legacy settings lacked the new default `enabled:true`; `native-api-models.test.mjs` failed to import the not-yet-created module. Existing hook assertions also exposed model-name child suppression as incompatible with `same` semantics.
-- Green evidence: focused tests pass: `router-recovery-models.test.mjs` PASS 39; `native-api-models.test.mjs` PASS loopback suite; `plugin-mcp.test.mjs` PASS 177 including disabled `dsh_start`/`dsh_followup` no-backend assertions; `route.test.mjs` PASS 504; `route-hook.test.mjs` PASS 116; `native-agent.test.mjs` PASS 49; `native-api-settings.test.mjs` PASS 64; `plugin-router-settings.test.mjs` PASS 215; `native-api-protocol.test.mjs` PASS 36.
-- Hook-copy regression: initial updated hook test found the copied plugin fixture omitted the new `native-state.mjs` dependency; the fixture now copies that source and the full hook test passes.
-- Safety: all tests used isolated `LOCALAPPDATA`; API model discovery ran against a loopback mock only. No real DeepSeek/OpenAI calls or user configuration changes.
-- Task 1 implementation commit: `cd15376b9d2a3d3a9c21702590ca1aec4341f686`.
+- Added global `enabled` while preserving `mode=auto|fixed|scheduled`; `off` blocks explicit and scheduled automatic dispatch without deleting settings/history. `same` follows trusted current-chat metadata, and `native:<slug>` must exist in the current Codex model catalog.
+- Added exact native-model listing, API presets for official OpenAI/OpenAI-compatible/DeepSeek, and user-triggered model discovery against mock loopback only. Existing DSH-account/env/file credential resolution and immutable profile identity remain.
+- Review fixes: route validates stale native catalog entries before returning spawn data; MCP `nativeModels.items` schema has exact properties and disallows extras. Review approved and committed in Task 1 commits.
+- Baseline evidence and first red/green evidence are recorded above in the Task 1 sections. No real provider request or live setting change was performed.
 
-## Task 1 review fixes
+## Task 4 integration (in progress)
 
-- Review red: added direct `decideRoute` stale-catalog rejection tests; the test initially failed because route returned spawn metadata without reading the model catalog.
-- Fix: route now uses the shared `scripts/native-model-catalog.mjs` reader before returning `native_spawn`; disabled routing returns before this read. `native-agent.mjs` re-exports the same catalog helper to preserve existing callers.
-- Fix: MCP snapshot `nativeModels.items` now declares exact `value`, `title`, and `reasoningEfforts` fields, disallows extras, and limits effort values. Test checks advertised schema and actual snapshot payload keys.
-- Initial hook fixture regression after adding route catalog import exposed its source-copy list; the lightweight shared catalog module is now included in the isolated copied-plugin fixture.
-- Green commands (fresh temporary `LOCALAPPDATA`): `node tests/router-recovery-models.test.mjs` PASS 48; `node tests/route.test.mjs` PASS 504; `node tests/route-hook.test.mjs` PASS 116; `node tests/native-agent.test.mjs` PASS 49; `node tests/plugin-router-settings.test.mjs` PASS 215. No network/provider requests.
-- Review fixes are committed separately from the Task 1 implementation; see repository history.
-
-## Remaining tasks
-
-- Task 2: stop new background startup and owned idle services when disabled; no running-child interruption.
-- Task 3: local reconnect diagnostics.
-- Task 4: integrated verification and authorized install/apply/restart evidence.
+- Integrated approved runtime/bootstrap/CLI port, Task 1, Task 3 diagnostics, and guard review commits already present in this worktree. No install, environment apply, service stop, or Codex restart was performed.
+- Added `native-current-model.mjs`: reads only `threads` model/provider/rollout metadata from `state_5.sqlite`; per-request MCP `_meta.threadId` is passed through; conflict or missing trusted metadata fails closed; no global config guess or turn-body read. Interleaved A/B/A MCP test verifies caller isolation.
+- Added upgrade-status reader (`ENOENT` means unmanaged; malformed/read failure means disabled), lifecycle adapter for owned API/DeepSeek scheduler and idle gateway, terminal cleanup hooks, explicit dispatch-time task re-enable, and a gateway dispatch intent that is atomically consumed by child bind. Active gateway/DSH work defers stop; Luna does not hold gateway shutdown. No TTL or poll worker was added.
+- Added explicit sanitized connection-diagnostics MCP/UI entrypoint. Disabled routing/guard causes zero diagnostic I/O. Added the exact-owned legacy isolated-install `CODEX_CLI_PATH` compare-before-set clear path and fake journal/environment tests; no user environment value was changed. Router `enabled` is the only user-off marker. This path never rewrites C-owned upgrade status; compatibility faults remain intact. Current process is not stopped or hot-switched, and the next launch resolves the official app.
+- Package metadata is at `0.12.0`; CI includes current-model, lifecycle, diagnostics, bootstrap-install and upgrade-guard tests. Manifest tests check required helper modules, bootstrap C source and current bootstrap executable exist in the source tree. The repository has no ZIP packager or owned-file manifest, so archive inclusion is unverified and assigned to a separate packaging task.
+- Focused verification used unique temporary `CODEX_HOME` and `LOCALAPPDATA`: `node --test tests/native-current-model.test.mjs tests/native-execution-lifecycle.test.mjs tests/native-state.test.mjs tests/native-agent.test.mjs tests/plugin-mcp.test.mjs tests/router-settings-mcp.test.mjs tests/native-connection-diagnostics.test.mjs tests/native-gateway-task.test.mjs tests/native-api-lifecycle.test.mjs tests/plugin-manifest.test.mjs tests/route.test.mjs tests/route-hook.test.mjs` — 11 suites passed, 0 failed. Latest counts: native-agent 58, current-model 10, execution-lifecycle 30, native-state 51, plugin-MCP 186, router-settings-MCP 215, diagnostics pass, gateway-task 76, API-lifecycle 81, manifest 66, route 504, route-hook 116. Separately, `node tests/native-bootstrap-install.test.mjs` and `node tests/native-upgrade-guard.test.mjs` both passed.
+- Additional dispatch preflight assertions cover reserve → enabled check → readiness → enabled recheck, active-child bind replacing reservation, setup failure cancellation, and disabled-during-setup cancellation/finalization.
+- Remaining tasks: Task 5 must add the actual running `codex.exe` ancestor hash gate and explicit API Apply/bootstrap proof; until then no API/DeepSeek runtime readiness is claimed. Task 6 must add the reproducible ZIP and SHA file list. This task did not apply environment, settings, service or installation changes. No CI result is claimed.

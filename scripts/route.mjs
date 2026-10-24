@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { effectiveRouterEnabled, loadRouterSettings, validateRouterSettings } from './native-api-settings.mjs';
 import { readNativeModelOptions } from './native-model-catalog.mjs';
+import { resolveCurrentMainModel } from './native-current-model.mjs';
+import { readUpgradeGuardStatus } from './native-upgrade-status.mjs';
 
 const DEEPSEEK_NATIVE_SLUG = 'deepseek/deepseek-flash';
 
@@ -144,9 +146,11 @@ async function writeOverride(sessionId, executor, stateDir) {
 }
 
 export async function decideRoute({
-  at = new Date(), executor, setSessionExecutor, mainModel, guardStatus,
+  at = new Date(), executor, setSessionExecutor, mainModel, trustedMainModel = mainModel,
+  explicitMainModel, currentModelThreadId, guardStatus,
   resetSession = false, sessionId, stateDir, routerSettings, settingsPath,
-  readNativeModels = readNativeModelOptions,
+  readNativeModels = readNativeModelOptions, currentModelResolver = resolveCurrentMainModel,
+  readGuardStatus = readUpgradeGuardStatus,
 } = {}) {
   if (typeof at === 'string' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(at)) {
     throw new Error('--at must be a complete ISO timestamp with Z or an explicit UTC offset');
@@ -156,8 +160,11 @@ export async function decideRoute({
   const settings = routerSettings === undefined
     ? await loadRouterSettings(settingsPath)
     : validateRouterSettings(routerSettings);
-  if (!effectiveRouterEnabled(settings, guardStatus)) {
-    const guarded = guardStatus?.state === 'disabled';
+  const effectiveGuardStatus = settings.enabled === false
+    ? guardStatus
+    : guardStatus === undefined ? await readGuardStatus() : guardStatus;
+  if (!effectiveRouterEnabled(settings, effectiveGuardStatus)) {
+    const guarded = effectiveGuardStatus?.state === 'disabled';
     return {
       phase: 'disabled',
       source: guarded ? 'guard_disabled' : 'disabled',
@@ -226,9 +233,9 @@ export async function decideRoute({
     }
   }
   const result = { ...plan, executor: resolved.executor, profileId: resolved.profileId, source, reason };
-  if (resolved.executor === 'same' && (typeof mainModel !== 'string' || !mainModel.trim())) {
-    throw new Error('same-model routing requires the trusted current chat model (--main-model)');
-  }
+  const currentModel = resolved.executor === 'same'
+      ? await currentModelResolver({trustedModel: trustedMainModel, explicitModel: explicitMainModel, ...(currentModelThreadId ? {threadId: currentModelThreadId} : {})})
+    : null;
   const nativeSpawn = resolved.executor === 'api'
     ? {
       fork_turns: 'none',
@@ -242,7 +249,7 @@ export async function decideRoute({
       ...(resolved.executor === 'deepseek'
         ? { agent_type: 'native_deepseek', resolved_model: DEEPSEEK_NATIVE_SLUG }
         : {}),
-      ...(resolved.executor === 'same' ? {model: mainModel} : {}),
+      ...(resolved.executor === 'same' ? {model: currentModel.model} : {}),
       ...(resolved.executor === 'native' ? {model: resolved.model} : {}),
     };
   return {
@@ -252,7 +259,7 @@ export async function decideRoute({
 }
 
 function usage() {
-  return `Usage: node scripts/route.mjs [options]\n\nOptions:\n  --at ISO_DATE                    Evaluate a test or supplied instant\n  --executor SELECTOR             One-task override: luna, deepseek, same, native:<slug>, profile ID, or alias\n  --main-model MODEL               Trusted current chat model for same-model dispatch\n  --session ID                     Chat-specific state key (not a prompt or secret)\n  --set-session-executor SELECTOR  luna, deepseek, same, native:<slug>, profile ID/alias, or auto\n  --settings PATH                  Router settings JSON (default: plugin LocalAppData path)\n  --reset-session                  Clear this chat's sticky override\n  --state-dir PATH                 State root (tests only; default is per-user LocalAppData)\n  --json                           Print one JSON result\n`;
+  return `Usage: node scripts/route.mjs [options]\n\nOptions:\n  --at ISO_DATE                    Evaluate a test or supplied instant\n  --executor SELECTOR             One-task override: luna, deepseek, same, native:<slug>, profile ID, or alias\n  --main-model MODEL               Explicit fallback; live chat metadata takes precedence\n  --session ID                     Chat-specific state key (not a prompt or secret)\n  --set-session-executor SELECTOR  luna, deepseek, same, native:<slug>, profile ID/alias, or auto\n  --settings PATH                  Router settings JSON (default: plugin LocalAppData path)\n  --reset-session                  Clear this chat's sticky override\n  --state-dir PATH                 State root (tests only; default is per-user LocalAppData)\n  --json                           Print one JSON result\n`;
 }
 
 async function main(argv) {
@@ -263,7 +270,7 @@ async function main(argv) {
     if (arg === '--json') { json = true; continue; }
     if (arg === '--help' || arg === '-h') { process.stdout.write(usage()); return; }
     const fields = {
-      '--at': 'at', '--executor': 'executor', '--main-model': 'mainModel',
+      '--at': 'at', '--executor': 'executor', '--main-model': 'explicitMainModel',
       '--session': 'sessionId', '--set-session-executor': 'setSessionExecutor',
       '--state-dir': 'stateDir', '--settings': 'settingsPath',
     };
