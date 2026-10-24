@@ -152,6 +152,13 @@ export class NativeTasks {
     const task = await this.assertOwner(childThreadId, parentThreadId);
     return task.binding ? normalizeBinding(task.binding) : null;
   }
+
+  async hasChild(childThreadId) {
+    const child = childId(childThreadId);
+    const data = await this._read();
+    const task = data.tasks[child];
+    return Boolean(task && task.child_thread_id === child);
+  }
 }
 
 export class NativeWriterLease {

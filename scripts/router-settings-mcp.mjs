@@ -9,10 +9,29 @@ import {
   validateRouterSettings,
 } from './native-api-settings.mjs';
 import {resolveDeepSeekAuth} from './native-credentials.mjs';
+import {readNativeModelOptions} from './native-agent.mjs';
+import {listApiModels} from './native-api-models.mjs';
 
 export const ROUTER_SETTINGS_URI = 'ui://router/settings';
 export const ROUTER_SETTINGS_MIME = 'text/html;profile=mcp-app';
 export const ROUTER_SETTINGS_SCHEMA = 'sol-luna-router-settings/v1';
+export const API_PROVIDER_PRESETS = Object.freeze({
+  openai: Object.freeze({
+    label: 'OpenAI 官方', protocol: 'responses', baseUrl: 'https://api.openai.com/v1', model: '',
+    reasoning: {supported: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], default: 'medium', parameter: 'reasoning'},
+    credential: {type: 'env', name: 'OPENAI_API_KEY'},
+  }),
+  compatible: Object.freeze({
+    label: 'OpenAI 兼容 / 通用', protocol: 'chat_completions', baseUrl: 'https://api.example.com/v1', model: '',
+    reasoning: {supported: ['none'], default: 'none', parameter: 'none'},
+    credential: {type: 'env', name: 'OPENAI_API_KEY'},
+  }),
+  deepseek: Object.freeze({
+    label: 'DeepSeek 官方', protocol: 'responses', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash',
+    reasoning: {supported: ['none', 'low', 'high', 'max'], default: 'high', parameter: 'reasoning_effort'},
+    credential: {type: 'dsh_account'},
+  }),
+});
 export const ROUTER_SETTINGS_TOOL_NAMES = new Set([
   'router_settings_open',
   'router_settings_read',
@@ -21,12 +40,13 @@ export const ROUTER_SETTINGS_TOOL_NAMES = new Set([
   'router_settings_save',
   'router_settings_save_profile',
   'router_settings_check_credential',
+  'router_settings_list_api_models',
   'router_settings_executor_status',
   'router_settings_apply',
 ]);
 
 const SETTINGS_TOOL_META = {ui: {visibility: ['app']}};
-const SELECTOR_VALUES = new Set(['luna', 'deepseek']);
+const SELECTOR_VALUES = new Set(['luna', 'deepseek', 'same']);
 const CREDENTIAL_TYPES = new Set(['env', 'file', 'dsh_account']);
 const PROTOCOL_VALUES = new Set(['responses', 'chat_completions']);
 const EFFORT_VALUES = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
@@ -65,10 +85,12 @@ const snapshotOutputSchema = {
     sha256: {type: ['string', 'null']},
     saved: {type: 'boolean'},
     selectors: {type: 'array', items: {type: 'object'}},
+    nativeModels: {type: 'array', items: {type: 'object'}},
+    providerPresets: {type: 'object'},
     capabilities: {type: 'object'},
     status: {type: 'object'},
   },
-  required: ['schema', 'settings', 'sha256', 'saved', 'selectors', 'capabilities', 'status'],
+  required: ['schema', 'settings', 'sha256', 'saved', 'selectors', 'nativeModels', 'providerPresets', 'capabilities', 'status'],
 };
 
 const saveOutputSchema = {
@@ -267,6 +289,23 @@ export const ROUTER_SETTINGS_TOOLS = [
     _meta: SETTINGS_TOOL_META,
   },
   {
+    name: 'router_settings_list_api_models',
+    title: '获取 API 模型列表',
+    description: 'Explicitly fetch model IDs from the selected OpenAI-compatible endpoint. Credentials resolve locally, redirects are blocked, and no key or response body is returned.',
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        baseUrl: {type: 'string'},
+        protocol: {type: 'string', enum: [...PROTOCOL_VALUES]},
+        credential: profileDefinition.properties.credential,
+      },
+      required: ['baseUrl', 'protocol', 'credential'],
+    },
+    outputSchema: {type: 'object', properties: {models: {type: 'array', items: {type: 'string'}}}, required: ['models']},
+    annotations: {readOnlyHint: true, destructiveHint: false, openWorldHint: true},
+    _meta: SETTINGS_TOOL_META,
+  },
+  {
     name: 'router_settings_executor_status',
     title: '读取执行器状态',
     description: 'Read the injected read-only lifecycle status for the current settings or one profile. Unknown remains unknown; this tool never starts a service or a model.',
@@ -350,12 +389,20 @@ function profileTitle(profile) {
   return label || profile.profileId;
 }
 
-export function selectorOptions(settings) {
+export function selectorOptions(settings, nativeModels = []) {
   const values = [
     {value: 'luna', title: '原生 Luna', kind: 'builtin'},
     {value: 'deepseek', title: '原生 DeepSeek', kind: 'builtin'},
+    {value: 'same', title: '与当前聊天相同的模型', kind: 'builtin'},
   ];
   const seen = new Set(values.map(item => item.value));
+  for (const model of nativeModels) {
+    if (!model || typeof model.value !== 'string' || !model.value.trim()) continue;
+    const value = `native:${model.value}`;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    values.push({value, title: model.title || model.value, kind: 'native', reasoningEfforts: model.reasoningEfforts || []});
+  }
   const profiles = Object.values(settings.profiles ?? {}).sort((left, right) => profileTitle(left).localeCompare(profileTitle(right), 'zh-CN'));
   for (const profile of profiles) {
     if (!seen.has(profile.profileId)) {
@@ -373,6 +420,7 @@ export function selectorOptions(settings) {
 
 function valuesFor(settings) {
   return {
+    enabled: settings.enabled !== false,
     mode: settings.mode,
     fixedExecutor: settings.mode === 'fixed' ? settings.fixedExecutor ?? '' : '',
     peak: settings.schedule?.peak ?? 'luna',
@@ -383,19 +431,25 @@ function valuesFor(settings) {
 function normalizeSelector(selector, settings) {
   if (typeof selector !== 'string' || !selector) throw new Error('执行器选择不能为空。');
   if (SELECTOR_VALUES.has(selector)) return selector;
+  if (/^native:[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(selector)) return selector;
   if (settings.profiles[selector]) return selector;
   const matches = Object.values(settings.profiles).filter(profile => profile.aliases?.includes(selector));
   if (matches.length === 1) return matches[0].profileId;
   throw new Error('执行器选择引用了未知或不唯一的 API 配置。');
 }
 
-function settingsReadResult(settings) {
-  const options = selectorOptions(settings);
+function settingsReadResult(settings, nativeModels = []) {
+  const options = selectorOptions(settings, nativeModels);
   const enumValues = [...new Set([...options.map(item => item.value), '', ...(settings.mode === 'fixed' ? [settings.fixedExecutor ?? ''] : []), settings.schedule?.peak, settings.schedule?.valley].filter(value => typeof value === 'string'))];
   return {
     schema: {
       type: 'object',
       properties: {
+        enabled: {
+          type: 'boolean',
+          title: '启用自动子代理分工',
+          description: '关闭后保留配置；所有自动、计划、一次性和粘性路由都不会派发新的子代理。',
+        },
         mode: {
           type: 'string',
           title: '路由模式',
@@ -421,7 +475,7 @@ function settingsReadResult(settings) {
           description: '仅自定义峰谷模式使用。',
         },
       },
-      required: ['mode', 'fixedExecutor', 'peak', 'valley'],
+      required: ['enabled', 'mode', 'fixedExecutor', 'peak', 'valley'],
     },
     values: valuesFor(settings),
     layout: [
@@ -460,13 +514,15 @@ function statusFor(saved, notice) {
   };
 }
 
-function snapshotFor(snapshot, notice, capabilities = {}) {
+function snapshotFor(snapshot, notice, capabilities = {}, nativeModels = []) {
   return {
     schema: ROUTER_SETTINGS_SCHEMA,
     settings: snapshot.settings,
     sha256: snapshot.sha256,
     saved: snapshot.sha256 !== null,
-    selectors: selectorOptions(snapshot.settings),
+    selectors: selectorOptions(snapshot.settings, nativeModels),
+    nativeModels,
+    providerPresets: API_PROVIDER_PRESETS,
     capabilities: {contextWindow: supportsContextWindow(), ...capabilities},
     status: statusFor(snapshot.sha256 !== null, notice),
   };
@@ -489,6 +545,7 @@ function normalizeSettingsSelectors(settings) {
     ? settings.profiles
     : {};
   const next = {...settings};
+  if (typeof settings.enabled !== 'boolean') next.enabled = settings.enabled ?? true;
   if (settings.mode === 'fixed' && typeof settings.fixedExecutor === 'string' && settings.fixedExecutor) {
     next.fixedExecutor = normalizeSelector(settings.fixedExecutor, {profiles});
   }
@@ -634,10 +691,17 @@ export function createRouterSettingsService({
   htmlPath = new URL('../ui/router-settings.html', import.meta.url),
   getExecutorStatus: statusResolver,
   applyApiConfiguration: applyHandler,
+  readNativeModels = readNativeModelOptions,
+  fetchImpl = fetch,
+  modelListTimeoutMs = 8_000,
+  guardStatus: guardStatusResolver,
+  onRoutingDisabled: stopOwnedIdleExecutions,
 } = {}) {
   const getExecutorStatus = typeof statusResolver === 'function' ? statusResolver : defaultExecutorStatus;
   const applyApiConfiguration = typeof applyHandler === 'function' ? applyHandler : defaultApplyApiConfiguration;
   const applySupported = typeof applyHandler === 'function';
+  const getGuardStatus = typeof guardStatusResolver === 'function' ? guardStatusResolver : async () => null;
+  const stopIdle = typeof stopOwnedIdleExecutions === 'function' ? stopOwnedIdleExecutions : async () => null;
   const capabilities = {applyApiConfiguration: applySupported};
   let applying = false;
   let htmlPromise;
@@ -646,22 +710,55 @@ export function createRouterSettingsService({
     return htmlPromise;
   }
 
+  async function nativeModels() {
+    try { return await readNativeModels(); } catch { return []; }
+  }
+
   async function snapshot(notice) {
-    return snapshotFor(await readRouterSettingsSnapshot(settingsPath), notice, capabilities);
+    const [current, models, guardStatus] = await Promise.all([
+      readRouterSettingsSnapshot(settingsPath), nativeModels(), getGuardStatus(),
+    ]);
+    return snapshotFor(current, notice, {
+      ...capabilities,
+      nativeModelsAvailable: models.length > 0,
+      guardStatus: guardStatus || {state: 'unmanaged'},
+    }, models);
   }
 
   async function readSettings() {
     const current = await readRouterSettingsSnapshot(settingsPath);
-    return settingsReadResult(current.settings);
+    return settingsReadResult(current.settings, await nativeModels());
+  }
+
+  async function listApiProfileModels(args) {
+    exactObject(args, new Set(['baseUrl', 'protocol', 'credential']), 'router_settings_list_api_models arguments');
+    if (typeof args.baseUrl !== 'string' || !args.baseUrl.trim() || !PROTOCOL_VALUES.has(args.protocol)) {
+      throw new Error('baseUrl and protocol are required.');
+    }
+    const credential = exactObject(args.credential, new Set(['type', 'name', 'path']), 'credential');
+    if (!CREDENTIAL_TYPES.has(credential.type)) throw new Error('credential.type must be env, file, or dsh_account.');
+    const profile = credentialProfile({baseUrl: args.baseUrl, protocol: args.protocol, credential});
+    const models = await listApiModels(profile, {
+      env,
+      ...(readSecretFile ? {readSecretFile} : {}),
+      resolveAccount,
+      fetchImpl,
+      timeoutMs: modelListTimeoutMs,
+    });
+    return {models};
   }
 
   async function updateSettings(args) {
     exactObject(args, new Set(['set', 'expectedSha256']), 'router_settings_update arguments');
-    const set = exactObject(args.set, new Set(['mode', 'fixedExecutor', 'peak', 'valley']), 'set');
+    const set = exactObject(args.set, new Set(['enabled', 'mode', 'fixedExecutor', 'peak', 'valley']), 'set');
     if (!Object.keys(set).length) throw new Error('set must contain at least one setting.');
     const expected = args.expectedSha256 === undefined ? undefined : requireHash(args.expectedSha256, 'expectedSha256');
     const current = await readRouterSettingsSnapshot(settingsPath);
     const next = {...current.settings, profiles: {...current.settings.profiles}};
+    if (set.enabled !== undefined) {
+      if (typeof set.enabled !== 'boolean') throw new Error('enabled must be a boolean.');
+      next.enabled = set.enabled;
+    }
     if (set.mode !== undefined) {
       if (!['auto', 'fixed', 'scheduled'].includes(set.mode)) throw new Error('mode must be auto, fixed, or scheduled.');
       next.mode = set.mode;
@@ -684,11 +781,16 @@ export function createRouterSettingsService({
     const saved = await saveRouterSettings(settingsPath, next, {
       expectedSha256: expected === undefined ? current.sha256 : expected,
     });
+    let stopResult = null;
+    if (current.settings.enabled !== false && !saved.settings.enabled) {
+      stopResult = await stopIdle({settings: saved.settings, settingsPath});
+    }
     return {
       values: valuesFor(saved.settings),
       sha256: saved.sha256,
       pending: {
         restartRequired: false,
+        ...(stopResult === null ? {} : {backgroundStop: stopResult}),
         message: '设置已保存。安装与验证状态未由本工具改变。',
       },
     };
@@ -698,13 +800,23 @@ export function createRouterSettingsService({
     exactObject(args, new Set(['settings', 'expectedSha256']), 'router_settings_save arguments');
     if (!plainObject(args.settings)) throw new Error('settings must be an object.');
     const expected = requireHash(args.expectedSha256, 'expectedSha256');
+    const current = await readRouterSettingsSnapshot(settingsPath);
+    if (current.sha256 !== expected) throw new Error('router settings changed since they were read; reload before updating');
     const saved = await saveRouterSettings(settingsPath, normalizeSettingsSelectors(args.settings), {expectedSha256: expected});
+    let stopResult = null;
+    if (current.settings.enabled !== false && !saved.settings.enabled) {
+      stopResult = await stopIdle({settings: saved.settings, settingsPath});
+    }
+    const models = await nativeModels();
     const result = snapshotFor(
       {settings: saved.settings, sha256: saved.sha256},
-      '设置已保存。安装、重启和 API 验证状态由生命周期单独报告。',
-      capabilities,
+      stopResult === false
+        ? '设置已保存；后台空闲执行器停止未确认，生命周期状态需单独检查。'
+        : '设置已保存。安装、重启和 API 验证状态由生命周期单独报告。',
+      {...capabilities, nativeModelsAvailable: models.length > 0},
+      models,
     );
-    return {...result, previousSha256: saved.previousSha256};
+    return {...result, previousSha256: saved.previousSha256, ...(stopResult === null ? {} : {backgroundStop: stopResult})};
   }
 
   async function saveProfile(args) {
@@ -780,7 +892,9 @@ export function createRouterSettingsService({
         restartRequired: false,
         message: '标签或别名已保存；API 定义未变，本次未新增角色。安装与验证状态仍需单独确认。',
       };
-    const result = snapshotFor({settings: saved.settings, sha256: saved.sha256}, pending.message, capabilities);
+    const models = await nativeModels();
+    const result = snapshotFor({settings: saved.settings, sha256: saved.sha256}, pending.message,
+      {...capabilities, nativeModelsAvailable: models.length > 0}, models);
     return {
       ...result,
       profileId,
@@ -894,6 +1008,8 @@ export function createRouterSettingsService({
         return {payload: await saveProfile(args)};
       case 'router_settings_check_credential':
         return {payload: await checkCredential(args)};
+      case 'router_settings_list_api_models':
+        return {payload: await listApiProfileModels(args)};
       case 'router_settings_executor_status':
         return {payload: await executorStatus(args)};
       case 'router_settings_apply':

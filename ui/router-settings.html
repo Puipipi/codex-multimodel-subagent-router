@@ -260,7 +260,7 @@ footer p + p { margin-top: 3px; }
       <span class="dot" aria-hidden="true"></span><span>已保存</span><strong id="save-state">读取中</strong>
     </div>
     <div class="status-item" id="install-status" data-state="unknown">
-      <span class="dot" aria-hidden="true"></span><span>角色已安装</span><strong id="install-state">未知</strong>
+      <span class="dot" aria-hidden="true"></span><span>执行器状态</span><strong id="install-state">未知</strong>
     </div>
     <div class="status-item" id="restart-status" data-state="unknown">
       <span class="dot" aria-hidden="true"></span><span>需重启</span><strong id="restart-state">未知</strong>
@@ -279,6 +279,10 @@ footer p + p { margin-top: 3px; }
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
 
   <form id="router-form" novalidate>
+    <div class="check-row" style="margin-bottom:14px">
+      <label class="check-row"><input id="router-enabled" type="checkbox"><span>启用自动子代理分工</span></label>
+      <span class="hint">关闭时保留全部设置，并停止新的自动、计划、一次性及粘性子代理派发。</span>
+    </div>
     <fieldset class="block">
       <legend>模式</legend>
       <div class="mode-grid" role="radiogroup" aria-label="路由模式">
@@ -341,13 +345,27 @@ footer p + p { margin-top: 3px; }
       <button id="cancel-profile" class="ghost small" type="button">取消</button>
     </div>
     <div class="form-grid">
-      <label class="field"><span>名称</span><input id="profile-label" autocomplete="off" placeholder="例如 MiMo"></label>
+        <label class="field"><span>名称</span><input id="profile-label" autocomplete="off" placeholder="例如 MiMo"></label>
+        <label class="field"><span>服务预设</span><select id="api-provider-preset">
+          <option value="">自定义</option>
+          <option value="openai">OpenAI 官方</option>
+          <option value="compatible">OpenAI 兼容 / 通用</option>
+          <option value="deepseek">DeepSeek 官方</option>
+        </select></label>
       <label class="field"><span>协议</span><select id="profile-protocol">
         <option value="responses">Responses</option>
         <option value="chat_completions">Chat Completions</option>
       </select></label>
       <label class="field wide"><span>Base URL</span><input id="profile-base-url" inputmode="url" autocomplete="off" placeholder="https://api.example.com/v1"></label>
-      <label class="field"><span>模型</span><input id="profile-model" autocomplete="off" placeholder="精确 wire model"></label>
+        <label class="field"><span>模型</span><input id="profile-model" autocomplete="off" placeholder="精确 wire model"></label>
+        <div class="field wide">
+          <span>模型发现（手动触发）</span>
+          <div class="check-row">
+            <button id="get-api-models" type="button" class="ghost small">获取模型列表</button>
+            <select id="api-discovered-models" aria-label="已发现的模型" hidden><option value="">选择已发现模型</option></select>
+          </div>
+          <small class="hint">仅在点击后连接当前 Base URL；失败时保留手动填写的模型名。</small>
+        </div>
       <label class="field"><span>别名</span><input id="profile-aliases" autocomplete="off" placeholder="逗号分隔，可留空"></label>
     </div>
 
@@ -655,6 +673,7 @@ footer p + p { margin-top: 3px; }
   }
 
   function renderExecutorStatus(status) {
+    byId("install-status").querySelector("span:not(.dot)").textContent = "API 角色已安装";
     const install = byId("install-status");
     const restart = byId("restart-status");
     const gateway = byId("gateway-status");
@@ -698,7 +717,88 @@ footer p + p { margin-top: 3px; }
     ].filter(Boolean).join(" · ") || "生命周期未提供可读状态；未验证 API。";
   }
 
+  function setStatusLabel(id, label) {
+    byId(id).querySelector("span:not(.dot)").textContent = label;
+  }
+
+  function renderConfiguredExecutorStatus(snapshot) {
+    if (!snapshot) return;
+    const settings = snapshot.settings || {};
+    const install = byId("install-status");
+    const gateway = byId("gateway-status");
+    const verify = byId("verify-status");
+    const guardDisabled = snapshot.capabilities?.guardStatus?.state === "disabled";
+    if (settings.enabled === false || guardDisabled) {
+      setStatusLabel("install-status", "自动分工");
+      setStatusLabel("gateway-status", "本地网关");
+      install.dataset.state = "off";
+      gateway.dataset.state = "unknown";
+      byId("install-state").textContent = "分工已关闭";
+      byId("gateway-state").textContent = "由生命周期确认";
+      byId("restart-state").textContent = "未知";
+      byId("restart-status").dataset.state = "unknown";
+      byId("verify-state").textContent = "未调用";
+      verify.dataset.state = "off";
+      byId("executor-status-detail").textContent = guardDisabled && settings.enabled !== false
+        ? "生命周期守卫已停用自动分工；用户设置仍保持启用。现有 child 与后台空闲执行器状态由生命周期单独报告。"
+        : "配置保留，新的自动子代理派发已关闭；现有 child 与后台空闲执行器状态由生命周期单独报告。";
+      return;
+    }
+    let selectors = settings.mode === "fixed"
+      ? [settings.fixedExecutor]
+      : settings.mode === "scheduled"
+        ? [settings.schedule?.peak, settings.schedule?.valley]
+        : ["luna", "deepseek"];
+    selectors = selectors.filter(Boolean);
+    const profiles = Object.values(settings.profiles || {});
+    const apiProfiles = selectors.map(selector => profiles.find(profile =>
+      profile.profileId === selector || profile.aliases?.includes(selector))).filter(Boolean);
+    if (settings.mode === "fixed" && apiProfiles.length === 1) {
+      void loadExecutorStatus(apiProfiles[0].profileId);
+      return;
+    }
+    const nativeOnly = apiProfiles.length === 0;
+    if (nativeOnly) {
+      const hasDeepseekGateway = selectors.includes("deepseek");
+      const modelValues = new Set((snapshot.nativeModels || []).map(model => model?.value));
+      const missingNative = selectors.filter(selector => selector?.startsWith("native:") && !modelValues.has(selector.slice(7)));
+      if (selectors.includes("luna") && !(snapshot.nativeModels || []).some(model => /luna/i.test(model?.value || ""))) missingNative.push("luna");
+      const needsCatalog = selectors.some(selector => selector === "luna" || selector?.startsWith("native:"));
+      setStatusLabel("install-status", "当前原生执行器");
+      setStatusLabel("gateway-status", "本地网关");
+      install.dataset.state = needsCatalog && snapshot.capabilities?.nativeModelsAvailable !== true ? "unknown" : "on";
+      gateway.dataset.state = hasDeepseekGateway ? "unknown" : "off";
+      byId("install-state").textContent = needsCatalog
+        ? (snapshot.capabilities?.nativeModelsAvailable === true && missingNative.length === 0 ? "本地目录可用" : "目录未知或模型缺失")
+        : selectors.includes("same") ? "跟随当前聊天模型" : "原生执行器";
+      byId("gateway-state").textContent = hasDeepseekGateway ? "随 DeepSeek 路由" : "不需要";
+      byId("restart-state").textContent = "不需要 API 角色";
+      byId("restart-status").dataset.state = "off";
+      byId("verify-state").textContent = "未调用";
+      verify.dataset.state = "off";
+      byId("executor-status-detail").textContent = needsCatalog
+        ? (missingNative.length ? `选定原生模型不在当前目录：${missingNative.join(", ")}。派发会明确失败，不会替换模型。` : "状态来自本地 Codex 模型目录；不会调用 API。")
+        : "当前路由使用原生执行器；API 角色安装状态不适用。";
+      return;
+    }
+    setStatusLabel("install-status", "API 角色状态");
+    setStatusLabel("gateway-status", "API 本地网关");
+    install.dataset.state = "unknown";
+    gateway.dataset.state = "unknown";
+    byId("install-state").textContent = "按 profile 检查";
+    byId("gateway-state").textContent = "按 profile 检查";
+    byId("restart-state").textContent = "按 profile 检查";
+    byId("restart-status").dataset.state = "unknown";
+    byId("verify-state").textContent = "未验证";
+    verify.dataset.state = "off";
+    byId("executor-status-detail").textContent = "计划中包含 API profile；逐个展开 API 配置查看其角色和网关状态。自动峰谷或原生模型选择不由 API profile 数量判定。";
+  }
+
   async function loadExecutorStatus(profileId) {
+    if (!profileId) {
+      renderConfiguredExecutorStatus(state.snapshot);
+      return;
+    }
     if (!state.hostCapabilities?.serverTools) return;
     const requestId = ++statusRequest;
     try {
@@ -717,6 +817,7 @@ footer p + p { margin-top: 3px; }
   function renderSnapshot(snapshot) {
     state.snapshot = snapshot;
     const settings = snapshot.settings || {};
+    byId("router-enabled").checked = settings.enabled !== false;
     const options = Array.isArray(snapshot.selectors) ? snapshot.selectors : [];
     for (const input of modeInputs) input.checked = input.value === settings.mode;
     fillSelect(byId("fixed-executor"), options, settings.fixedExecutor || "", "选择执行器");
@@ -733,11 +834,11 @@ footer p + p { margin-top: 3px; }
       contextNote.hidden = true;
     }
     renderStatus(snapshot);
+    renderConfiguredExecutorStatus(snapshot);
     state.dirty = false;
     byId("dirty").textContent = "";
     byId("reload-route").hidden = true;
     renderApplyAvailability();
-    void loadExecutorStatus();
   }
 
   function renderMode() {
@@ -842,6 +943,9 @@ footer p + p { margin-top: 3px; }
       ? `基于 ${profile.profileId} 创建新版本；旧版本会保留。`
       : "只保存引用，不保存真实密钥。";
     byId("profile-label").value = text(profile?.label) || "";
+    byId("api-provider-preset").value = "";
+    byId("api-discovered-models").replaceChildren(new Option("选择已发现模型", ""));
+    byId("api-discovered-models").hidden = true;
     byId("profile-protocol").value = profile?.protocol || "responses";
     byId("profile-base-url").value = text(profile?.baseUrl) || "";
     byId("profile-model").value = text(profile?.model) || "";
@@ -869,7 +973,7 @@ footer p + p { margin-top: 3px; }
     byId("profile-form").hidden = true;
     byId("profile-pending").hidden = true;
     byId("reload-profile").hidden = true;
-    void loadExecutorStatus();
+    renderConfiguredExecutorStatus(state.snapshot);
   }
 
   function updateCredentialFields() {
@@ -879,6 +983,47 @@ footer p + p { margin-top: 3px; }
     if (type === "dsh_account" && !byId("profile-base-url").value.trim()) {
       byId("profile-base-url").value = "https://api.deepseek.com";
       byId("profile-protocol").value = "responses";
+    }
+  }
+
+  function applyProviderPreset(name) {
+    const preset = state.snapshot?.providerPresets?.[name];
+    if (!preset) return;
+    byId("profile-protocol").value = preset.protocol;
+    byId("profile-base-url").value = preset.baseUrl;
+    byId("profile-model").value = preset.model || "";
+    byId("credential-type").value = preset.credential.type;
+    byId("credential-name").value = preset.credential.name || "";
+    byId("credential-path").value = "";
+    renderReasoning(preset.reasoning);
+    updateCredentialFields();
+    byId("credential-result").textContent = "";
+    markDirty();
+  }
+
+  async function loadApiModels() {
+    const button = byId("get-api-models");
+    const select = byId("api-discovered-models");
+    const currentModel = byId("profile-model").value;
+    button.disabled = true;
+    select.hidden = true;
+    try {
+      const result = await callTool("router_settings_list_api_models", {
+        baseUrl: byId("profile-base-url").value.trim(),
+        protocol: byId("profile-protocol").value,
+        credential: collectCredential(),
+      });
+      const models = Array.isArray(result.models) ? result.models : [];
+      select.replaceChildren(new Option("选择已发现模型", ""));
+      for (const model of models) select.append(new Option(model, model));
+      select.hidden = models.length === 0;
+      byId("profile-model").value = currentModel;
+      setNotice(models.length ? `已获取 ${models.length} 个模型；当前手填模型保持不变。` : "接口没有返回模型；可继续手动填写。", models.length ? "success" : "error");
+    } catch (error) {
+      byId("profile-model").value = currentModel;
+      setNotice(`获取模型列表失败；手填模型已保留：${messageOf(error)}`, "error");
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -929,6 +1074,7 @@ footer p + p { margin-top: 3px; }
     const next = {
       ...state.snapshot.settings,
       profiles: {...(state.snapshot.settings.profiles || {})},
+      enabled: byId("router-enabled").checked,
       mode,
     };
     if (mode === "fixed") {
@@ -1163,6 +1309,7 @@ footer p + p { margin-top: 3px; }
   byId("fixed-executor").addEventListener("change", markDirty);
   byId("peak-executor").addEventListener("change", markDirty);
   byId("valley-executor").addEventListener("change", markDirty);
+  byId("router-enabled").addEventListener("change", markDirty);
   byId("router-form").addEventListener("submit", saveRoute);
   byId("refresh").addEventListener("click", loadSnapshot);
   byId("reload-route").addEventListener("click", loadSnapshot);
@@ -1172,6 +1319,11 @@ footer p + p { margin-top: 3px; }
   byId("check-credential").addEventListener("click", checkCredential);
   byId("apply-api").addEventListener("click", applyConfiguration);
   byId("credential-type").addEventListener("change", updateCredentialFields);
+  byId("api-provider-preset").addEventListener("change", event => applyProviderPreset(event.target.value));
+  byId("get-api-models").addEventListener("click", loadApiModels);
+  byId("api-discovered-models").addEventListener("change", event => {
+    if (event.target.value) byId("profile-model").value = event.target.value;
+  });
   byId("reload-profile").addEventListener("click", loadSnapshot);
   byId("profile-form").addEventListener("input", () => {
     byId("credential-result").textContent = "";

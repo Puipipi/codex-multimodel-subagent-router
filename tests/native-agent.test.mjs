@@ -82,6 +82,15 @@ try {
   await mkdir(home, { recursive: true });
   await mkdir(emptyHome, { recursive: true });
   await writeFile(path.join(home, "models_cache.json"), JSON.stringify(cache), "utf8");
+  const disabledSettings = path.join(root, "router-disabled.json");
+  await writeFile(disabledSettings, JSON.stringify({
+    schemaVersion: 1, enabled: false, mode: "fixed", fixedExecutor: "same",
+    schedule: {peak: "luna", valley: "deepseek"}, profiles: {},
+  }), "utf8");
+  const disabledDispatch = runCli(["--executor", "same", "--main-model", "gpt-6.1-sol", "--settings", disabledSettings], {CODEX_HOME: home});
+  equal(disabledDispatch.status, 2, "native-agent refuses a child dispatch while router delegation is disabled");
+  assert.match(disabledDispatch.stderr, /Automatic child dispatch is disabled/);
+  checks += 1;
   const lunaCli = runCli(["--executor", "luna", "--main-model", "gpt-6.1-sol"], { CODEX_HOME: home });
   equal(lunaCli.status, 0, "Luna CLI reads the actual CODEX_HOME cache by default");
   equal(JSON.parse(lunaCli.stdout).model, "gpt-6-luna", "Luna CLI resolves the real catalog model");

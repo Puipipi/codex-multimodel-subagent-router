@@ -40,6 +40,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decideRoute } from './route.mjs';
 import { loadRouterSettings, validateRouterSettings } from './native-api-settings.mjs';
+import { NativeTasks } from './native-state.mjs';
 
 const SUPPORTED_EVENTS = new Set(['UserPromptSubmit', 'PreToolUse']);
 const STATE_VERSION = 1;
@@ -80,6 +81,7 @@ function trimReason(reason) {
 export function notificationKey(route) {
   const key = [route.phase, route.executor, route.source];
   if (route.executor === 'api' && typeof route.profileId === 'string') key.push(route.profileId);
+  if (['same', 'native'].includes(route.executor) && typeof route.native_spawn?.model === 'string') key.push(route.native_spawn.model);
   return key.join('|');
 }
 
@@ -88,6 +90,9 @@ export function notificationKey(route) {
  * the exact wording without file I/O.
  */
 export function buildNotification(route, at) {
+  if (route.executor === 'off') {
+    return `[sol-luna-deepseek-router] 已关闭自动子代理分工；Sol 将自行处理本轮任务。已运行任务不会被中断。`;
+  }
   const reason = trimReason(route.reason);
   const schedule = route.phase === 'unknown'
     ? `unknown${reason ? ` (${reason})` : ''}`
@@ -96,7 +101,13 @@ export function buildNotification(route, at) {
     ? 'native DeepSeek gateway'
     : route.executor === 'api'
       ? `native API profile ${route.profileLabel || route.profileId || 'unknown'}`
-      : 'native Luna';
+      : route.executor === 'same'
+        ? `current chat model ${route.native_spawn?.model || 'unknown'}`
+        : route.executor === 'native'
+          ? `Codex model ${route.native_spawn?.model || 'unknown'}`
+          : route.executor === 'luna'
+            ? 'native Luna'
+            : 'native executor';
   const source = route.source === 'session_override'
     ? 'sticky chat override; it outranks the automatic schedule'
     : route.source === 'one_time_override'
@@ -107,19 +118,14 @@ export function buildNotification(route, at) {
           ? 'fixed executor selection; the peak/valley calendar is not used'
           : 'automatic schedule';
   const timezone = route.timezone || 'Asia/Shanghai';
-  return `[sol-luna-deepseek-router] Schedule: ${schedule}. Effective executor for new coding tasks: ${executor} (${source}). Evaluated at ${at.toISOString()} (${timezone}). Already running tasks are not interrupted; this chat is reminded again only after the effective schedule, executor, or API profile changes.`;
+  return `[sol-luna-deepseek-router] Schedule: ${schedule}. Configured executor status: ${executor} (${source}). Evaluated at ${at.toISOString()} (${timezone}). This is status context only; native child chats must not start another child. Already running tasks are not interrupted; the notice repeats only after the effective schedule, executor, or API profile changes.`;
 }
 
 /**
- * Hook payloads do not expose a trustworthy main/subagent role. Suppress turns
- * whose model names either native child executor, Luna or DeepSeek. Unknown
- * models are treated as main-chat turns so a new Sol model still receives
- * notices.
+ * Model names are not child identity: a parent can intentionally use a child
+ * model. Suppress only explicit role evidence from the hook payload.
  */
 export function isChildExecutor(input, apiProfiles = {}) {
-  const model = typeof input?.model === 'string' ? input.model : '';
-  if (/luna|deepseek/i.test(model)) return true;
-  if (model && Object.values(apiProfiles).some(profile => profile?.model === model)) return true;
   for (const key of ['agent_type', 'agent_role', 'subagent_type']) {
     const value = input?.[key];
     if (typeof value === 'string' && (/luna|deepseek|subagent/i.test(value) || /^native_api_[a-f0-9]{24}$/.test(value))) return true;
@@ -222,6 +228,7 @@ export async function handleHook({
   overrideSessionId,
   routerSettings,
   settingsPath,
+  guardStatus,
 } = {}) {
   const event = input?.hook_event_name;
   if (!SUPPORTED_EVENTS.has(event)) return { output: null, reason: 'unsupported_event' };
@@ -231,9 +238,11 @@ export async function handleHook({
   const settings = routerSettings === undefined
     ? await loadRouterSettings(settingsPath)
     : validateRouterSettings(routerSettings);
-  // Hook payloads usually provide only model. A parent chat deliberately using
-  // the same exact API model is therefore indistinguishable and is suppressed.
-  if (isChildExecutor(input, settings.profiles)) return { output: null, reason: 'child_executor' };
+  const recordedThreadId = [input?.thread_id, input?.threadId, sessionId]
+    .find(value => typeof value === 'string' && value.trim());
+  if (recordedThreadId && await new NativeTasks().hasChild(recordedThreadId.trim())) {
+    return {output: null, reason: 'child_executor'};
+  }
 
   const at = now instanceof Date ? now : new Date(now);
   if (!Number.isFinite(at.getTime())) throw new Error('Invalid hook clock');
@@ -243,6 +252,8 @@ export async function handleHook({
   const route = await decideRoute({
     at,
     sessionId: routeSessionId,
+    mainModel: typeof input?.model === 'string' ? input.model : undefined,
+    guardStatus,
     stateDir: resolveOverrideStateDir(overrideStateDir),
     routerSettings: settings,
   });

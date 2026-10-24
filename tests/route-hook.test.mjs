@@ -277,8 +277,8 @@ ok(fixedNotice.includes('Schedule: fixed'), 'fixed notice names the fixed phase'
 ok(fixedNotice.includes('fixed executor selection'), 'fixed notice explains the fixed source');
 ok(!fixedNotice.includes('automatic schedule'), 'fixed notice must not claim an automatic schedule');
 ok(fixedNotice.includes('calendar not consulted'), 'fixed notice explains that the calendar is unused');
-equal(isChildExecutor({ model: 'gpt-6-luna' }), true, 'Luna model turns are treated as child work');
-equal(isChildExecutor({ model: 'deepseek/deepseek-flash' }), true, 'native DeepSeek child turns are suppressed');
+equal(isChildExecutor({ model: 'gpt-6-luna' }), false, 'a Luna model name alone does not identify a child');
+equal(isChildExecutor({ model: 'deepseek/deepseek-flash' }), false, 'a DeepSeek model name alone does not identify a child');
 equal(isChildExecutor({ model: 'openai/gpt-6.1-sol' }), false, 'Sol model turns are not treated as children');
 equal(isChildExecutor({ model: 'gpt-6.1-sol', agent_type: 'subagent' }), true, 'explicit subagent evidence is respected');
 equal(isChildExecutor({ model: undefined }), false, 'unknown model evidence is tolerated');
@@ -292,8 +292,8 @@ const hookApiSettings = {
   schemaVersion: 1, mode: 'fixed', fixedExecutor: hookApiProfile.profileId,
   profiles: { [hookApiProfile.profileId]: hookApiProfile },
 };
-equal(isChildExecutor({ model: hookApiProfile.model }, hookApiSettings.profiles), true,
-  'configured API model is enough to identify a child when role metadata is absent');
+equal(isChildExecutor({ model: hookApiProfile.model }, hookApiSettings.profiles), false,
+  'configured API model alone does not identify a child');
 const apiChildHookDir = await mkdtemp(path.join(os.tmpdir(), 'route-hook-api-child-'));
 try {
   const result = await handleHook({
@@ -303,10 +303,10 @@ try {
     overrideStateDir: isolatedOverrideDir,
     routerSettings: hookApiSettings,
   });
-  equal(result.output, null, 'handleHook suppresses a configured API child using the supplied settings snapshot');
-  equal(result.reason, 'child_executor', 'API child suppression is reported consistently');
-  equal((await readdir(apiChildHookDir)).filter(name => name.endsWith('.json')).length, 0,
-    'API child suppression does not create parent notification state');
+  ok(Boolean(result.output?.hookSpecificOutput.additionalContext), 'a parent using the API model is not silently suppressed');
+  equal(result.reason, undefined, 'model name alone does not report child identity');
+  equal((await readdir(apiChildHookDir)).filter(name => name.endsWith('.json')).length, 1,
+    'the parent receives its own notification state');
 } finally {
   await rm(apiChildHookDir, { recursive: true, force: true });
 }
@@ -549,11 +549,11 @@ try {
   await rm(sessionsDir, { recursive: true, force: true });
 }
 
-// Child Luna work is ignored and does not create notification state.
+// Explicit child role evidence is ignored and does not create notification state.
 const childDir = await mkdtemp(path.join(os.tmpdir(), 'route-hook-child-'));
 try {
   const result = await handleHook({
-    input: inputFor('child-luna-session', 'PreToolUse', 'gpt-6-luna'),
+    input: {...inputFor('child-luna-session', 'PreToolUse', 'gpt-6-luna'), agent_type: 'native_subagent'},
     now: new Date(`2026-10-19T10:30:00${shanghai}`),
     hookStateDir: childDir,
     overrideStateDir: isolatedOverrideDir,
@@ -625,6 +625,7 @@ try {
   await cp(path.join(repoRoot, 'scripts', 'route-hook.mjs'), path.join(pluginScripts, 'route-hook.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'route.mjs'), path.join(pluginScripts, 'route.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'native-api-settings.mjs'), path.join(pluginScripts, 'native-api-settings.mjs'));
+  await cp(path.join(repoRoot, 'scripts', 'native-state.mjs'), path.join(pluginScripts, 'native-state.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'native-credentials.mjs'), path.join(pluginScripts, 'native-credentials.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'plugin-state.mjs'), path.join(pluginScripts, 'plugin-state.mjs'));
   const stateDir = path.join(spaceRoot, 'hook state');

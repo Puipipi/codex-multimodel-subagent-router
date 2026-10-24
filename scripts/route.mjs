@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRouterSettings, validateRouterSettings } from './native-api-settings.mjs';
+import { effectiveRouterEnabled, loadRouterSettings, validateRouterSettings } from './native-api-settings.mjs';
 
 const DEEPSEEK_NATIVE_SLUG = 'deepseek/deepseek-flash';
 
@@ -20,7 +20,7 @@ const HOLIDAYS_2026 = [
 
 const CHINA_TIMEZONE = 'Asia/Shanghai';
 const PEAK_UTC_HOURS = [[1, 4], [6, 10]];
-const BUILTIN_EXECUTORS = new Set(['luna', 'deepseek']);
+const BUILTIN_EXECUTORS = new Set(['luna', 'deepseek', 'same']);
 
 function localDate(instant, timezone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -101,6 +101,9 @@ async function readOverride(sessionId, stateDir, settings) {
 
 function resolveSelector(selector, settings) {
   if (BUILTIN_EXECUTORS.has(selector)) return { executor: selector, profileId: null, profile: null };
+  if (typeof selector === 'string' && /^native:[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(selector)) {
+    return {executor: 'native', model: selector.slice('native:'.length), profileId: null, profile: null};
+  }
   const direct = settings.profiles[selector];
   if (direct) return { executor: 'api', profileId: direct.profileId, profile: direct };
   const matches = Object.values(settings.profiles).filter((profile) => profile.aliases?.includes(selector));
@@ -140,7 +143,7 @@ async function writeOverride(sessionId, executor, stateDir) {
 }
 
 export async function decideRoute({
-  at = new Date(), executor, setSessionExecutor,
+  at = new Date(), executor, setSessionExecutor, mainModel, guardStatus,
   resetSession = false, sessionId, stateDir, routerSettings, settingsPath,
 } = {}) {
   if (typeof at === 'string' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(at)) {
@@ -151,6 +154,20 @@ export async function decideRoute({
   const settings = routerSettings === undefined
     ? await loadRouterSettings(settingsPath)
     : validateRouterSettings(routerSettings);
+  if (!effectiveRouterEnabled(settings, guardStatus)) {
+    const guarded = guardStatus?.state === 'disabled';
+    return {
+      phase: 'disabled',
+      source: guarded ? 'guard_disabled' : 'disabled',
+      executor: 'off',
+      profileId: null,
+      evaluatedAt: instant.toISOString(),
+      timezone: CHINA_TIMEZONE,
+      reason: guarded
+        ? 'automatic child delegation is disabled by the lifecycle guard'
+        : 'automatic child delegation is disabled in router settings',
+    };
+  }
   if (executor !== undefined) {
     try { resolveSelector(executor, settings); }
     catch { throw new Error('--executor must be luna, deepseek, or a configured API profile/alias'); }
@@ -201,6 +218,9 @@ export async function decideRoute({
   }
   const resolved = resolveSelector(selector, settings);
   const result = { ...plan, executor: resolved.executor, profileId: resolved.profileId, source, reason };
+  if (resolved.executor === 'same' && (typeof mainModel !== 'string' || !mainModel.trim())) {
+    throw new Error('same-model routing requires the trusted current chat model (--main-model)');
+  }
   const nativeSpawn = resolved.executor === 'api'
     ? {
       fork_turns: 'none',
@@ -214,6 +234,8 @@ export async function decideRoute({
       ...(resolved.executor === 'deepseek'
         ? { agent_type: 'native_deepseek', resolved_model: DEEPSEEK_NATIVE_SLUG }
         : {}),
+      ...(resolved.executor === 'same' ? {model: mainModel} : {}),
+      ...(resolved.executor === 'native' ? {model: resolved.model} : {}),
     };
   return {
     ...result,
@@ -222,7 +244,7 @@ export async function decideRoute({
 }
 
 function usage() {
-  return `Usage: node scripts/route.mjs [options]\n\nOptions:\n  --at ISO_DATE                    Evaluate a test or supplied instant\n  --executor SELECTOR             One-task override: luna, deepseek, profile ID, or alias\n  --session ID                     Chat-specific state key (not a prompt or secret)\n  --set-session-executor SELECTOR  luna, deepseek, API profile ID/alias, or auto\n  --settings PATH                  Router settings JSON (default: plugin LocalAppData path)\n  --reset-session                  Clear this chat's sticky override\n  --state-dir PATH                 State root (tests only; default is per-user LocalAppData)\n  --json                           Print one JSON result\n`;
+  return `Usage: node scripts/route.mjs [options]\n\nOptions:\n  --at ISO_DATE                    Evaluate a test or supplied instant\n  --executor SELECTOR             One-task override: luna, deepseek, same, native:<slug>, profile ID, or alias\n  --main-model MODEL               Trusted current chat model for same-model dispatch\n  --session ID                     Chat-specific state key (not a prompt or secret)\n  --set-session-executor SELECTOR  luna, deepseek, same, native:<slug>, profile ID/alias, or auto\n  --settings PATH                  Router settings JSON (default: plugin LocalAppData path)\n  --reset-session                  Clear this chat's sticky override\n  --state-dir PATH                 State root (tests only; default is per-user LocalAppData)\n  --json                           Print one JSON result\n`;
 }
 
 async function main(argv) {
@@ -233,7 +255,7 @@ async function main(argv) {
     if (arg === '--json') { json = true; continue; }
     if (arg === '--help' || arg === '-h') { process.stdout.write(usage()); return; }
     const fields = {
-      '--at': 'at', '--executor': 'executor',
+      '--at': 'at', '--executor': 'executor', '--main-model': 'mainModel',
       '--session': 'sessionId', '--set-session-executor': 'setSessionExecutor',
       '--state-dir': 'stateDir', '--settings': 'settingsPath',
     };

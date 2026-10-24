@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PICKER_SLUG } from "./native-routing.mjs";
 import { ensureNativeDeepseekDispatch } from "./native-isolated-install.mjs";
-import { loadRouterSettings } from "./native-api-settings.mjs";
+import { defaultRouterSettingsPath, loadRouterSettings } from "./native-api-settings.mjs";
 import { ensureNativeApiDispatch } from "./native-api-install.mjs";
 import { defaultNativeApiDir } from "./native-api-manager.mjs";
 
@@ -24,7 +24,36 @@ export function modelsFromCache(cache) {
   return cache.models.map((model) => model?.slug).filter((slug) => typeof slug === "string");
 }
 
+const REASONING_LEVELS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
+
+export function nativeModelOptionsFromCache(cache) {
+  if (!cache || !Array.isArray(cache.models)) throw new Error("models_cache.json has no models");
+  return cache.models
+    .filter((model) => typeof model?.slug === "string" && model.slug.trim())
+    .map((model) => ({
+      value: model.slug,
+      title: typeof model.display_name === "string" && model.display_name.trim() ? model.display_name : model.slug,
+      reasoningEfforts: Array.isArray(model.supported_reasoning_levels)
+        ? model.supported_reasoning_levels.filter((effort) => REASONING_LEVELS.has(effort))
+        : [],
+    }));
+}
+
+export async function readNativeModelOptions({ cachePath = defaultModelsCachePath() } = {}) {
+  if (!existsSync(cachePath)) throw new Error("models_cache.json is missing; native model choices are unavailable");
+  return nativeModelOptionsFromCache(JSON.parse(readFileSync(cachePath, "utf8")));
+}
+
 export function resolveNativeAgent({ executor, mainModel, models = [], apiProfiles = {} }) {
+  if (executor === "same") {
+    if (typeof mainModel !== "string" || !mainModel.trim()) throw new Error("same-model dispatch requires the trusted current chat model");
+    return { executor: "same", model: mainModel, fork_turns: "none" };
+  }
+  if (typeof executor === "string" && executor.startsWith("native:")) {
+    const model = executor.slice("native:".length);
+    if (!model || !models.includes(model)) throw new Error(`Selected native model is not present in the current Codex catalog: ${model || "(empty)"}`);
+    return { executor: "native", model, fork_turns: "none" };
+  }
   if (executor === "deepseek") {
     return {
       executor: "deepseek",
@@ -35,7 +64,7 @@ export function resolveNativeAgent({ executor, mainModel, models = [], apiProfil
   }
   if (executor !== "luna" && executor !== "deepseek") {
     if (typeof executor !== "string" || !executor.trim()) {
-      throw new Error("executor must be luna, deepseek, or a configured API profile");
+      throw new Error("executor must be luna, deepseek, or a configured API profile; same and native:<model> are also supported");
     }
     const profile = apiProfiles[executor]
       || Object.values(apiProfiles).find((candidate) => candidate.aliases?.includes(executor));
@@ -71,8 +100,14 @@ async function main(argv) {
   const executor = get("executor");
   const mainModel = get("main-model");
   if (typeof executor !== "string" || !executor.trim()) {
-    throw new Error("executor must be luna, deepseek, or a configured API profile");
+    throw new Error("executor must be luna, deepseek, or a configured API profile; same and native:<model> are also supported");
   }
+  const apiDir = get("api-dir") || defaultNativeApiDir();
+  const settingsPath = get("settings") || (executor !== "luna" && executor !== "same" && !executor.startsWith("native:")
+    ? path.join(apiDir, "router.json")
+    : defaultRouterSettingsPath());
+  const routerSettings = await loadRouterSettings(settingsPath);
+  if (!routerSettings.enabled) throw new Error("Automatic child dispatch is disabled in router settings");
   if (executor === "deepseek") {
     const journalFlagAt = argv.indexOf("--install-journal");
     let journalPath;
@@ -87,19 +122,20 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel, models: [] }))}\n`);
     return;
   }
-  if (executor !== "luna") {
-    const apiDir = get("api-dir") || defaultNativeApiDir();
-    const settingsPath = get("settings") || path.join(apiDir, "router.json");
-    const settings = await loadRouterSettings(settingsPath);
-    const result = resolveNativeAgent({ executor, mainModel, apiProfiles: settings.profiles });
+  if (executor !== "luna" && executor !== "same" && !executor.startsWith("native:")) {
+    const result = resolveNativeAgent({ executor, mainModel, apiProfiles: routerSettings.profiles });
     const apiJournal = get("api-journal");
     await ensureNativeApiDispatch({
       profileId: result.profile_id,
       apiDir,
-      settingsPath: settingsPath || undefined,
+      settingsPath,
       journalPath: apiJournal || undefined,
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  if (executor === "same") {
+    process.stdout.write(`${JSON.stringify(resolveNativeAgent({ executor, mainModel }))}\n`);
     return;
   }
   const cacheAt = path.resolve(get("models-cache", defaultModelsCachePath()));

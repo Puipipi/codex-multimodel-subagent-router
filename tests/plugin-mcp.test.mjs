@@ -533,6 +533,37 @@ try {
     ok(isError(invalidStart), 'relative cwd is rejected');
     match(text(invalidStart), /absolute path/, 'the cwd requirement is explicit');
   }
+
+  {
+    const settingsPath = path.join(root, 'router-off.json');
+    await writeJsonAtomic(settingsPath, {
+      schemaVersion: 1,
+      enabled: false,
+      mode: 'fixed',
+      fixedExecutor: 'deepseek',
+      schedule: {peak: 'luna', valley: 'deepseek'},
+      profiles: {},
+    });
+    const offCalls = [];
+    const offServer = createPluginMcp({
+      settingsPath,
+      stateDir: path.join(root, 'off-state'),
+      runClient: async request => { offCalls.push(request); return textResult({agent_id: 'unexpected'}); },
+    });
+    const invokeOff = (name, args) => offServer.handle({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+      name, arguments: args, _meta: {threadId: 'disabled-chat'},
+    }});
+    try {
+      const offStart = await invokeOff('dsh_start', {task: 'must not start', cwd: workspace, model: 'deepseek-flash'});
+      ok(offStart.result?.isError, 'disabled routing rejects new DSH starts');
+      match(offStart.result.content[0].text, /分工已关闭/, 'disabled DSH response explains the setting');
+      const offFollowup = await invokeOff('dsh_followup', {agent_id: 'existing-agent', task: 'must not continue'});
+      ok(offFollowup.result?.isError, 'disabled routing rejects new DSH follow-ups');
+      equal(offCalls.length, 0, 'disabled DSH start and follow-up never reach backend');
+    } finally {
+      await offServer.close();
+    }
+  }
 } finally {
   await server.close();
   await rm(root, {recursive: true, force: true});

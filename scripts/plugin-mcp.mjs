@@ -14,6 +14,7 @@ import {
   applyApiConfiguration as applyNativeApiConfiguration,
   getExecutorStatus as getNativeApiExecutorStatus,
 } from './native-api-install.mjs';
+import {effectiveRouterEnabled} from './native-api-settings.mjs';
 import {
   ROUTER_SETTINGS_TOOL_NAMES,
   ROUTER_SETTINGS_TOOLS,
@@ -305,6 +306,8 @@ export function createPluginMcp({
   settingsPath,
   getExecutorStatus,
   applyApiConfiguration,
+  guardStatus,
+  stopOwnedIdleExecutions,
 } = {}) {
   const resolvedStateDir = resolveStateDir(stateDir);
   const ownershipStore = ownership ?? new OwnershipStore({stateDir: resolvedStateDir, now});
@@ -314,7 +317,16 @@ export function createPluginMcp({
     settingsPath,
     getExecutorStatus,
     applyApiConfiguration,
+    guardStatus,
+    onRoutingDisabled: stopOwnedIdleExecutions,
   });
+
+  async function assertAutomaticDispatchEnabled() {
+    const snapshot = (await routerSettings.callTool('router_settings_snapshot', {})).payload;
+    if (!effectiveRouterEnabled(snapshot.settings, snapshot.capabilities?.guardStatus)) {
+      throw new Error('自动子代理分工已关闭；已拒绝新的 DSH 子任务派发。');
+    }
+  }
 
   async function backend(action, args, threadId) {
     const response = await run({action, args, meta: {threadId}});
@@ -361,6 +373,7 @@ export function createPluginMcp({
   }
 
   async function start(args, threadId) {
+    await assertAutomaticDispatchEnabled();
     const permission = args.permission ?? 'workspace-write';
     const provider = args.provider ?? 'deepseek-official';
     const model = args.model ?? 'deepseek-flash';
@@ -411,6 +424,7 @@ export function createPluginMcp({
   }
 
   async function followup(args, threadId) {
+    await assertAutomaticDispatchEnabled();
     const record = await ownershipStore.assertOwner(args.agent_id, threadId);
     const upstream = {agent_id: args.agent_id, task: args.task};
     if (args.legacy !== undefined) upstream.legacy = args.legacy;

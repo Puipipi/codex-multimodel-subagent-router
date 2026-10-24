@@ -10,8 +10,8 @@ const REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "ma
 const DEEPSEEK_ACCOUNT_EFFORTS = new Set(["none", "low", "high", "max"]);
 const DEEPSEEK_WIRE_MODELS = new Set(["deepseek-flash", "deepseek-v4-pro"]);
 const PROFILE_FIELDS = new Set(["profileId", "protocol", "baseUrl", "model", "reasoning", "credential", "label", "aliases", "contextWindow"]);
-const ROOT_FIELDS = new Set(["schemaVersion", "mode", "fixedExecutor", "schedule", "profiles"]);
-const SELECTORS = new Set(["luna", "deepseek"]);
+const ROOT_FIELDS = new Set(["schemaVersion", "enabled", "mode", "fixedExecutor", "schedule", "profiles"]);
+const SELECTORS = new Set(["luna", "deepseek", "same"]);
 
 export function defaultRouterSettingsPath(env = process.env) {
   const local = env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
@@ -21,11 +21,16 @@ export function defaultRouterSettingsPath(env = process.env) {
 export function createDefaultRouterSettings() {
   return {
     schemaVersion: 1,
+    enabled: true,
     mode: "auto",
     fixedExecutor: null,
     schedule: { peak: "luna", valley: "deepseek" },
     profiles: {},
   };
+}
+
+export function effectiveRouterEnabled(settings, guardStatus = null) {
+  return settings?.enabled !== false && guardStatus?.state !== 'disabled';
 }
 
 function sorted(value) {
@@ -132,6 +137,7 @@ function validateProfile(profile, key) {
 function validateSelector(selector, profiles, label) {
   if (typeof selector !== "string" || !selector) throw new Error(`${label} selector is required`);
   if (SELECTORS.has(selector)) return selector;
+  if (/^native:[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(selector)) return selector;
   if (!PROFILE_ID.test(selector) || !profiles[selector]) throw new Error(`${label} references an unknown executor profile`);
   return selector;
 }
@@ -140,6 +146,7 @@ export function validateRouterSettings(settings) {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("router settings must be an object");
   exactKeys(settings, ROOT_FIELDS, "router settings");
   if (settings.schemaVersion !== 1) throw new Error("router settings schemaVersion must be 1");
+  if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") throw new Error("router settings enabled must be a boolean");
   if (!new Set(["auto", "fixed", "scheduled"]).has(settings.mode)) throw new Error("router settings mode must be auto, fixed, or scheduled");
   const profiles = settings.profiles ?? {};
   if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) throw new Error("router settings profiles must be an object");
@@ -161,10 +168,13 @@ export function validateRouterSettings(settings) {
   }
   const aliases = new Set();
   for (const profile of Object.values(profiles)) for (const alias of profile.aliases || []) {
+    if (SELECTORS.has(alias) || /^native:[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(alias)) {
+      throw new Error("API profile alias conflicts with a built-in native executor selector");
+    }
     if (aliases.has(alias)) throw new Error("ambiguous profile alias");
     aliases.add(alias);
   }
-  return { schemaVersion: 1, mode: settings.mode, fixedExecutor, schedule, profiles };
+  return { schemaVersion: 1, enabled: settings.enabled ?? true, mode: settings.mode, fixedExecutor, schedule, profiles };
 }
 
 async function requireRegularOrAbsent(file) {

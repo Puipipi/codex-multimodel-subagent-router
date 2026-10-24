@@ -27,6 +27,22 @@ The source includes the installer orchestration entrypoints `native-isolated-ins
 
 ## Route a task
 
+The router has a global `enabled` switch, independent of `mode`. When it is
+off, do not create or continue any automatic native or DSH delegation, even
+for a one-task override or scheduled route. Sol handles repository file work
+directly until the user turns routing back on. Do not bypass this switch through
+the legacy DSH tools. The settings panel remains available while routing is
+off. A guard-reported disabled state has the same effective behavior; a
+missing/unmanaged guard does not disable native Luna routing.
+
+Fixed and scheduled executors may select `same` or an exact `native:<slug>` in
+addition to the existing Luna, DeepSeek, and API profile choices. `same` means
+the exact model of the current parent chat and still creates an isolated child
+with `fork_turns: "none"`; resolve it with the current chat model, never a
+static config default. `native:<slug>` must exist in the current Codex
+`CODEX_HOME/models_cache.json` catalog or dispatch fails explicitly. Never
+substitute a different model. Native child chats must not recursively delegate.
+
 Run the bundled `scripts/route.mjs` before dispatching a new coding task. By default it selects native Luna during DeepSeek weekday peak windows and native DeepSeek during valley time. `Asia/Shanghai` is the default timezone. Peak intervals are 09:00–12:00 and 14:00–18:00 China time on weekdays, excluding official Chinese public holidays. Weekends remain valley even on China make-up workdays. The bundled calendar covers 2026; for other years, known valley hours use DeepSeek and candidate weekday peaks conservatively use Luna.
 
 An explicit one-task choice (`--executor luna|deepseek|<profileId>|<alias>`) wins. A saved chat override outranks the automatic schedule. Set it with `--set-session-executor luna|deepseek|<profileId>|<alias>`, clear it with `--set-session-executor auto` or `--reset-session`, and pass `--session $env:CODEX_THREAD_ID` only when that stable chat ID is available. If the host exposes no stable ID, keep the preference in Sol's current-chat context and pass a one-task override; do not invent shared identity. An ordinary one-task API choice does not change the global fixed configuration.
@@ -191,7 +207,7 @@ The notice is sent once on the first observation for a chat and only when the ef
 
 Fixed mode is reported as a fixed executor selection. The same fixed selection stays silent across calendar boundaries, while a changed effective executor, API profile, or override source still triggers a notice.
 
-Hook payloads expose `session_id` and `model`, not a reliable main/subagent role. Native Luna and `deepseek/deepseek-flash` child turns are suppressed by model name. A main chat intentionally using those models is therefore also silent. Ownership-critical work uses the native task state and the trusted plugin `_meta.threadId` where available.
+Hook payloads expose `session_id` and `model`, not a reliable main/subagent role. A model name alone cannot identify a child, because `same` deliberately uses the parent's model. Suppress only a child identified by trusted native task state or explicit role metadata. For an unknown hook context, emit status information only; never instruct the model to start another child. Native child chats never recursively delegate.
 
 ## Legacy DSH compatibility
 
