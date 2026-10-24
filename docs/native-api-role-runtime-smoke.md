@@ -8,6 +8,7 @@
 
 ```powershell
 node tests/native-api-role-cli-smoke.mjs --mock-self-test
+node tests/native-api-role-cli-smoke.mjs --failure-self-test
 ```
 
 真实运行必须由调用者从已通过 CI 验证的独立 CLI artifact 提供绝对路径，以及从该 artifact 的构建 provenance 单独取得的 SHA-256：
@@ -17,6 +18,8 @@ node tests/native-api-role-cli-smoke.mjs --binary 'C:\path\to\ci-validated\codex
 ```
 
 脚本在启动服务前核对 hash；不查询、选择或安装当前系统 CLI，也不读取用户 Codex 配置或凭据。它使用合成 API key，所有固定模型响应均来自 loopback。若无法提供可信 CI provenance，不要用二进制自身计算的 hash 代替期望值。
+
+`--failure-self-test` 在 localhost mock/gateway 已启动后注入初始化失败，并验证监听服务与测试自有子进程都已关闭；它不启动 Codex CLI。
 
 ## 验收范围
 
