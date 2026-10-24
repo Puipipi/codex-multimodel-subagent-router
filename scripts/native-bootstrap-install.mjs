@@ -220,10 +220,10 @@ export async function probeAndWriteCompatibilityReceipt({ officialPath, patchedP
   const tempHome = await mkdtemp(path.join(probeRoot, "compatibility-"));
   const cwd = path.join(tempHome, "workspace");
   const codexHome = path.join(tempHome, "codex-home");
-  await mkdir(cwd, { recursive: true });
-  await mkdir(codexHome, { recursive: true });
-  await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-6.1-sol"\nmodel_provider = "openai"\napproval_policy = "never"\n', { flag: "wx" });
   try {
+    await mkdir(cwd, { recursive: true });
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-6.1-sol"\nmodel_provider = "openai"\napproval_policy = "never"\n', { flag: "wx" });
     const probeResult = await probePatchedAppServer({ exePath: patchedPath, codexHome, cwd, cliVersion: officialVersion, timeoutMs, AppServer: AppServerImpl });
     return await writeCompatibilityReceipt(receiptPath, { officialPath, officialVersion, desktopPackageVersion, patchedPath, probeResult, approvedPatchHashes });
   } finally {
