@@ -99,6 +99,8 @@ try {
   const identity = { version: 1, token: "test-token-1234567890", port: 46_123 };
   const dependencies = {
     verifyRuntimeVersion: async () => ({ exePath: path.join(root, "codex.exe") }),
+    discoverApplyCompatibleRuntime: async () => ({versionDir: path.join(root, "runtime"), exePath: path.join(root, "codex.exe"), error: null}),
+    armOrReuseApiBootstrap: async ({runtimeDir}) => ({state: "armed", restartRequired: true, ready: false, reused: true, runtimeVersionDir: runtimeDir}),
     prepareGatewayIdentity: async ({ paths: servicePaths }) => {
       await mkdir(servicePaths.dir, { recursive: true });
       await writeFile(servicePaths.identity, `${JSON.stringify(identity)}\n`, "utf8");

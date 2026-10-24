@@ -39,6 +39,7 @@ import { gatewaySourceEntry, stageGatewaySource, verifyGatewaySource } from "./n
 import { verifyRuntimeVersion } from "./native-runtime.mjs";
 import { defaultRouterSettingsPath, readRouterSettingsSnapshot, resolveApiCredential, validateRouterSettings } from "./native-api-settings.mjs";
 import { withFileLock } from "./plugin-state.mjs";
+import { armOrReuseApiBootstrap, disarmApiBootstrap } from "./native-api-bootstrap-gate.mjs";
 
 const JOURNAL_VERSION = 1;
 const REGISTRY_VERSION = 1;
@@ -926,6 +927,19 @@ export async function discoverCompatibleRuntime({ apiDir = defaultNativeApiDir()
   return { versionDir: null, exePath: null, error: firstError || "no approved native runtime is staged" };
 }
 
+export async function discoverApplyCompatibleRuntime({codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), verifyRuntime = verifyRuntimeVersion} = {}) {
+  const versionsRoot = path.join(path.resolve(codexHome), "router-runtime", "versions");
+  const candidates = await stagedVersionDirectories(versionsRoot, "approved persistent API runtime versions");
+  let firstError = null;
+  for (const versionDir of candidates) {
+    try {
+      const verified = await verifyRuntime(versionDir);
+      return {versionDir, exePath: verified.exePath, error: null};
+    } catch (error) { firstError ||= error.message; }
+  }
+  return {versionDir: null, exePath: null, error: firstError || `no approved runtime is staged below ${versionsRoot}`};
+}
+
 export async function getExecutorStatus({ settings, profileId } = {}, dependencies = {}) {
   const validated = validateRouterSettings(settings);
   const apiDir = dependencies.apiDir || defaultNativeApiDir();
@@ -1117,6 +1131,16 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
 
 export async function applyApiConfiguration({ settings, expectedSha256 } = {}, dependencies = {}) {
   const validated = validateRouterSettings(settings);
+  if (validated.enabled === false) {
+    return {
+      applied: false,
+      supported: true,
+      restartRequired: false,
+      detail: "自动分工已关闭；API 配置已保留，启用分工后再显式应用。",
+      appliedProfiles: [],
+      alreadyInstalled: [],
+    };
+  }
   const apiDir = dependencies.apiDir || defaultNativeApiDir();
   const paths = nativeApiPaths(apiDir);
   const settingsPath = assertAbsolute("settingsPath", dependencies.settingsPath || paths.settings);
@@ -1128,9 +1152,8 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
   if (JSON.stringify(stableJson(snapshot.settings)) !== JSON.stringify(stableJson(validated))) {
     throw new Error("router settings must be saved before applying API configuration");
   }
-  const runtime = await discoverCompatibleRuntime({
-    apiDir,
-    env: dependencies.env || process.env,
+  const runtime = await (dependencies.discoverApplyCompatibleRuntime || discoverApplyCompatibleRuntime)({
+    codexHome,
     verifyRuntime: dependencies.verifyRuntimeVersion || verifyRuntimeVersion,
   });
   if (!runtime.versionDir) {
@@ -1143,10 +1166,35 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
       alreadyInstalled: [],
     };
   }
+  let bootstrap = null;
+  if (Object.keys(validated.profiles).length > 0) {
+    try {
+      bootstrap = await (dependencies.armOrReuseApiBootstrap || armOrReuseApiBootstrap)({
+        runtimeDir: runtime.versionDir,
+        codexHome,
+        env: {...(dependencies.env || process.env), CODEX_HOME: codexHome},
+        ...(dependencies.bootstrapEnvironmentAdapter ? {adapter: dependencies.bootstrapEnvironmentAdapter} : {}),
+        ...(dependencies.armApiBootstrap ? {arm: dependencies.armApiBootstrap} : {}),
+        ...(dependencies.disarmApiBootstrap ? {disarm: dependencies.disarmApiBootstrap} : {}),
+        ...(dependencies.bootstrapSourcePath ? {bootstrapSourcePath: dependencies.bootstrapSourcePath} : {}),
+        ...(dependencies.verifyRuntimeVersion ? {verifyRuntimeVersion: dependencies.verifyRuntimeVersion} : {}),
+      });
+    } catch (error) {
+      return {
+        applied: false,
+        supported: false,
+        restartRequired: true,
+        detail: `未能证明或启用经批准的持久启动器：${error instanceof Error ? error.message : String(error)}；未修改 API 角色。`,
+        appliedProfiles: [],
+        alreadyInstalled: [],
+      };
+    }
+  }
   const applied = [];
   const alreadyInstalled = [];
   const repairedProfiles = [];
-  for (const profileId of Object.keys(validated.profiles)) {
+  const activatedThisApply = [];
+  try { for (const profileId of Object.keys(validated.profiles)) {
     const journalPath = paths.journal(profileId);
     const existing = await journalIfPresent(journalPath);
     if (existing?.phase === "active") {
@@ -1181,6 +1229,7 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
     if (existing?.phase === "prepared") {
       await activate({ journalPath }, dependencies);
       applied.push(profileId);
+      activatedThisApply.push(profileId);
       continue;
     }
     if (existing) throw new Error(`API profile ${profileId} is in an unsupported install phase`);
@@ -1195,6 +1244,21 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
     }, dependencies);
     await activate({ journalPath }, dependencies);
     applied.push(profileId);
+    activatedThisApply.push(profileId);
+  } } catch (error) {
+    const recoveryErrors = [];
+    for (const profileId of [...activatedThisApply].reverse()) {
+      try { await rollback({journalPath: paths.journal(profileId)}, dependencies); }
+      catch (rollbackError) { recoveryErrors.push(rollbackError); }
+    }
+    if (bootstrap && !bootstrap.reused) {
+      try {
+        await (dependencies.disarmApiBootstrap || disarmApiBootstrap)({codexHome,
+          ...(dependencies.bootstrapEnvironmentAdapter ? {adapter: dependencies.bootstrapEnvironmentAdapter} : {})});
+      } catch (disarmError) { recoveryErrors.push(disarmError); }
+    }
+    if (recoveryErrors.length) throw new AggregateError([error, ...recoveryErrors], "API Apply failed and owned changes need recovery");
+    throw error;
   }
   return {
     applied: applied.length > 0,
@@ -1202,11 +1266,12 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
     restartRequired: applied.length > 0,
     detail: applied.length > 0
       ? repairedProfiles.length
-        ? "API 角色目录或 provider 注册已修复；需要完整重启 Codex。"
-        : "API role/catalog/provider 与 Task 事务已应用；新增角色需要完整重启 Codex。"
-      : "API 配置已安装；没有新增角色。",
+        ? "API 角色目录或 provider 注册已修复；受管启动器已验证或复用，需要完整重启 Codex。"
+        : "API role/catalog/provider 与 Task 事务已应用；受管启动器已验证或启用，需要完整重启 Codex。"
+      : bootstrap ? "API 配置已安装；受管启动器已验证或复用，需要完整重启 Codex。" : "API 配置已安装；没有新增角色。",
     appliedProfiles: applied,
     alreadyInstalled,
+    ...(bootstrap ? {bootstrap: {state: bootstrap.state, restartRequired: true, reused: bootstrap.reused === true}} : {}),
   };
 }
 

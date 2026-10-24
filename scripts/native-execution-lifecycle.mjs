@@ -9,7 +9,8 @@ import {createWindowsTaskSchedulerAdapter, disableOwnedGatewayTask, enableOwnedG
 import {NativeTasks} from './native-state.mjs';
 import {OwnershipStore, resolveStateDir, TERMINAL_STATUSES} from './plugin-state.mjs';
 import {createWindowsUserEnvironmentAdapter} from './native-runtime-env.mjs';
-import {readUpgradeGuardStatus} from './native-upgrade-status.mjs';
+import {readUpgradeGuardStatus, routerRuntimeRoot} from './native-upgrade-status.mjs';
+import {API_BOOTSTRAP_JOURNAL, API_BOOTSTRAP_OWNER, disarmOwnedBootstrap} from './native-bootstrap-maintenance.mjs';
 
 export {readUpgradeGuardStatus, routerRuntimeRoot, upgradeStatusPath} from './native-upgrade-status.mjs';
 
@@ -41,7 +42,28 @@ export async function clearOwnedBootstrapOverride({
   env = process.env,
   environmentAdapter = createWindowsUserEnvironmentAdapter({allowInstallJournal: true}),
   readDeepseekJournal = async file => decodeJournal(await readFile(file, 'utf8')),
+  disarmApiBootstrap = disarmOwnedBootstrap,
 } = {}) {
+  const genericJournalPath = path.join(routerRuntimeRoot(env), API_BOOTSTRAP_JOURNAL);
+  let genericBytes = null;
+  try { genericBytes = await readFile(genericJournalPath); }
+  catch (error) { if (error?.code !== 'ENOENT') return {cleared: false, preserved: true, message: 'API 启动器记录无法读取；保留 CLI 路径并停用新分工。'}; }
+  if (genericBytes !== null) {
+    let genericJournal;
+    try { genericJournal = JSON.parse(genericBytes.toString('utf8')); }
+    catch { return {cleared: false, preserved: true, message: 'API 启动器记录无效；保留 CLI 路径并停用新分工。'}; }
+    if (genericJournal?.owner !== API_BOOTSTRAP_OWNER || genericJournal.schemaVersion !== 1
+        || genericJournal.phase !== 'applied' || !samePath(genericJournal.paths?.maintenanceRoot, routerRuntimeRoot(env))) {
+      return {cleared: false, preserved: true, message: 'API 启动器所有权无法确认；保留 CLI 路径并停用新分工。'};
+    }
+    try {
+      const result = await disarmApiBootstrap({journalPath: genericJournalPath, adapter: environmentAdapter});
+      if (result?.disarmed !== true) return {cleared: false, preserved: true, message: 'API 启动器路径已发生变化；保留用户路径并停用新分工。'};
+      return {cleared: true, message: '已解除本插件拥有的 API 启动器覆盖；当前进程不热切换，下次启动使用官方 Codex。'};
+    } catch {
+      return {cleared: false, preserved: true, message: 'API 启动器无法安全解除；保留 CLI 路径并停用新分工。'};
+    }
+  }
   const journalPath = env.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
   if (typeof journalPath !== 'string' || !journalPath.trim()) return {cleared: false, skipped: true, message: '没有受管兼容安装；未修改用户 CLI 路径。'};
   let journal;

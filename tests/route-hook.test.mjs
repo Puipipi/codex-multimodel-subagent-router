@@ -17,6 +17,14 @@ import { createApiProfile } from '../scripts/native-api-settings.mjs';
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const hookPath = path.join(repoRoot, 'scripts', 'route-hook.mjs');
 const shanghai = '+08:00';
+const priorCodexHome = process.env.CODEX_HOME;
+const priorLocalAppData = process.env.LOCALAPPDATA;
+process.env.CODEX_HOME = path.join(os.tmpdir(), `route-hook-test-codex-home-${process.pid}`);
+process.env.LOCALAPPDATA = path.join(os.tmpdir(), `route-hook-test-local-${process.pid}`);
+process.on('exit', () => {
+  if (priorCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = priorCodexHome;
+  if (priorLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = priorLocalAppData;
+});
 // Keep every test away from the real user's sticky override state. Individual
 // manual-override tests pass their own directory; everything else uses this
 // empty, isolated root.

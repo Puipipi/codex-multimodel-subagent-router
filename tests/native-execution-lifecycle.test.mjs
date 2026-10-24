@@ -50,6 +50,27 @@ try {
   equal(customResult.preserved, true, 'user-managed CLI path is preserved');
   equal((await envAdapter.get('CODEX_CLI_PATH')).value, 'C:\\custom\\codex.exe', 'CAS does not overwrite a later manual path');
 
+  const genericRoot = path.join(codexHome, 'router-runtime');
+  const genericJournalPath = path.join(genericRoot, 'bootstrap-install.json');
+  await mkdir(genericRoot, {recursive: true});
+  await writeFile(genericJournalPath, JSON.stringify({owner: 'sol-luna-native-api-bootstrap', schemaVersion: 1, phase: 'applied', paths: {maintenanceRoot: genericRoot}}));
+  let genericDisarms = 0;
+  let legacyReads = 0;
+  const genericOff = await clearOwnedBootstrapOverride({env, environmentAdapter: envAdapter,
+    disarmApiBootstrap: async ({journalPath}) => { genericDisarms += 1; equal(journalPath, genericJournalPath, 'off targets the exact persistent generic journal'); return {disarmed: true}; },
+    readDeepseekJournal: async () => { legacyReads += 1; return bootstrapJournal; },
+  });
+  equal(genericOff.cleared, true, 'off disarms a valid generic API bootstrap first');
+  equal(genericDisarms, 1, 'generic bootstrap is disarmed once');
+  equal(legacyReads, 0, 'generic success never falls through to the legacy journal');
+  await writeFile(genericJournalPath, '{broken');
+  const corruptGenericOff = await clearOwnedBootstrapOverride({env, environmentAdapter: envAdapter,
+    disarmApiBootstrap: async () => { genericDisarms += 1; return {disarmed: true}; },
+    readDeepseekJournal: async () => { legacyReads += 1; return bootstrapJournal; },
+  });
+  equal(corruptGenericOff.preserved, true, 'corrupt generic ownership is preserved');
+  equal(legacyReads, 0, 'corrupt generic ownership never falls through to legacy cleanup');
+
   const settingsPath = path.join(root, 'router.json');
   await writeFile(settingsPath, JSON.stringify({schemaVersion: 1, enabled: false, mode: 'fixed', fixedExecutor: 'luna', schedule: {peak: 'luna', valley: 'deepseek'}, profiles: {}}));
   const tasks = new NativeTasks({stateDir: path.join(root, 'state')});

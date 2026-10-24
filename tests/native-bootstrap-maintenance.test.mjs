@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { armApiBootstrap, disarmOwnedBootstrap, observeApiBackend } from '../scripts/native-bootstrap-maintenance.mjs';
 import { writeCompatibilityReceipt } from '../scripts/native-bootstrap-install.mjs';
+import { NATIVE_RUNTIME_PATCH_SHA256, NATIVE_RUNTIME_SOURCE_COMMIT, NATIVE_RUNTIME_VERSION, NATIVE_RUNTIME_TARGET } from '../scripts/native-runtime.mjs';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'native-bootstrap-maintenance-test-'));
 try {
@@ -24,7 +25,7 @@ try {
   await writeFile(officialPath, officialBytes);
   await writeFile(path.join(runtimeDir, 'codex.exe'), patchedBytes);
   await writeFile(rootReceiptPath, priorReceiptBytes);
-  const manifest = { version: '0.164.0-alpha.11.1', source_commit: '6905ecede7816e91373e9eabda3f6b0368fc747b', patch_sha256: '87007c7188d32b7e4c4cd45cb86fbf41fa122fc48a998d99ab2f2536ce73100d', target: 'x86_64-pc-windows-msvc', stock_cli_version: '0.164.0-alpha.11.1', binary_sha256: patchedSha256, files: { 'codex.exe': patchedSha256 } };
+  const manifest = { version: NATIVE_RUNTIME_VERSION, source_commit: NATIVE_RUNTIME_SOURCE_COMMIT, patch_sha256: NATIVE_RUNTIME_PATCH_SHA256, target: NATIVE_RUNTIME_TARGET, stock_cli_version: NATIVE_RUNTIME_VERSION, binary_sha256: patchedSha256, files: { 'codex.exe': patchedSha256 } };
   const verified = { exePath: path.join(runtimeDir, 'codex.exe'), manifest };
   assert.notEqual(manifest.patch_sha256, manifest.binary_sha256, 'fixture distinguishes source patch digest from compiled executable digest');
   const capability = { schemaVersion: 1, testBuild: false, runtimeVersion: manifest.version, sourceCommit: manifest.source_commit, approvedPatchHashes: [manifest.binary_sha256] };

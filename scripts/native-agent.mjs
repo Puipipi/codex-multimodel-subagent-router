@@ -11,6 +11,7 @@ import { defaultModelsCachePath } from "./native-model-catalog.mjs";
 import { resolveCurrentMainModel } from "./native-current-model.mjs";
 import { enableOwnedExecutionsForDispatch, finalizePendingDisable } from "./native-execution-lifecycle.mjs";
 import { readUpgradeGuardStatus } from "./native-upgrade-status.mjs";
+import { assertGatewayBackendReady } from "./native-api-bootstrap-gate.mjs";
 import { NativeTasks } from "./native-state.mjs";
 
 export { defaultModelsCachePath, nativeModelOptionsFromCache, readNativeModelOptions } from "./native-model-catalog.mjs";
@@ -150,10 +151,12 @@ async function main(argv) {
     const ready = async () => {
       if (dispatchExecutor === "deepseek") {
         const journalPath = get("install-journal") || process.env.SOL_LUNA_NATIVE_INSTALL_JOURNAL;
+        await assertGatewayBackendReady({executor: "deepseek", env: {...process.env, SOL_LUNA_NATIVE_INSTALL_JOURNAL: journalPath}});
         await enableOwnedExecutionsForDispatch({executor: "deepseek", env: {...process.env, SOL_LUNA_NATIVE_INSTALL_JOURNAL: journalPath}});
         await ensureNativeDeepseekDispatch({journalPath});
       } else {
         const apiJournal = get("api-journal");
+        await assertGatewayBackendReady({executor: "api", profileId, apiDir, env: process.env});
         await enableOwnedExecutionsForDispatch({executor: "api", profileId, apiDir});
         await ensureNativeApiDispatch({profileId, apiDir, settingsPath, journalPath: apiJournal || undefined});
       }

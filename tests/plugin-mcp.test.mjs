@@ -31,6 +31,14 @@ function detailHrefFor(body, eventId) {
 }
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sol-plugin-mcp-'));
+const priorCodexHome = process.env.CODEX_HOME;
+const priorLocalAppData = process.env.LOCALAPPDATA;
+process.env.CODEX_HOME = path.join(root, 'codex-home');
+process.env.LOCALAPPDATA = path.join(root, 'local-app-data');
+process.on('exit', () => {
+  if (priorCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = priorCodexHome;
+  if (priorLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = priorLocalAppData;
+});
 const workspace = path.join(root, 'workspace');
 const workspace2 = path.join(root, 'workspace-2');
 for (const name of ['workspace', 'workspace-2', 'workspace-8', 'workspace-9', 'workspace-parallel', 'workspace-start-fail', 'workspace-start-uncertain', 'workspace-no-id', 'workspace-taken', 'workspace-dead', 'workspace-unavailable', 'workspace-reservation', 'workspace-followup']) {

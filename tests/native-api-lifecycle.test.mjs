@@ -45,7 +45,7 @@ function runCli(args, env = {}) {
   try {
     result = spawnSync(process.execPath, [path.join(repoRoot, "scripts", "native-agent.mjs"), ...args], {
       cwd: repoRoot,
-      env: { ...process.env, CODEX_THREAD_ID: "native-api-test-parent", LOCALAPPDATA: path.join(dir, "local"), SOL_LUNA_PLUGIN_STATE: path.join(dir, "plugin-state"), ...env },
+      env: { ...process.env, CODEX_THREAD_ID: "native-api-test-parent", CODEX_HOME: path.join(dir, "codex-home"), LOCALAPPDATA: path.join(dir, "local"), SOL_LUNA_PLUGIN_STATE: path.join(dir, "plugin-state"), ...env },
       stdio: ["ignore", outFd, errFd],
       windowsHide: true,
     });
@@ -188,6 +188,8 @@ try {
   const tasks = fakeTaskAdapter();
   const dependencies = {
     verifyRuntimeVersion: async () => ({ exePath: path.join(tempRoot, "codex.exe") }),
+    discoverApplyCompatibleRuntime: async () => ({versionDir: path.join(tempRoot, "runtime"), exePath: path.join(tempRoot, "codex.exe"), error: null}),
+    armOrReuseApiBootstrap: async ({runtimeDir}) => ({state: "armed", restartRequired: true, ready: false, reused: true, runtimeVersionDir: runtimeDir}),
     prepareGatewayIdentity: async ({ paths: service }) => {
       await mkdir(service.dir, { recursive: true });
       await writeFile(service.identity, `${JSON.stringify(identity)}\n`, "utf8");
@@ -314,7 +316,7 @@ try {
 
     const missingJournal = runCli(["--executor", profile.profileId, "--api-dir", path.join(tempRoot, "missing-api"), "--settings", paths.settings, "--main-model", "gpt-6.1-sol", "--task-nonce", "missing-api-task-01"]);
     equal(missingJournal.status, 2, "native-agent API dispatch fails closed without an install");
-    assert.match(missingJournal.stderr, /install journal is missing/);
+    assert.match(missingJournal.stderr, /API bootstrap is not armed/);
     assert.doesNotMatch(missingJournal.stderr, /native DeepSeek|isolated/i);
     checks += 1;
 
@@ -440,6 +442,25 @@ try {
     env: { SOL_LUNA_NATIVE_API_VERSION_DIR: path.join(tempRoot, "runtime") },
     taskAdapter: applyTasks,
   };
+  const armFailureProfile = createApiProfile({...definition, model: "exact/arm-failure-model"});
+  const armFailureSettings = {schemaVersion: 1, mode: "fixed", fixedExecutor: armFailureProfile.profileId,
+    profiles: {[armFailureProfile.profileId]: armFailureProfile}};
+  const armFailureSettingsPath = path.join(tempRoot, "arm-failure-router.json");
+  await saveRouterSettings(armFailureSettingsPath, armFailureSettings);
+  const noEnvironmentWrites = {get: async () => ({present: false, value: null}), set: async () => {throw new Error("Apply must not write on failed arm");}};
+  const armFailureTasks = fakeTaskAdapter();
+  const failedArm = await applyApiConfiguration({settings: armFailureSettings}, {
+    ...applyDeps,
+    settingsPath: armFailureSettingsPath,
+    taskAdapter: armFailureTasks,
+    bootstrapEnvironmentAdapter: noEnvironmentWrites,
+    armOrReuseApiBootstrap: async () => {throw new Error("approved patch allowlist is empty");},
+  });
+  equal(failedArm.applied, false, "Apply refuses when persistent bootstrap arming fails");
+  assert.match(failedArm.detail, /allowlist is empty/);
+  checks += 1;
+  await assert.rejects(readFile(applyPaths.journal(armFailureProfile.profileId)), {code: "ENOENT"});
+  equal(armFailureTasks.registers, 0, "failed bootstrap arm leaves no API profile task activation");
   const notInstalled = await getExecutorStatus({ settings: applySettings, profileId: applyProfile.profileId }, applyDeps);
   equal(notInstalled.installed, false, "status does not treat saved JSON as installed");
   equal(notInstalled.runtimeCompatible, true, "status reports a compatible staged runtime without installing");
@@ -472,12 +493,28 @@ try {
     ...applyDeps,
     apiDir: path.join(tempRoot, "unsupported-api"),
     settingsPath: applyPaths.settings,
-    verifyRuntimeVersion: async () => { throw new Error("runtime patch mismatch"); },
+    discoverApplyCompatibleRuntime: async () => ({versionDir: null, exePath: null, error: "runtime patch mismatch"}),
   });
   equal(unsupported.applied, false, "Apply fails closed without a compatible runtime");
   equal(unsupported.supported, false, "Apply reports unsupported instead of claiming ready");
   assert.match(unsupported.detail, /未支持|unsupported/);
   checks += 1;
+  let offArmCalls = 0;
+  let offPrepareCalls = 0;
+  const offSettingsPath = path.join(tempRoot, "disabled-router.json");
+  const offSettings = {...applySettings, enabled: false};
+  await saveRouterSettings(offSettingsPath, offSettings);
+  const disabledApply = await applyApiConfiguration({settings: offSettings}, {
+    ...applyDeps,
+    settingsPath: offSettingsPath,
+    armOrReuseApiBootstrap: async () => { offArmCalls += 1; throw new Error("must not arm while disabled"); },
+    verifyRuntimeVersion: async () => { offPrepareCalls += 1; throw new Error("must not inspect runtime while disabled"); },
+  });
+  equal(disabledApply.applied, false, "explicit Apply while router is off leaves API configuration unapplied");
+  assert.match(disabledApply.detail, /已关闭/);
+  checks += 1;
+  equal(offArmCalls, 0, "off Apply never arms a global bootstrap");
+  equal(offPrepareCalls, 0, "off Apply does not inspect or activate a runtime");
   statusHealthServer.close();
   await once(statusHealthServer, "close");
 

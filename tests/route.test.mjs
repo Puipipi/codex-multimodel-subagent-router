@@ -11,6 +11,14 @@ import { decideRoute } from '../scripts/route.mjs';
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliPath = path.join(repoRoot, 'scripts', 'route.mjs');
 const shanghai = '+08:00';
+const priorCodexHome = process.env.CODEX_HOME;
+const priorLocalAppData = process.env.LOCALAPPDATA;
+process.env.CODEX_HOME = path.join(os.tmpdir(), `route-test-codex-home-${process.pid}`);
+process.env.LOCALAPPDATA = path.join(os.tmpdir(), `route-test-local-${process.pid}`);
+process.on('exit', () => {
+  if (priorCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = priorCodexHome;
+  if (priorLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = priorLocalAppData;
+});
 let checks = 0;
 
 function equal(actual, expected, message) {

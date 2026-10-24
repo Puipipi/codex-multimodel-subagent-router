@@ -103,6 +103,8 @@ applyApiConfiguration({settings, expectedSha256?}, {settingsPath})
 - 点击后使用当前保存的 `sha256` revision；stale revision 在调用注入接口前被拒绝，提示重新载入。
 - 同一服务内并发应用只允许一个请求进入生命周期接口；重复点击显示正在进行，不会双重应用。UI 在请求期间禁用按钮。
 - 生产 apply 把 `{settings, expectedSha256}` 和当前服务的 `settingsPath` 交给生命周期模块，确保保存、读取与应用使用同一路径；不下载或替换 runtime、不启动或重启 Codex、不调用模型。
+- 若保存设置的 `enabled` 为 `false`，Apply 返回“自动分工已关闭”且不探测 runtime、不激活角色、不 arm 启动器。启用后，Apply 只接受经批准且位于 `CODEX_HOME/router-runtime/versions` 的 runtime；首次 arm 需要兼容性探针和当前用户环境 CAS，重复 Apply 仅复用同一有效 owned journal。失败时不报告 ready；dispatch 还会在 CLI 子进程上下文校验实际 Codex 祖先 executable hash，stock 或尚未重启时不 spawn。
+- 保存 off 会先 CAS 解除 `router-runtime/bootstrap-install.json` 的 owned API 启动器；只有该文件真实缺失才尝试 legacy native-isolated journal。损坏或 foreign owner 会保留环境值并报告。现有 child 不会被终止；当前 Codex 进程不会热切换，解除只影响下次启动。
 
 在已安装且兼容的 runtime 下，lifecycle 的 apply 只应用 owned API profile roles/catalog/provider/Task；不自动下载或安装 runtime，不关闭或重启 Codex，也不调用模型。新增角色需要提示完整重启 Codex 后生效；当前状态读取只报告采用未知。
 

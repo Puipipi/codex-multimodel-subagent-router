@@ -29,6 +29,8 @@ for (const file of [
   'scripts/native-upgrade-status.mjs',
   'scripts/native-connection-diagnostics.mjs',
   'scripts/native-bootstrap-install.mjs',
+  'scripts/native-bootstrap-maintenance.mjs',
+  'scripts/native-api-bootstrap-gate.mjs',
   'scripts/native-upgrade-guard.mjs',
   'native/bootstrap/bootstrap.c',
   'native/bootstrap/codex-bootstrap.exe',

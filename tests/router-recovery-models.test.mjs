@@ -9,6 +9,9 @@ import { API_PROVIDER_PRESETS, createRouterSettingsService, ROUTER_SETTINGS_TOOL
 import { handleHook } from '../scripts/route-hook.mjs';
 import { NativeTasks } from '../scripts/native-state.mjs';
 
+const priorCodexHome = process.env.CODEX_HOME;
+process.env.CODEX_HOME = path.join(os.tmpdir(), `router-recovery-isolated-codex-home-${process.pid}`);
+
 let checks = 0;
 function equal(actual, expected, message) { assert.equal(actual, expected, message); checks += 1; }
 function ok(actual, message) { assert.ok(actual, message); checks += 1; }
@@ -158,10 +161,11 @@ try {
 const settingsDir = await mkdtemp(path.join(os.tmpdir(), 'router-recovery-mcp-'));
 try {
   let stopRequests = 0;
+  let guardState = {state: 'disabled', reason: 'lifecycle guard stopped'};
   const service = createRouterSettingsService({
     settingsPath: path.join(settingsDir, 'router.json'),
     readNativeModels: async () => nativeCatalog,
-    guardStatus: async () => ({state: 'disabled', reason: 'lifecycle guard stopped'}),
+    guardStatus: async () => guardState,
     onRoutingDisabled: async () => { stopRequests += 1; return {requested: true}; },
   });
   const initial = (await service.callTool('router_settings_snapshot', {})).payload;
@@ -179,11 +183,19 @@ try {
   const refreshed = (await service.callTool('router_settings_snapshot', {})).payload;
   equal(refreshed.settings.enabled, false, 'MCP snapshot refresh preserves off');
   equal(refreshed.settings.fixedExecutor, 'same', 'off preserves the configured fixed executor');
+  guardState = {state: 'healthy', reason: null};
   const enabledSave = await service.callTool('router_settings_update', {
     set: {enabled: true}, expectedSha256: refreshed.sha256,
   });
   equal(enabledSave.payload.values.enabled, true, 'MCP can explicitly re-enable routing');
   equal(stopRequests, 1, 're-enabling does not request a stop');
+  const healthyReenable = await service.callTool('router_settings_update', {
+    set: {enabled: true}, expectedSha256: enabledSave.payload.sha256,
+  });
+  equal(stopRequests, 1, 'healthy guard leaves explicitly enabled routing running');
+  guardState = {state: 'disabled', reason: 'guard stopped again'};
+  await service.callTool('router_settings_update', {set: {enabled: true}, expectedSha256: healthyReenable.payload.sha256});
+  equal(stopRequests, 2, 'a disabled lifecycle guard continues to request idle stop on later updates');
 } finally {
   await rm(settingsDir, {recursive: true, force: true});
 }
@@ -225,3 +237,5 @@ try {
 }
 
 console.log(`PASS ${checks} router recovery/model assertions`);
+if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
+else process.env.CODEX_HOME = priorCodexHome;
