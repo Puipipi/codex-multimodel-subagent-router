@@ -22,6 +22,7 @@ static int app_server(int argc) {
   if (_wcsicmp(selected, L"exit") == 0) return 2;
   if (_wcsicmp(selected, L"success") == 0) {
     fputs("{\"id\":1,\"result\":{\"userAgent\":\"codex-cli/0.164.0-alpha.11.1 (windows)\"}}\n", stdout); fflush(stdout);
+    if (_wgetenv(L"CODEX_BOOTSTRAP_PROBE")) { fputs("{\"method\":\"remoteControl/status/changed\",\"params\":{}}\n", stdout); fflush(stdout); }
     if (!fgets(line, sizeof(line), stdin)) return 4;
     fputs("{\"id\":2,\"result\":{\"config\":{}}}\n", stdout); fflush(stdout);
     return 0;

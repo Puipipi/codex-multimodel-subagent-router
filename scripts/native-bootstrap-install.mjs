@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -216,7 +215,9 @@ export async function probePatchedAppServer({ exePath, codexHome, cwd, cliVersio
 export async function probeAndWriteCompatibilityReceipt({ officialPath, patchedPath, runtimeRoot, receiptPath = path.join(runtimeRoot, "compatibility.json"), approvedPatchHashes = [], timeoutMs = 10_000, AppServer: AppServerImpl = AppServer, readVersion = readCodexCliVersion, readPackageVersion = readDesktopPackageVersion } = {}) {
   const officialVersion = readVersion(officialPath);
   const desktopPackageVersion = readPackageVersion(officialPath);
-  const tempHome = await mkdtemp(path.join(os.tmpdir(), "codex-bootstrap-compatibility-"));
+  const probeRoot = path.join(path.resolve(runtimeRoot), "probes");
+  await mkdir(probeRoot, { recursive: true, mode: 0o700 });
+  const tempHome = await mkdtemp(path.join(probeRoot, "compatibility-"));
   const cwd = path.join(tempHome, "workspace");
   const codexHome = path.join(tempHome, "codex-home");
   await mkdir(cwd, { recursive: true });
@@ -226,7 +227,7 @@ export async function probeAndWriteCompatibilityReceipt({ officialPath, patchedP
     const probeResult = await probePatchedAppServer({ exePath: patchedPath, codexHome, cwd, cliVersion: officialVersion, timeoutMs, AppServer: AppServerImpl });
     return await writeCompatibilityReceipt(receiptPath, { officialPath, officialVersion, desktopPackageVersion, patchedPath, probeResult, approvedPatchHashes });
   } finally {
-    await rm(tempHome, { recursive: true, force: true });
+    await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
   }
 }
 

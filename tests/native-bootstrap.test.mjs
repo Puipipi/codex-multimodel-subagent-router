@@ -103,7 +103,7 @@ try {
   });
   assert.equal(healthy.status, 0, healthy.stderr);
   assert.equal(healthy.stdout.replaceAll('\r\n', '\n'), '{"id":1,"result":{"origin":"patched"}}\n{"id":2,"result":{"config":{}}}\n', 'successful isolated initialize/config-read probe selects patched CLI for untouched desktop stream');
-  assert.ok((await readFile(path.join(root, 'probe-home.txt'), 'utf8')).startsWith(os.tmpdir()), 'preflight reads only a throwaway CODEX_HOME');
+  assert.ok((await readFile(path.join(root, 'probe-home.txt'), 'utf8')).startsWith(path.join(runtime, 'probes') + path.sep), 'preflight CODEX_HOME is created under the managed runtime root');
   const liveFailure = spawnSync(harness, ['app-server'], {
     input: request, encoding: 'utf8', windowsHide: true, timeout: 7000,
     env: { ...process.env, CODEX_BOOTSTRAP_TEST_OFFICIAL: backend, CODEX_BOOTSTRAP_TEST_PACKAGE_VERSION: '26.1021.3705.0', CODEX_BOOTSTRAP_TEST_RUNTIME_ROOT: runtime, CODEX_HOME: root, PATCHED_MODE: 'live-exit', PATCH_MARKER: path.join(root, 'patch-started.marker'), PROBE_HOME_MARKER: path.join(root, 'probe-home.txt') },

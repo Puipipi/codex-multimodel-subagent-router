@@ -64,7 +64,9 @@ try {
 
   const cliVersion = '0.164.0-alpha.11.1';
   let fakeCloseCalls = 0;
+  let lastProbeOptions;
   const fakeServer = (userAgent, extra = {}) => class {
+    constructor(options) { lastProbeOptions = options; }
     async start() {}
     async call(method) {
       if (method === 'initialize') return { userAgent, ...extra };
@@ -101,6 +103,8 @@ try {
   assert.equal(receipt.compatibility?.status, 'passed');
   assert.equal(receipt.compatibility?.cliVersion, cliVersion);
   assert.equal(receipt.patchedSha256, patchedHash);
+  assert.ok(lastProbeOptions.codexHome.startsWith(path.join(receiptRoot, 'probes') + path.sep), 'probe CODEX_HOME is isolated beneath the managed runtime root');
+  await assert.rejects(() => readFile(lastProbeOptions.codexHome), 'the exclusive probe home is cleaned after completion');
   assert.deepEqual(JSON.parse(await readFile(path.join(receiptRoot, 'compatibility.json'), 'utf8')), receipt,
     'the high-level default receipt path uses the configured AppServer and writes the canonical nested receipt');
   console.log('PASS bootstrap environment ownership, prior snapshot and CAS rollback');
