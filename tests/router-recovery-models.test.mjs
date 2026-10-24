@@ -5,7 +5,7 @@ import path from 'node:path';
 import { decideRoute } from '../scripts/route.mjs';
 import * as nativeAgent from '../scripts/native-agent.mjs';
 import { createDefaultRouterSettings, validateRouterSettings } from '../scripts/native-api-settings.mjs';
-import { API_PROVIDER_PRESETS, createRouterSettingsService, selectorOptions } from '../scripts/router-settings-mcp.mjs';
+import { API_PROVIDER_PRESETS, createRouterSettingsService, ROUTER_SETTINGS_TOOLS, selectorOptions } from '../scripts/router-settings-mcp.mjs';
 import { handleHook } from '../scripts/route-hook.mjs';
 import { NativeTasks } from '../scripts/native-state.mjs';
 
@@ -77,6 +77,55 @@ equal(sameRoute.native_spawn.model, 'gpt-6.1-sol', 'route carries the trusted cu
 equal(sameRoute.native_spawn.fork_turns, 'none', 'same-model route has no inherited turns');
 const laterSameRoute = await decideRoute({routerSettings: sameSettings, mainModel: 'gpt-6.1-astra', at: '2026-10-19T10:30:00+08:00'});
 equal(laterSameRoute.native_spawn.model, 'gpt-6.1-astra', 'same tracks the actual current model on the next dispatch');
+
+const exactCatalogRoute = await decideRoute({
+  routerSettings: {...createDefaultRouterSettings(), mode: 'fixed', fixedExecutor: 'native:gpt-6-luna'},
+  readNativeModels: async () => [{value: 'gpt-6-luna', title: 'GPT-6 Luna', reasoningEfforts: ['low']}],
+  at: '2026-10-19T10:30:00+08:00',
+});
+equal(exactCatalogRoute.native_spawn.model, 'gpt-6-luna', 'route checks native selectors against the actual catalog before returning spawn data');
+await assert.rejects(
+  decideRoute({
+    routerSettings: {...createDefaultRouterSettings(), mode: 'fixed', fixedExecutor: 'native:stale-model'},
+    readNativeModels: async () => [{value: 'gpt-6-luna', title: 'GPT-6 Luna', reasoningEfforts: []}],
+    at: '2026-10-19T10:30:00+08:00',
+  }),
+  /not present in the current Codex catalog/,
+  'route rejects a stale native selector instead of returning dispatch metadata',
+);
+checks += 1;
+await assert.rejects(
+  decideRoute({
+    routerSettings: {...createDefaultRouterSettings(), mode: 'fixed', fixedExecutor: 'native:gpt-6-luna'},
+    readNativeModels: async () => { throw new Error('models_cache.json is missing'); },
+    at: '2026-10-19T10:30:00+08:00',
+  }),
+  /models_cache.json is missing/,
+  'route fails explicitly when the catalog is unavailable',
+);
+checks += 1;
+const disabledWithoutCatalog = await decideRoute({
+  routerSettings: {...settings, enabled: false},
+  readNativeModels: async () => { throw new Error('catalog must not be read while disabled'); },
+  at: '2026-10-19T10:30:00+08:00',
+});
+equal(disabledWithoutCatalog.executor, 'off', 'disabled route returns before attempting catalog reads');
+
+const snapshotToolSchema = ROUTER_SETTINGS_TOOLS.find(tool => tool.name === 'router_settings_snapshot').outputSchema;
+const nativeModelItemSchema = snapshotToolSchema.properties.nativeModels.items;
+equal(nativeModelItemSchema.additionalProperties, false, 'snapshot native model schema rejects undeclared fields');
+equal(nativeModelItemSchema.required.join(','), 'value,title,reasoningEfforts', 'snapshot schema requires all safe catalog fields');
+ok(nativeModelItemSchema.properties.reasoningEfforts.items.enum.includes('high'), 'snapshot schema limits reasoning efforts to known values');
+const catalogService = createRouterSettingsService({
+  settingsPath: path.join(os.tmpdir(), `router-catalog-schema-${process.pid}.json`),
+  readNativeModels: async () => [{value: 'gpt-6-luna', title: 'GPT-6 Luna', reasoningEfforts: ['low', 'high']}],
+});
+const advertisedCatalog = (await catalogService.callTool('router_settings_snapshot')).payload.nativeModels;
+deepStrictEqual(Object.keys(advertisedCatalog[0]).sort(), ['reasoningEfforts', 'title', 'value'], 'snapshot only emits fields declared by the native model schema');
+equal(advertisedCatalog[0].value, 'gpt-6-luna', 'snapshot model payload matches the advertised exact selector slug');
+
+function deepStrictEqual(actual, expected, message) { assert.deepEqual(actual, expected, message); checks += 1; }
+
 const guardDisabled = await decideRoute({
   routerSettings: sameSettings,
   mainModel: 'gpt-6.1-sol',

@@ -85,7 +85,19 @@ const snapshotOutputSchema = {
     sha256: {type: ['string', 'null']},
     saved: {type: 'boolean'},
     selectors: {type: 'array', items: {type: 'object'}},
-    nativeModels: {type: 'array', items: {type: 'object'}},
+    nativeModels: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          value: {type: 'string'},
+          title: {type: 'string'},
+          reasoningEfforts: {type: 'array', items: {type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max']}},
+        },
+        required: ['value', 'title', 'reasoningEfforts'],
+      },
+    },
     providerPresets: {type: 'object'},
     capabilities: {type: 'object'},
     status: {type: 'object'},

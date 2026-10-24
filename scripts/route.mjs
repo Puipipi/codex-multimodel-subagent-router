@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { effectiveRouterEnabled, loadRouterSettings, validateRouterSettings } from './native-api-settings.mjs';
+import { readNativeModelOptions } from './native-model-catalog.mjs';
 
 const DEEPSEEK_NATIVE_SLUG = 'deepseek/deepseek-flash';
 
@@ -145,6 +146,7 @@ async function writeOverride(sessionId, executor, stateDir) {
 export async function decideRoute({
   at = new Date(), executor, setSessionExecutor, mainModel, guardStatus,
   resetSession = false, sessionId, stateDir, routerSettings, settingsPath,
+  readNativeModels = readNativeModelOptions,
 } = {}) {
   if (typeof at === 'string' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(at)) {
     throw new Error('--at must be a complete ISO timestamp with Z or an explicit UTC offset');
@@ -217,6 +219,12 @@ export async function decideRoute({
     }
   }
   const resolved = resolveSelector(selector, settings);
+  if (resolved.executor === 'native') {
+    const catalog = await readNativeModels();
+    if (!catalog.some(model => model?.value === resolved.model)) {
+      throw new Error(`Selected native model is not present in the current Codex catalog: ${resolved.model}`);
+    }
+  }
   const result = { ...plan, executor: resolved.executor, profileId: resolved.profileId, source, reason };
   if (resolved.executor === 'same' && (typeof mainModel !== 'string' || !mainModel.trim())) {
     throw new Error('same-model routing requires the trusted current chat model (--main-model)');

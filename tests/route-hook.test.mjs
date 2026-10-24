@@ -624,6 +624,7 @@ try {
   await mkdir(unrelated, { recursive: true });
   await cp(path.join(repoRoot, 'scripts', 'route-hook.mjs'), path.join(pluginScripts, 'route-hook.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'route.mjs'), path.join(pluginScripts, 'route.mjs'));
+  await cp(path.join(repoRoot, 'scripts', 'native-model-catalog.mjs'), path.join(pluginScripts, 'native-model-catalog.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'native-api-settings.mjs'), path.join(pluginScripts, 'native-api-settings.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'native-state.mjs'), path.join(pluginScripts, 'native-state.mjs'));
   await cp(path.join(repoRoot, 'scripts', 'native-credentials.mjs'), path.join(pluginScripts, 'native-credentials.mjs'));

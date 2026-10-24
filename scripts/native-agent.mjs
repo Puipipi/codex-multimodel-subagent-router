@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PICKER_SLUG } from "./native-routing.mjs";
@@ -7,6 +6,9 @@ import { ensureNativeDeepseekDispatch } from "./native-isolated-install.mjs";
 import { defaultRouterSettingsPath, loadRouterSettings } from "./native-api-settings.mjs";
 import { ensureNativeApiDispatch } from "./native-api-install.mjs";
 import { defaultNativeApiDir } from "./native-api-manager.mjs";
+import { defaultModelsCachePath } from "./native-model-catalog.mjs";
+
+export { defaultModelsCachePath, nativeModelOptionsFromCache, readNativeModelOptions } from "./native-model-catalog.mjs";
 
 const LUNA_MAP = {
   "gpt-6.1-sol": "gpt-6-luna",
@@ -14,34 +16,9 @@ const LUNA_MAP = {
   "gpt-5.6-sol": "gpt-5.6-luna",
 };
 
-export function defaultModelsCachePath(env = process.env) {
-  const home = env.CODEX_HOME || path.join(os.homedir(), ".codex");
-  return path.join(home, "models_cache.json");
-}
-
 export function modelsFromCache(cache) {
   if (!cache || !Array.isArray(cache.models)) throw new Error("models_cache.json has no models");
   return cache.models.map((model) => model?.slug).filter((slug) => typeof slug === "string");
-}
-
-const REASONING_LEVELS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
-
-export function nativeModelOptionsFromCache(cache) {
-  if (!cache || !Array.isArray(cache.models)) throw new Error("models_cache.json has no models");
-  return cache.models
-    .filter((model) => typeof model?.slug === "string" && model.slug.trim())
-    .map((model) => ({
-      value: model.slug,
-      title: typeof model.display_name === "string" && model.display_name.trim() ? model.display_name : model.slug,
-      reasoningEfforts: Array.isArray(model.supported_reasoning_levels)
-        ? model.supported_reasoning_levels.filter((effort) => REASONING_LEVELS.has(effort))
-        : [],
-    }));
-}
-
-export async function readNativeModelOptions({ cachePath = defaultModelsCachePath() } = {}) {
-  if (!existsSync(cachePath)) throw new Error("models_cache.json is missing; native model choices are unavailable");
-  return nativeModelOptionsFromCache(JSON.parse(readFileSync(cachePath, "utf8")));
 }
 
 export function resolveNativeAgent({ executor, mainModel, models = [], apiProfiles = {} }) {
