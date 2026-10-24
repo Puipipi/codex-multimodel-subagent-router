@@ -4,9 +4,9 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export const NATIVE_RUNTIME_VERSION = "0.163.0-alpha.10.2";
-export const NATIVE_RUNTIME_SOURCE_COMMIT = "4ebc485ca321243727539187169425fcf972f2c4";
-export const NATIVE_RUNTIME_PATCH_SHA256 = "2a5d6310c76b992ef772e62410c593204b570ff20f6e8a967f43deeac42bc3e7";
+export const NATIVE_RUNTIME_VERSION = "0.164.0-alpha.11.1";
+export const NATIVE_RUNTIME_SOURCE_COMMIT = "6905ecede7816e91373e9eabda3f6b0368fc747b";
+export const NATIVE_RUNTIME_PATCH_SHA256 = "827a8ef35290fc20d914b7af2b55e7e5c3f25ff68adf7bb410f899ac7302d513";
 export const NATIVE_RUNTIME_TARGET = "x86_64-pc-windows-msvc";
 export const REQUIRED_COMPANIONS = [
   "codex-code-mode-host.exe",
@@ -248,7 +248,8 @@ export async function stageRuntime(options) {
 export async function checkStockCliVersion(stockCliPath, { versionChecker = defaultVersionChecker } = {}) {
   const output = await versionChecker(stockCliPath, ["--version"], { windowsHide: true });
   const text = typeof output === "string" ? output : output?.stdout ?? "";
-  const match = /(?:^|\s)(0\.163\.0-alpha\.10\.2)(?=\s|$)/m.exec(text);
+  const escapedVersion = NATIVE_RUNTIME_VERSION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`(?:^|\\s)(${escapedVersion})(?=\\s|$)`, "m").exec(text);
   if (!match || (typeof output !== "string" && output?.status !== 0)) {
     throw new Error(`expected stock CLI version ${NATIVE_RUNTIME_VERSION}; got ${text.trim() || "no version output"}`);
   }

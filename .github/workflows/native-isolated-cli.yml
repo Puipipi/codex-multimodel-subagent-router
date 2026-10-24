@@ -11,7 +11,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 180
     env:
-      STABLE_GIT_COMMIT: 4ebc485ca321243727539187169425fcf972f2c4
+      STABLE_GIT_COMMIT: 6905ecede7816e91373e9eabda3f6b0368fc747b
+      EXPECTED_PATCH_SHA256: 827a8ef35290fc20d914b7af2b55e7e5c3f25ff68adf7bb410f899ac7302d513
       CARGO_BUILD_JOBS: 2
       LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -22,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: openai/codex
-          ref: 4ebc485ca321243727539187169425fcf972f2c4
+          ref: 6905ecede7816e91373e9eabda3f6b0368fc747b
           persist-credentials: false
 
       - name: Check out this repository for the reviewed patch
@@ -33,7 +34,7 @@ jobs:
       - name: Verify source and apply required custom patch
         shell: pwsh
         run: |
-          $expected = '4ebc485ca321243727539187169425fcf972f2c4'
+          $expected = '6905ecede7816e91373e9eabda3f6b0368fc747b'
           $actual = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) {
             throw "Unexpected upstream revision: $actual (expected $expected)"
@@ -43,6 +44,10 @@ jobs:
           if (-not (Test-Path -LiteralPath $patch -PathType Leaf)) {
             Write-Error 'Required patch is missing: router/patches/native-isolated-cli.patch. Add the reviewed patch before running this workflow.'
             exit 1
+          }
+          $patchHash = (Get-FileHash -LiteralPath $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -ne $env:EXPECTED_PATCH_SHA256) {
+            throw "Unexpected patch SHA-256: $patchHash (expected $env:EXPECTED_PATCH_SHA256)"
           }
           git apply --check -- $patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -101,6 +106,7 @@ jobs:
           key: windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-${{ hashFiles('router/patches/native-isolated-cli.patch', 'codex-rs/Cargo.lock') }}
           restore-keys: |
             windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-
+            windows-rust-1.95-
 
       - name: Restore legacy debug-only Cargo cache
         if: ${{ steps.cargo-cache.outputs.cache-matched-key == '' }}
@@ -114,6 +120,7 @@ jobs:
           key: windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-${{ hashFiles('router/patches/native-isolated-cli.patch', 'codex-rs/Cargo.lock') }}
           restore-keys: |
             windows-rust-1.95-${{ env.STABLE_GIT_COMMIT }}-
+            windows-rust-1.95-
 
       - name: Run Cargo.lock normalizer test
         shell: pwsh

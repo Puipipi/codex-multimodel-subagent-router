@@ -1,5 +1,5 @@
 diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
-index 34d5511..c4ade90 100644
+index 34d55118c..c4ade90e2 100644
 --- a/codex-rs/codex-api/src/sse/responses.rs
 +++ b/codex-rs/codex-api/src/sse/responses.rs
 @@ -16,6 +16,7 @@ use codex_protocol::models::ResponseItem;
@@ -44,7 +44,7 @@ index 34d5511..c4ade90 100644
                  }
                  debug!("failed to parse ResponseItem from output_item.added");
 diff --git a/codex-rs/core/src/agent/child_config.rs b/codex-rs/core/src/agent/child_config.rs
-index 3d56d7e..d27fdc6 100644
+index 3d56d7e64..d27fdc647 100644
 --- a/codex-rs/core/src/agent/child_config.rs
 +++ b/codex-rs/core/src/agent/child_config.rs
 @@ -5,6 +5,11 @@
@@ -278,7 +278,7 @@ index 3d56d7e..d27fdc6 100644
 +    }
 +}
 diff --git a/codex-rs/core/src/agent/control/spawn.rs b/codex-rs/core/src/agent/control/spawn.rs
-index 70cf8b7..69aa9ab 100644
+index 22cd72560..82f2635dc 100644
 --- a/codex-rs/core/src/agent/control/spawn.rs
 +++ b/codex-rs/core/src/agent/control/spawn.rs
 @@ -4,6 +4,9 @@ use super::spawn_telemetry::SpawnMeasurements;
@@ -291,7 +291,7 @@ index 70cf8b7..69aa9ab 100644
  use crate::agent::role::apply_role_to_config;
  use crate::agent::types::AgentMetadata;
  use crate::agent::types::LiveAgent;
-@@ -187,6 +190,26 @@ async fn load_agent_model_context(
+@@ -195,6 +198,26 @@ async fn load_agent_model_context(
      }
  }
  
@@ -318,7 +318,7 @@ index 70cf8b7..69aa9ab 100644
  impl LocalAgentControl {
      /// Restore persisted V2 agent identities without reopening their runtimes.
      pub(crate) async fn restore_v2_agent_metadata(
-@@ -414,7 +437,7 @@ impl LocalAgentControl {
+@@ -427,7 +450,7 @@ impl LocalAgentControl {
          } else {
              None
          };
@@ -327,7 +327,7 @@ index 70cf8b7..69aa9ab 100644
          if let Some(role_name) = session_source.get_agent_role() {
              let runtime_approval_policy = config.permissions.approval_policy.value();
              let runtime_approvals_reviewer = config.approvals_reviewer;
-@@ -465,7 +488,49 @@ impl LocalAgentControl {
+@@ -478,7 +501,49 @@ impl LocalAgentControl {
                          "Model provider `{stored_model_provider}` not found"
                      ))
                  })?;
@@ -378,7 +378,7 @@ index 70cf8b7..69aa9ab 100644
          }
          let parent_thread_id = owner_thread_id
              .or_else(|| initial_history.get_resumed_parent_thread_id())
-@@ -1530,3 +1595,40 @@ impl LocalAgentControl {
+@@ -1576,3 +1641,40 @@ impl LocalAgentControl {
          Ok((resumed_thread.thread_id, multi_agent_version))
      }
  }
@@ -420,9 +420,10 @@ index 70cf8b7..69aa9ab 100644
 +    }
 +}
 diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/control_tests.rs
+index 59027230a..7dba6a6c3 100644
 --- a/codex-rs/core/src/agent/control_tests.rs
 +++ b/codex-rs/core/src/agent/control_tests.rs
-@@ -3,6 +3,10 @@
+@@ -3,6 +3,10 @@ use crate::CodexThread;
  use crate::StateDbHandle;
  use crate::ThreadManager;
  use crate::agent::agent_status_from_event;
@@ -433,15 +434,15 @@ diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/
  use crate::agent::api::AgentControl;
  use crate::agent::api::AgentInfo;
  use crate::agent::api::AgentInput;
-@@ -21,6 +25,7 @@
+@@ -21,6 +25,7 @@ use crate::agent_communication::AgentCommunicationKind;
  use crate::config::AgentRoleConfig;
  use crate::config::Config;
  use crate::config::ConfigBuilder;
 +use crate::config::Constrained;
+ use crate::context::BaseInstructionsFragment;
  use crate::context::ContextualUserFragment;
  use crate::context::ManagedDeveloperInstructions;
- use crate::context::MultiAgentRoleInstructions;
-@@ -41,6 +46,9 @@
+@@ -43,13 +48,15 @@ use codex_extension_api::LoadedUserInstructions;
  use codex_extension_api::ThreadInstructionsProvider;
  use codex_extension_api::empty_extension_registry;
  use codex_features::Feature;
@@ -451,7 +452,14 @@ diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/
  use codex_history::CompactedItem;
  use codex_history::InitialHistory;
  use codex_history::ResumedHistory;
-@@ -56,6 +64,7 @@
+ use codex_history::RolloutItem;
+ use codex_login::AuthManager;
+ use codex_login::CodexAuth;
+-use codex_models_manager::model_info::model_info_from_slug;
+ use codex_protocol::AgentPath;
+ use codex_protocol::ResponseItemId;
+ use codex_protocol::capabilities::CapabilityRootLocation;
+@@ -59,6 +66,7 @@ use codex_protocol::config_types::CollaborationMode;
  use codex_protocol::config_types::ModeKind;
  use codex_protocol::config_types::ReasoningSummary;
  use codex_protocol::config_types::Settings;
@@ -459,17 +467,15 @@ diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/
  use codex_protocol::error::AgentErrorContext;
  use codex_protocol::error::CodexErrKind;
  use codex_protocol::error::CodexErrorDetails;
-@@ -74,7 +83,9 @@
- use codex_protocol::models::MessagePhase;
- use codex_protocol::models::PermissionProfile;
+@@ -79,6 +87,7 @@ use codex_protocol::models::PermissionProfile;
  use codex_protocol::models::ResponseItem;
-+use codex_protocol::openai_models::ModelsResponse;
+ use codex_protocol::openai_models::ModelsResponse;
  use codex_protocol::openai_models::ReasoningEffort;
 +use codex_protocol::openai_models::ReasoningEffortPreset;
  use codex_protocol::protocol::AskForApproval;
  use codex_protocol::protocol::EnvironmentConfigState;
  use codex_protocol::protocol::ErrorEvent;
-@@ -1214,17 +1225,18 @@
+@@ -1222,17 +1231,18 @@ enum V2ReloadRoute {
      NestedParent,
  }
  
@@ -490,12 +496,10 @@ diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/
          Some(task_name.to_string()),
      )
      .expect("child source");
-@@ -1240,6 +1252,16 @@
-         )
-         .await
+@@ -1250,6 +1260,16 @@ async fn spawn_v2_reload_test_child(
          .expect("spawn_agent should succeed")
-+}
-+
+ }
+ 
 +async fn spawn_v2_reload_test_child(
 +    control: &LocalAgentControl,
 +    config: Config,
@@ -504,10 +508,12 @@ diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/
 +) -> LiveAgent {
 +    spawn_v2_reload_test_child_with_role(control, config, parent, task_name, /*agent_role*/ None)
 +        .await
- }
- 
++}
++
  async fn check_v2_agent_reload(route: V2ReloadRoute) {
-@@ -6051,3 +6073,559 @@
+     let (home, mut config) = test_config().await;
+     let _ = config.features.enable(Feature::MultiAgentV2);
+@@ -6125,3 +6145,559 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails()
          .await
          .expect("tree shutdown after partial subtree resume should succeed");
  }
@@ -1067,9 +1073,8 @@ diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/
 +    assert_eq!(root_after.service_tier, root_before.service_tier);
 +    Ok(())
 +}
-
 diff --git a/codex-rs/core/src/agent/mod.rs b/codex-rs/core/src/agent/mod.rs
-index c9a1547..a602cdb 100644
+index c9a154799..a602cdbf8 100644
 --- a/codex-rs/core/src/agent/mod.rs
 +++ b/codex-rs/core/src/agent/mod.rs
 @@ -2,6 +2,7 @@ pub(crate) mod agent_resolver;
@@ -1082,7 +1087,7 @@ index c9a1547..a602cdb 100644
  pub(crate) mod status;
 diff --git a/codex-rs/core/src/agent/native_deepseek.rs b/codex-rs/core/src/agent/native_deepseek.rs
 new file mode 100644
-index 0000000..f5036df
+index 000000000..f5036df4d
 --- /dev/null
 +++ b/codex-rs/core/src/agent/native_deepseek.rs
 @@ -0,0 +1,512 @@
@@ -1599,7 +1604,7 @@ index 0000000..f5036df
 +    }
 +}
 diff --git a/codex-rs/core/src/agent/role.rs b/codex-rs/core/src/agent/role.rs
-index cf43be3..e52bb09 100644
+index b1642fe5c..04cf85d2f 100644
 --- a/codex-rs/core/src/agent/role.rs
 +++ b/codex-rs/core/src/agent/role.rs
 @@ -96,7 +96,8 @@ async fn apply_role_to_config_inner(
@@ -1613,10 +1618,10 @@ index cf43be3..e52bb09 100644
              {
                  overrides.features.insert(feature.key().to_string(), false);
 diff --git a/codex-rs/core/src/agent/role_tests.rs b/codex-rs/core/src/agent/role_tests.rs
-index b480f58..fd55c3f 100644
+index 4d97f992d..38167e932 100644
 --- a/codex-rs/core/src/agent/role_tests.rs
 +++ b/codex-rs/core/src/agent/role_tests.rs
-@@ -539,6 +539,51 @@ command = "attacker-command"
+@@ -560,6 +560,51 @@ command = "attacker-command"
      }
  }
  
@@ -1669,10 +1674,10 @@ index b480f58..fd55c3f 100644
  async fn apply_role_disables_plugins_unless_required_by_managed_policy() {
      let home = TempDir::new().expect("create temp dir");
 diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
-index 9ef4c05..d8b48c6 100644
+index 152fa7145..aff4f544f 100644
 --- a/codex-rs/core/src/client.rs
 +++ b/codex-rs/core/src/client.rs
-@@ -88,6 +88,7 @@ use codex_protocol::ThreadId;
+@@ -89,6 +89,7 @@ use codex_protocol::ThreadId;
  use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
  use codex_protocol::config_types::Verbosity as VerbosityConfig;
  use codex_protocol::models::ResponseItem;
@@ -1680,7 +1685,7 @@ index 9ef4c05..d8b48c6 100644
  use codex_protocol::openai_models::ModelInfo;
  use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
  use codex_protocol::protocol::AuthRecoveryEvent;
-@@ -979,7 +980,14 @@ impl ModelClient {
+@@ -1015,7 +1016,14 @@ impl ModelClient {
          let mut prefix = Vec::new();
          let tools = if model_info.use_responses_lite {
              if !prompt.tools.is_empty() {
@@ -1696,7 +1701,7 @@ index 9ef4c05..d8b48c6 100644
                  prefix.push(ResponseItem::AdditionalTools {
                      id: Some(ResponseItemId::with_suffix(
                          "at",
-@@ -991,7 +999,17 @@ impl ModelClient {
+@@ -1027,7 +1035,17 @@ impl ModelClient {
              }
              None
          } else {
@@ -1715,7 +1720,7 @@ index 9ef4c05..d8b48c6 100644
          };
          if !prompt.base_instructions.text.is_empty() {
              let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
-@@ -1068,6 +1086,11 @@ impl ModelClient {
+@@ -1109,6 +1127,11 @@ impl ModelClient {
                  item.clear_tool_result_metadata();
              }
          }
@@ -1728,7 +1733,7 @@ index 9ef4c05..d8b48c6 100644
          let request = ResponsesApiRequest {
              model: model_info.slug.clone(),
 diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
-index 2fb6da8..52f99be 100644
+index b2d22649a..5e30375b9 100644
 --- a/codex-rs/core/src/thread_manager.rs
 +++ b/codex-rs/core/src/thread_manager.rs
 @@ -15,6 +15,10 @@ use crate::agent::LocalAgentControl;
@@ -1742,7 +1747,7 @@ index 2fb6da8..52f99be 100644
  use crate::agents_md_manager::SessionInstructions;
  use crate::attestation::AttestationProvider;
  use crate::codex_thread::CodexThread;
-@@ -461,6 +465,68 @@ pub fn build_models_manager(
+@@ -482,6 +486,68 @@ pub fn build_models_manager(
      manager
  }
  
@@ -1811,7 +1816,7 @@ index 2fb6da8..52f99be 100644
  pub fn thread_store_from_config(
      config: &Config,
      state_db: Option<StateDbHandle>,
-@@ -2323,6 +2389,20 @@ impl ThreadManagerState {
+@@ -2396,6 +2462,20 @@ impl ThreadManagerState {
          };
          let attachment_source =
              forked_from_thread_id.filter(|_| matches!(&initial_history, InitialHistory::Forked(_)));
@@ -1832,7 +1837,7 @@ index 2fb6da8..52f99be 100644
          let spawn_result = Session::spawn(SessionSpawnArgs {
              startup,
              config,
-@@ -2330,7 +2410,7 @@ impl ThreadManagerState {
+@@ -2404,7 +2484,7 @@ impl ThreadManagerState {
              instructions,
              installation_id: self.installation_id.clone(),
              auth_manager,
@@ -1841,7 +1846,7 @@ index 2fb6da8..52f99be 100644
              git_root_discovery: Arc::clone(&self.git_root_discovery),
              environment_manager: Arc::clone(&self.environment_manager),
              skills_service: Arc::clone(&self.skills_service),
-@@ -2768,3 +2848,203 @@ fn append_interrupted_boundary(
+@@ -2850,3 +2930,203 @@ fn append_interrupted_boundary(
  #[cfg(test)]
  #[path = "thread_manager_tests.rs"]
  mod tests;
@@ -2046,7 +2051,7 @@ index 2fb6da8..52f99be 100644
 +    }
 +}
 diff --git a/codex-rs/protocol/src/lib.rs b/codex-rs/protocol/src/lib.rs
-index 17e22cc..efb6cd8 100644
+index 17e22cc5a..efb6cd8f9 100644
 --- a/codex-rs/protocol/src/lib.rs
 +++ b/codex-rs/protocol/src/lib.rs
 @@ -54,5 +54,6 @@ pub mod review_format;
@@ -2058,7 +2063,7 @@ index 17e22cc..efb6cd8 100644
  pub mod user_input;
 diff --git a/codex-rs/protocol/src/sol_luna_wire_aliases.rs b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
 new file mode 100644
-index 0000000..ad7be7d
+index 000000000..ad7be7d21
 --- /dev/null
 +++ b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
 @@ -0,0 +1,504 @@
