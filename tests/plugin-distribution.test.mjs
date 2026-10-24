@@ -116,6 +116,21 @@ try {
   await assert.rejects(() => packagePlugin({ source, out: output }), /already exists/i, "existing ZIP is not overwritten");
   assert.equal(sha(await readFile(output)), before, "rejected repeated output leaves prior ZIP unchanged");
 
+  const tempAlias = root + "-temp-junction";
+  await symlink(root, tempAlias, "junction");
+  const originalTemp = process.env.TEMP;
+  try {
+    process.env.TEMP = tempAlias;
+    const tempJunctionOutput = path.join(outputDir, "temp junction.zip");
+    const tempJunctionResult = await packagePlugin({ source, out: tempJunctionOutput });
+    assert.ok(tempJunctionResult.bytes > 0, "packaging succeeds when TEMP is reached through a junction");
+    assert.equal((await inspectZip(tempJunctionOutput)).length, tempJunctionResult.fileCount + 1, "TEMP junction package has a complete archive inventory");
+  } finally {
+    if (originalTemp === undefined) delete process.env.TEMP;
+    else process.env.TEMP = originalTemp;
+    await rm(tempAlias, { recursive: true, force: true });
+  }
+
   const dirtySource = await createFixture("dirty tracked source");
   await writeFile(path.join(dirtySource, "README.md"), "modified tracked source");
   await assert.rejects(() => packagePlugin({ source: dirtySource, out: path.join(root, "external distributions 文件夹", "dirty.zip") }), /clean tracked/i, "dirty tracked tree cannot claim its HEAD as package contents");

@@ -192,7 +192,8 @@ export async function packagePlugin({ source, out } = {}) {
 
   const selected = readTrackedFiles(sourceRoot, commit);
   const contract = validateContracts(selected);
-  const stateRoot = await mkdtemp(path.join(os.tmpdir(), "sol-luna-plugin-package-"));
+  const canonicalTempParent = await realpath(os.tmpdir());
+  const stateRoot = await mkdtemp(path.join(canonicalTempParent, "sol-luna-plugin-package-"));
   const stage = path.join(stateRoot, "content");
   const zipTemp = path.join(outputDir, `.plugin-${randomUUID()}.tmp.zip`);
   const helper = path.join(path.dirname(fileURLToPath(import.meta.url)), "package-plugin-zip.ps1");
