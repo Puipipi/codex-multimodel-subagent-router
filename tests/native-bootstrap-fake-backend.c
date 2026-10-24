@@ -37,6 +37,7 @@ static int app_server(int argc) {
 }
 int wmain(int argc, wchar_t **argv) {
   HANDLE out=GetStdHandle(STD_OUTPUT_HANDLE); DWORD wrote;
+  if(argc>2 && _wcsicmp(argv[1],L"--spawn-observer")==0){wchar_t command[32768];_snwprintf(command,32768,L"\"%s\" --bootstrap-observe-backend",argv[2]);STARTUPINFOW si;ZeroMemory(&si,sizeof(si));si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES|STARTF_USESHOWWINDOW;si.wShowWindow=SW_HIDE;si.hStdInput=GetStdHandle(STD_INPUT_HANDLE);si.hStdOutput=GetStdHandle(STD_OUTPUT_HANDLE);si.hStdError=GetStdHandle(STD_ERROR_HANDLE);PROCESS_INFORMATION pi;ZeroMemory(&pi,sizeof(pi));if(!CreateProcessW(argv[2],command,NULL,NULL,TRUE,CREATE_NO_WINDOW,NULL,NULL,&si,&pi))return 126;WaitForSingleObject(pi.hProcess,10000);DWORD exitCode=126;GetExitCodeProcess(pi.hProcess,&exitCode);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);return (int)exitCode;}
   if(argc>1 && _wcsicmp(argv[1],L"--version")==0){const char *version="codex-cli 0.164.0-alpha.11.1\n";WriteFile(out,version,(DWORD)strlen(version),&wrote,NULL);return 0;}
 #ifdef PATCHED_FAKE
   if(argc>1 && _wcsicmp(argv[1],L"app-server")==0){wchar_t *marker=_wgetenv(L"PATCH_MARKER");if(marker){HANDLE f=CreateFileW(marker,FILE_APPEND_DATA,FILE_SHARE_READ,NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);if(f!=INVALID_HANDLE_VALUE){DWORD written;WriteFile(f,"started\n",8,&written,NULL);CloseHandle(f);}}return app_server(argc);}

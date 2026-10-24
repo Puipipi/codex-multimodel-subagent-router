@@ -47,10 +47,23 @@ try {
   const observed = spawnSync(release, ['--bootstrap-observe-backend'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
   assert.equal(observed.status, 0, observed.stderr);
   const observedRecord = JSON.parse(observed.stdout);
-  assert.equal(observedRecord.observed, true, 'observer finds the current real Codex ancestor process');
-  assert.match(observedRecord.exePath, /\\codex\.exe$/i);
-  assert.match(observedRecord.exeSha256, /^[a-f0-9]{64}$/);
-  console.log(`PASS live ancestor observation: ${observedRecord.exePath} ${observedRecord.exeSha256}`);
+  assert.equal(observedRecord.schemaVersion, 1);
+  if (observedRecord.observed) {
+    assert.match(observedRecord.exePath, /\\codex\.exe$/i, 'a real Codex ancestor reports its executable path');
+    assert.equal(observedRecord.exeSha256, createHash('sha256').update(await readFile(observedRecord.exePath)).digest('hex'));
+  } else {
+    assert.equal(observedRecord.exePath, null, 'absence of a Codex ancestor is represented with a null path');
+    assert.equal(observedRecord.exeSha256, null, 'absence of a Codex ancestor is represented with a null hash');
+  }
+  const controlledCodexParent = path.join(root, 'codex.exe');
+  await copyFile(backend, controlledCodexParent);
+  const controlledObservation = spawnSync(controlledCodexParent, ['--spawn-observer', release], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+  assert.equal(controlledObservation.status, 0, controlledObservation.stderr);
+  const controlledRecord = JSON.parse(controlledObservation.stdout);
+  assert.equal(controlledRecord.observed, true, 'a controlled codex.exe ancestor exercises the production positive path');
+  assert.equal(path.resolve(controlledRecord.exePath).toLowerCase(), path.resolve(controlledCodexParent).toLowerCase());
+  assert.equal(controlledRecord.exeSha256, createHash('sha256').update(await readFile(controlledCodexParent)).digest('hex'));
+  console.log(`PASS live ancestor observation: ${observedRecord.observed ? 'host codex ancestor present' : 'no host codex ancestor'}; controlled positive verified`);
   const releaseResolution = spawnSync(release, ['--codex-native-resolve-official-cli-v1'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
   assert.equal(releaseResolution.status, 0, releaseResolution.stderr);
   assert.match(releaseResolution.stdout.trim(), /^[A-Z]:\\.*WindowsApps\\OpenAI\.Codex_.*\\app\\resources\\codex\.exe$/i, 'production rollback resolver finds the current registered desktop CLI');
