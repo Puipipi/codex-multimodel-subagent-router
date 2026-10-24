@@ -1,5 +1,5 @@
 diff --git a/codex-rs/codex-api/src/endpoint/responses_websocket.rs b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
-index c59683d69..d2add99d2 100644
+index c59683d69..1fee3b0fd 100644
 --- a/codex-rs/codex-api/src/endpoint/responses_websocket.rs
 +++ b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
 @@ -726,6 +726,7 @@ async fn run_websocket_response_stream(
@@ -42,14 +42,18 @@ index c59683d69..d2add99d2 100644
  fn emit_responses_websocket_timing_event(
      kind: &str,
      payload: &str,
-@@ -1113,6 +1126,102 @@ mod tests {
+@@ -1113,6 +1126,113 @@ mod tests {
          assert_eq!(wire_payload, expected_payload);
      }
  
 +    async fn run_websocket_message_fixture(
 +        messages: Vec<Message>,
 +        request_text: &str,
-+    ) -> (Result<(), ApiError>, Option<ResponseEvent>) {
++    ) -> (
++        Result<(), ApiError>,
++        Option<ResponseEvent>,
++        Vec<Result<ResponseEvent, ApiError>>,
++    ) {
 +        let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(1);
 +        let (tx_message, rx_message) = mpsc::unbounded_channel();
 +        let pump_task = tokio::spawn(async move {
@@ -68,7 +72,7 @@ index c59683d69..d2add99d2 100644
 +            rx_message,
 +            pump_task,
 +        };
-+        let (tx_event, _rx_event) = mpsc::channel(4);
++        let (tx_event, mut rx_event) = mpsc::channel(4);
 +        let timing_log_context = ResponsesWebsocketTimingLogContext {
 +            model: "test".to_string(),
 +            session_id: None,
@@ -93,7 +97,11 @@ index c59683d69..d2add99d2 100644
 +            &mut completion,
 +        )
 +        .await;
-+        (result, completion)
++        let mut events = Vec::new();
++        while let Ok(event) = rx_event.try_recv() {
++            events.push(event);
++        }
++        (result, completion, events)
 +    }
 +
 +    #[tokio::test]
@@ -103,7 +111,7 @@ index c59683d69..d2add99d2 100644
 +            code: tungstenite::protocol::frame::coding::CloseCode::from(1009),
 +            reason: "SENSITIVE_REASON_MARKER".into(),
 +        };
-+        let (result, completion) = run_websocket_message_fixture(
++        let (result, completion, _) = run_websocket_message_fixture(
 +            vec![Message::Close(Some(frame))],
 +            request_text,
 +        )
@@ -120,7 +128,7 @@ index c59683d69..d2add99d2 100644
 +
 +    #[tokio::test]
 +    async fn premature_websocket_close_without_frame_keeps_code_unknown() {
-+        let (result, completion) =
++        let (result, completion, _) =
 +            run_websocket_message_fixture(vec![Message::Close(None)], "{}")
 +                .await;
 +        let error = result.expect_err("premature close must fail the Responses stream");
@@ -135,11 +143,14 @@ index c59683d69..d2add99d2 100644
 +            r#"{"type":"response.completed","response":{"id":"resp1","end_turn":false}}"#
 +                .into(),
 +        );
-+        let (result, completion) =
++        let (result, completion, events) =
 +            run_websocket_message_fixture(vec![completed, Message::Close(None)], "{}")
 +                .await;
 +        assert!(result.is_ok());
-+        assert!(matches!(completion, Some(ResponseEvent::Completed { .. })));
++        assert!(completion.is_none());
++        assert!(events
++            .iter()
++            .any(|event| matches!(event, Ok(ResponseEvent::Completed { .. }))));
 +    }
 +
      #[test]
