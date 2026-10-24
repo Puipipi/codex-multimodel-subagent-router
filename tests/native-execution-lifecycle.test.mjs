@@ -111,6 +111,31 @@ try {
   equal(ownedStops, 2, 'terminal cancellation retries and then stops the idle gateway');
   await enableOwnedExecutionsForDispatch({executor: 'api', profileId: ownedProfile, apiDir, taskAdapter, readApiJournal: async () => journalRecord});
 
+  const throughTerminalNonce = 'gateway-off-through-terminal-01';
+  await tasks.reserveDispatch({parentThreadId: 'parent', taskNonce: throughTerminalNonce, executor: 'api', profileId: ownedProfile, model: 'mock-api-model'});
+  const offBeforeBind = await stopOwnedIdleExecutions({settings: {profiles: {[ownedProfile]: {}}}, apiDir, env,
+    resolveDeepseekJournal: () => null, taskAdapter, nativeTasks: tasks, ownershipStore: ownership,
+    readApiJournal: async () => journalRecord,
+    stopApi: async () => { ownedStops += 1; return {stopped: true}; }});
+  equal(offBeforeBind.deferred, true, 'off remains deferred while an authenticated gateway intent is awaiting child bind');
+  equal(ownedStops, 2, 'off never stops the gateway between reservation and bind');
+  await tasks.begin({parentThreadId: 'parent', childThreadId: 'gateway-off-child', taskNonce: throughTerminalNonce,
+    model: 'mock-api-model', binding: {executor: 'api', profileId: ownedProfile, model: 'mock-api-model',
+      role: `native_api_${ownedProfile}`, providerId: `api-native-${ownedProfile}`}});
+  const offWhileChildRuns = await stopOwnedIdleExecutions({settings: {profiles: {[ownedProfile]: {}}}, apiDir, env,
+    resolveDeepseekJournal: () => null, taskAdapter, nativeTasks: tasks, ownershipStore: ownership,
+    readApiJournal: async () => journalRecord,
+    stopApi: async () => { ownedStops += 1; return {stopped: true}; }});
+  equal(offWhileChildRuns.deferred, true, 'binding intent to a real child keeps off deferred until terminal evidence');
+  equal(ownedStops, 2, 'active gateway child is not interrupted by off');
+  await tasks.finish({parentThreadId: 'parent', childThreadId: 'gateway-off-child', status: 'completed'});
+  const offAfterTerminal = await stopOwnedIdleExecutions({settings: {profiles: {[ownedProfile]: {}}}, apiDir, env,
+    resolveDeepseekJournal: () => null, taskAdapter, nativeTasks: tasks, ownershipStore: ownership,
+    readApiJournal: async () => journalRecord,
+    stopApi: async () => { ownedStops += 1; return {stopped: true}; }});
+  equal(offAfterTerminal.stopped, true, 'terminal gateway child permits deferred idle cleanup');
+  equal(ownedStops, 3, 'idle gateway stops only after the child reaches terminal status');
+
   const deepseekJournalPath = path.join(root, 'deepseek', 'install.json');
   const deepseekGatewayDir = path.join(root, 'deepseek', 'gateway');
   const deepseekPlan = {...taskPlan, name: 'owned-deepseek-task', directory: deepseekGatewayDir};
@@ -139,13 +164,14 @@ try {
   await tasks.finish({parentThreadId: 'parent', childThreadId: 'native-child'});
 
   const profileId = ownedProfile;
-  await tasks.begin({parentThreadId: 'parent', childThreadId: 'api-child', model: 'mock-model', binding: {executor: 'api', profileId, role: `native_api_${profileId}`, providerId: `api-native-${profileId}`, model: 'mock-model'}});
+  await tasks.reserveDispatch({parentThreadId: 'parent', taskNonce: 'api-active-child-01', executor: 'api', profileId, model: 'mock-model'});
+  await tasks.begin({parentThreadId: 'parent', childThreadId: 'api-child', taskNonce: 'api-active-child-01', model: 'mock-model', binding: {executor: 'api', profileId, role: `native_api_${profileId}`, providerId: `api-native-${profileId}`, model: 'mock-model'}});
   const gatewayActive = await stopOwnedIdleExecutions({settings: {profiles: {[profileId]: {}}}, apiDir, env,
     resolveDeepseekJournal: () => null, taskAdapter, nativeTasks: tasks, ownershipStore: ownership,
     readApiJournal: async () => journalRecord,
     stopApi: async () => { ownedStops += 1; return {stopped: true}; }});
   equal(gatewayActive.deferred, true, 'active gateway-backed native child defers idle gateway stop');
-  equal(ownedStops, 2, 'active gateway-backed child prevents the journaled service stop');
+  equal(ownedStops, 3, 'active gateway-backed child prevents the journaled service stop');
   await tasks.finish({parentThreadId: 'parent', childThreadId: 'api-child'});
 
   await ownership.claim('dsh-child', 'parent', {status: 'running'});

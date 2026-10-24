@@ -16,6 +16,7 @@ import {resolveCurrentMainModel} from './native-current-model.mjs';
 import {stopOwnedIdleExecutions as stopOwnedIdleExecutionsDefault} from './native-execution-lifecycle.mjs';
 import {readUpgradeGuardStatus} from './native-upgrade-status.mjs';
 import {collectConnectionDiagnostics} from './native-connection-diagnostics.mjs';
+import {NativeTasks} from './native-state.mjs';
 import os from 'node:os';
 
 export const ROUTER_SETTINGS_URI = 'ui://router/settings';
@@ -767,12 +768,18 @@ export function createRouterSettingsService({
     if (!effectiveRouterEnabled(current.settings, guard)) {
       return {available: false, rootCause: 'uncertain', events: []};
     }
+    let registeredChildThreadIds = [];
+    try {
+      registeredChildThreadIds = (await new NativeTasks({stateDir}).owned(context.threadId))
+        .map(task => task.child_thread_id)
+        .filter(threadId => typeof threadId === 'string' && threadId.length > 0);
+    } catch { /* Unreadable ownership state keeps events uncorrelated. */ }
     return collectDiagnostics({
       codexHome: env.CODEX_HOME || path.join(os.homedir(), '.codex'),
       stateDir,
       enabled: true,
       parentThreadId: context.threadId ?? null,
-      registeredChildThreadIds: [],
+      registeredChildThreadIds,
     });
   }
   const capabilities = {applyApiConfiguration: applySupported};

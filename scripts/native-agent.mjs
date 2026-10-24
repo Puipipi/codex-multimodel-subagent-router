@@ -79,6 +79,7 @@ export async function prepareGatewayDispatch({
   executor,
   profileId = null,
   taskNonce,
+  reuseChildThreadId = null,
   parentThreadId,
   tasks,
   assertEnabled = async () => {},
@@ -87,12 +88,18 @@ export async function prepareGatewayDispatch({
 } = {}) {
   if (!tasks || !['api', 'deepseek'].includes(executor)) throw new Error('gateway dispatch requires a native task store and API/DeepSeek executor');
   const model = result?.resolved_model || result?.model;
-  await tasks.reserveDispatch({parentThreadId, taskNonce, executor, profileId, model});
+  await tasks.reserveDispatch({parentThreadId, taskNonce, executor, profileId, model, reuseChildThreadId});
   try {
     await assertEnabled();
     await ensureReady();
     await assertEnabled();
-    return {...result, dispatch_reservation: {task_nonce: taskNonce, executor, profile_id: profileId}};
+    const route = {...result};
+    if (reuseChildThreadId) {
+      delete route.agent_type;
+      delete route.fork_turns;
+    }
+    return {...route, dispatch_reservation: {task_nonce: taskNonce, executor, profile_id: profileId},
+      ...(reuseChildThreadId ? {spawn: false, reuse_child: true, child_thread_id: reuseChildThreadId} : {})};
   } catch (error) {
     await tasks.cancelDispatch({parentThreadId, taskNonce}).catch(() => {});
     await onCancelled().catch(() => {});
@@ -108,9 +115,20 @@ async function main(argv) {
   const executor = get("executor");
   const mainModel = get("main-model");
   const taskNonce = get("task-nonce");
+  const reuseChildThreadId = get("reuse-child");
   const stateDir = get("state-dir");
   if (typeof executor !== "string" || !executor.trim()) {
     throw new Error("executor must be luna, deepseek, or a configured API profile; same and native:<model> are also supported");
+  }
+  const reuseChildFlagAt = argv.indexOf("--reuse-child");
+  if (reuseChildFlagAt >= 0) {
+    const reuseValue = argv[reuseChildFlagAt + 1];
+    if (typeof reuseValue !== "string" || !reuseValue.trim() || reuseValue.startsWith("--")) {
+      throw new Error("--reuse-child requires an existing child thread ID");
+    }
+    if (executor === "luna" || executor === "same" || executor.startsWith("native:")) {
+      throw new Error("--reuse-child is supported only for API or DeepSeek executors");
+    }
   }
   const apiDir = get("api-dir") || defaultNativeApiDir();
   const settingsPath = get("settings") || (executor !== "luna" && executor !== "same" && !executor.startsWith("native:")
@@ -140,7 +158,7 @@ async function main(argv) {
         await ensureNativeApiDispatch({profileId, apiDir, settingsPath, journalPath: apiJournal || undefined});
       }
     };
-    const dispatch = await prepareGatewayDispatch({result, executor: dispatchExecutor, profileId, taskNonce, parentThreadId, tasks, assertEnabled: assertStillEnabled, ensureReady: ready, onCancelled: () => finalizePendingDisable({settingsPath, stateDir})});
+    const dispatch = await prepareGatewayDispatch({result, executor: dispatchExecutor, profileId, taskNonce, reuseChildThreadId, parentThreadId, tasks, assertEnabled: assertStillEnabled, ensureReady: ready, onCancelled: () => finalizePendingDisable({settingsPath, stateDir})});
     process.stdout.write(`${JSON.stringify(dispatch)}\n`);
   }
   if (executor === "deepseek") {

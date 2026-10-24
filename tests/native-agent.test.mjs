@@ -30,6 +30,41 @@ try {
   equal(order.join(","), "enabled,ready,enabled", "gateway dispatch checks enablement before and after setup");
   equal(prepared.dispatch_reservation.task_nonce, "dispatch-preflight-001", "spawn result carries its pending dispatch identity");
   equal(await tasks.hasActiveGatewayExecutions(), true, "pending gateway dispatch protects the gateway before child bind");
+  let announceGate;
+  let releaseGate;
+  const gateEntered = new Promise(resolve => { announceGate = resolve; });
+  const gateHeld = new Promise(resolve => { releaseGate = resolve; });
+  const firstGate = prepareGatewayDispatch({
+    result: {executor: "api", resolved_model: "mock-api-model"}, executor: "api", profileId: "abcdefabcdefabcdefabcdef",
+    taskNonce: "dispatch-concurrent-001", parentThreadId: "parent-chat", tasks: new NativeTasks({stateDir: path.join(dispatchRoot, "concurrent")}),
+    ensureReady: async () => { announceGate(); await gateHeld; },
+  });
+  await gateEntered;
+  const duplicateGate = await Promise.allSettled([prepareGatewayDispatch({
+    result: {executor: "api", resolved_model: "mock-api-model"}, executor: "api", profileId: "abcdefabcdefabcdefabcdef",
+    taskNonce: "dispatch-concurrent-001", parentThreadId: "parent-chat", tasks: new NativeTasks({stateDir: path.join(dispatchRoot, "concurrent")}),
+  })]);
+  equal(duplicateGate[0].status, "rejected", "a concurrent gate cannot share the first gate's pending nonce");
+  releaseGate();
+  await firstGate;
+  await tasks.begin({parentThreadId: "parent-chat", childThreadId: "api-child", taskNonce: "dispatch-preflight-001", model: "mock-api-model", binding: {
+    executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model",
+    role: "native_api_abcdefabcdefabcdefabcdef", providerId: "api-native-abcdefabcdefabcdefabcdef",
+  }});
+  const reuse = await prepareGatewayDispatch({
+    result: {executor: "api", resolved_model: "mock-api-model"}, executor: "api", profileId: "abcdefabcdefabcdefabcdef",
+    taskNonce: "dispatch-preflight-001", reuseChildThreadId: "api-child", parentThreadId: "parent-chat", tasks,
+  });
+  equal(reuse.reuse_child, true, "a follow-up gate marks the existing child for reuse rather than spawn");
+  equal(reuse.child_thread_id, "api-child", "follow-up gate identifies the exact existing child");
+  equal(reuse.spawn, false, "follow-up gate explicitly suppresses a new child spawn");
+  equal(Object.hasOwn(reuse, "agent_type"), false, "follow-up result omits new-child spawn metadata");
+  await tasks.cancelDispatch({parentThreadId: "parent-chat", taskNonce: "dispatch-preflight-001"});
+  equal((await tasks.assertOwner("api-child", "parent-chat")).status, "running", "cancelling a follow-up intent preserves the real active child status");
+  await prepareGatewayDispatch({
+    result: {executor: "api", resolved_model: "mock-api-model"}, executor: "api", profileId: "abcdefabcdefabcdefabcdef",
+    taskNonce: "dispatch-preflight-001", reuseChildThreadId: "api-child", parentThreadId: "parent-chat", tasks,
+  });
   await tasks.begin({parentThreadId: "parent-chat", childThreadId: "api-child", taskNonce: "dispatch-preflight-001", model: "mock-api-model", binding: {
     executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model",
     role: "native_api_abcdefabcdefabcdefabcdef", providerId: "api-native-abcdefabcdefabcdefabcdef",
@@ -118,6 +153,15 @@ function runCli(args, env = {}) {
   rmSync(dir, { recursive: true, force: true });
   return { status: result.status, stdout, stderr };
 }
+
+const misplacedReuse = runCli(["--executor", "luna", "--reuse-child", "existing-child"]);
+equal(misplacedReuse.status, 2, "native-agent rejects reuse-child on a route that would otherwise spawn a new executor");
+assert.match(misplacedReuse.stderr, /reuse-child is supported only for API or DeepSeek/);
+checks += 1;
+const missingReuseId = runCli(["--executor", "deepseek", "--task-nonce", "cli-gate-nonce-001", "--reuse-child"]);
+equal(missingReuseId.status, 2, "native-agent rejects a reuse-child flag without a thread id");
+assert.match(missingReuseId.stderr, /--reuse-child requires an existing child thread ID/);
+checks += 1;
 
 const root = await mkdtemp(path.join(os.tmpdir(), "native-agent-homes-"));
 try {

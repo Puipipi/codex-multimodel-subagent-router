@@ -490,9 +490,11 @@ try {
   };
   const stateDir = path.join(tempRoot, "state");
   const stateTasks = new NativeTasks({ stateDir });
+  await stateTasks.reserveDispatch({parentThreadId: "parent-api", taskNonce: "api-lifecycle-gate-01", executor: "api", profileId: profile.profileId, model: profile.model});
   const boundTask = await stateTasks.begin({
     parentThreadId: "parent-api",
     childThreadId: "child-api",
+    taskNonce: "api-lifecycle-gate-01",
     model: profile.model,
     binding,
   });

@@ -50,9 +50,39 @@ try {
   const stateDir = path.join(root, "state");
   const tasks = new NativeTasks({ stateDir });
   const dispatchTasks = new NativeTasks({stateDir: path.join(root, "dispatch-reservations")});
+  const gatewayProfile = "cdefabcdefabcdefabcdefab";
+  const gatewayBinding = {executor: "api", profileId: gatewayProfile, model: "mock-gateway-model", role: `native_api_${gatewayProfile}`, providerId: `api-native-${gatewayProfile}`};
+  await assert.rejects(dispatchTasks.begin({parentThreadId: "parent-A", childThreadId: "unreserved-api-child", taskNonce: "unreserved-api-001", model: gatewayBinding.model, binding: gatewayBinding}), /dispatch intent|reservation/i);
+  checks += 1;
+  const concurrentGates = await Promise.allSettled([
+    dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "concurrent-api-gate-01", executor: "api", profileId: gatewayProfile, model: gatewayBinding.model}),
+    dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "concurrent-api-gate-01", executor: "api", profileId: gatewayProfile, model: gatewayBinding.model}),
+  ]);
+  equal(concurrentGates.filter(result => result.status === "fulfilled").length, 1, "only one concurrent gate can own a gateway dispatch nonce");
+  equal(concurrentGates.filter(result => result.status === "rejected").length, 1, "a duplicate pending nonce is rejected instead of shared");
+  await dispatchTasks.begin({parentThreadId: "parent-A", childThreadId: "concurrent-api-child", taskNonce: "concurrent-api-gate-01", model: gatewayBinding.model, binding: gatewayBinding});
+  await assert.rejects(dispatchTasks.begin({parentThreadId: "parent-A", childThreadId: "second-api-child", taskNonce: "concurrent-api-gate-01", model: gatewayBinding.model, binding: gatewayBinding}), /intent|nonce|child/i);
+  checks += 1;
+  await assert.rejects(dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "concurrent-api-gate-01", executor: "api", profileId: gatewayProfile, model: gatewayBinding.model}), /nonce|child|reuse/i);
+  checks += 1;
+  await dispatchTasks.finish({parentThreadId: "parent-A", childThreadId: "concurrent-api-child", status: "completed"});
+  const followupIntent = await dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "concurrent-api-gate-01", executor: "api", profileId: gatewayProfile, model: gatewayBinding.model, reuseChildThreadId: "concurrent-api-child"});
+  equal(followupIntent.reuse_child_id, "concurrent-api-child", "a fresh follow-up intent is linked to its existing child");
+  await dispatchTasks.cancelDispatch({parentThreadId: "parent-A", taskNonce: "concurrent-api-gate-01"});
+  equal((await dispatchTasks.assertOwner("concurrent-api-child", "parent-A")).status, "completed", "cancelling a rejected follow-up preserves the prior terminal status");
+  await dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "concurrent-api-gate-01", executor: "api", profileId: gatewayProfile, model: gatewayBinding.model, reuseChildThreadId: "concurrent-api-child"});
+  const resumedGateway = await dispatchTasks.begin({parentThreadId: "parent-A", childThreadId: "concurrent-api-child", taskNonce: "concurrent-api-gate-01", model: gatewayBinding.model, binding: gatewayBinding});
+  equal(resumedGateway.status, "running", "a gated follow-up resumes the exact completed child instead of creating a new identity");
+  equal(await dispatchTasks.hasActiveGatewayExecutions(), true, "follow-up bind consumes intent and keeps the gateway alive for the existing child");
+  await dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "concurrent-api-gate-01", executor: "api", profileId: gatewayProfile, model: gatewayBinding.model, reuseChildThreadId: "concurrent-api-child"});
+  await dispatchTasks.finish({parentThreadId: "parent-A", childThreadId: "concurrent-api-child", status: "completed"});
+  equal(await dispatchTasks.hasActiveGatewayExecutions(), false, "terminal child completion clears a pending follow-up intent and active record");
+  await dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "concurrent-api-gate-01", executor: "api", profileId: gatewayProfile, model: gatewayBinding.model, reuseChildThreadId: "concurrent-api-child"});
+  await dispatchTasks.begin({parentThreadId: "parent-A", childThreadId: "concurrent-api-child", taskNonce: "concurrent-api-gate-01", model: gatewayBinding.model, binding: gatewayBinding});
+  await dispatchTasks.finish({parentThreadId: "parent-A", childThreadId: "concurrent-api-child", status: "completed"});
   await dispatchTasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "api-dispatch-001", executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model"});
   equal(await dispatchTasks.hasActiveGatewayExecutions(), true, "pending API dispatch reservation keeps the gateway alive before child bind");
-  await assert.rejects(dispatchTasks.reserveDispatch({parentThreadId: "parent-B", taskNonce: "api-dispatch-001", executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model"}), /different execution/);
+  await assert.rejects(dispatchTasks.reserveDispatch({parentThreadId: "parent-B", taskNonce: "api-dispatch-001", executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model"}), /pending|different execution/);
   checks += 1;
   await dispatchTasks.begin({parentThreadId: "parent-A", childThreadId: "dispatch-child", taskNonce: "api-dispatch-001", model: "mock-api-model", binding: {executor: "api", profileId: "abcdefabcdefabcdefabcdef", model: "mock-api-model", role: "native_api_abcdefabcdefabcdefabcdef", providerId: "api-native-abcdefabcdefabcdefabcdef"}});
   equal(await dispatchTasks.hasActiveGatewayExecutions(), true, "atomic bind replaces the pending reservation with an active gateway child");
@@ -82,9 +112,11 @@ try {
     binding: apiBinding,
   }), /already has a different model/);
   checks += 1;
+  await tasks.reserveDispatch({parentThreadId: "parent-A", taskNonce: "task-nonce-A", executor: "api", profileId, model: "deepseek/deepseek-flash", reuseChildThreadId: "child-A"});
   const lateBound = await tasks.begin({
     parentThreadId: "parent-A",
     childThreadId: "child-A",
+    taskNonce: "task-nonce-A",
     binding: { ...apiBinding, model: "deepseek/deepseek-flash" },
   });
   equal(lateBound.binding.profileId, profileId, "a matching late binding preserves the original child model");
@@ -161,6 +193,11 @@ try {
     "--role", `native_api_${readonlyProfile}`, "--provider-id", `api-native-${readonlyProfile}`,
     "--state-dir", readonlyState,
   ];
+  const unreservedRecord = runCli(recordArgs);
+  equal(unreservedRecord.status, 1, "native-state CLI refuses to record an API child without a gateway intent");
+  assert.match(unreservedRecord.stderr, /matching pending dispatch intent/);
+  checks += 1;
+  await new NativeTasks({stateDir: readonlyState}).reserveDispatch({parentThreadId: "trusted-parent-A", taskNonce: "api-record-nonce", executor: "api", profileId: readonlyProfile, model: "api-readonly-model"});
   const recorded = runCli(recordArgs);
   equal(recorded.status, 0, "read-only API child can be recorded without taking the writer lease");
   const recordedTask = JSON.parse(recorded.stdout).task;
@@ -178,6 +215,12 @@ try {
     "recording a read-only API child leaves the unrelated writer reservation intact");
   const recordedBinding = runCli(["binding", "--child", "api-readonly-child", "--state-dir", readonlyState]);
   equal(JSON.parse(recordedBinding.stdout).binding.profileId, readonlyProfile, "binding reads the recorded API profile");
+  await new NativeTasks({stateDir: readonlyState}).reserveDispatch({parentThreadId: "trusted-parent-A", taskNonce: "api-record-nonce", executor: "api", profileId: readonlyProfile, model: "api-readonly-model", reuseChildThreadId: "api-readonly-child"});
+  const cancelFollowupCli = runCli(["dispatch-cancel", "--task-nonce", "api-record-nonce", "--state-dir", readonlyState]);
+  equal(cancelFollowupCli.status, 0, "CLI can cancel a confirmed rejected follow-up intent");
+  equal((await new NativeTasks({stateDir: readonlyState}).assertOwner("api-readonly-child", "trusted-parent-A")).status, "running",
+    "follow-up cancellation preserves the active child instead of completing or interrupting it");
+  await new NativeTasks({stateDir: readonlyState}).reserveDispatch({parentThreadId: "trusted-parent-A", taskNonce: "api-record-nonce", executor: "api", profileId: readonlyProfile, model: "api-readonly-model", reuseChildThreadId: "api-readonly-child"});
   const sameChildFollowup = runCli(recordArgs);
   equal(sameChildFollowup.status, 0, "the same read-only child can continue with its original binding");
   equal(JSON.parse(sameChildFollowup.stdout).task.binding.profileId, readonlyProfile,

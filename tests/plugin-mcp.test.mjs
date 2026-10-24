@@ -4,6 +4,7 @@ import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createPluginMcp, trustedThreadId} from '../scripts/plugin-mcp.mjs';
+import {NativeTasks} from '../scripts/native-state.mjs';
 import {createTraceService} from '../scripts/plugin-trace.mjs';
 import {canonicalWorkspace, hashThread, workspaceKey, writeJsonAtomic} from '../scripts/plugin-state.mjs';
 
@@ -168,13 +169,30 @@ try {
 
   {
     let diagnosticCaller = null;
+    const diagnosticChildren = new Map();
+    const contextStateDir = path.join(root, 'model-context-state');
+    const nativeTasks = new NativeTasks({stateDir: contextStateDir});
+    for (const [parentThreadId, childThreadId, taskNonce, executor, model] of [
+      ['chat-a', 'chat-a-api-child', 'diag-chat-a-001', 'api', 'mock-a'],
+      ['chat-b', 'chat-b-deepseek-child', 'diag-chat-b-001', 'deepseek', 'deepseek/deepseek-flash'],
+    ]) {
+      const profileId = 'abcdefabcdefabcdefabcdef';
+      await nativeTasks.reserveDispatch({parentThreadId, taskNonce, executor, profileId: executor === 'api' ? profileId : null, model});
+      await nativeTasks.begin({parentThreadId, childThreadId, taskNonce, model, binding: executor === 'api'
+        ? {executor, profileId, model, role: `native_api_${profileId}`, providerId: `api-native-${profileId}`}
+        : {executor, model, role: 'native_deepseek'}});
+    }
     const contextServer = createPluginMcp({
-      stateDir: path.join(root, 'model-context-state'),
+      stateDir: contextStateDir,
       settingsPath: path.join(root, 'model-context-router.json'),
       readNativeModels: async () => [],
       readCurrentModel: async ({threadId}) => ({model: threadId === 'chat-a' ? 'gpt-6.1-sol' : 'gpt-6-astra', provider: 'openai'}),
       guardStatus: async () => ({state: 'unmanaged'}),
-      collectDiagnostics: async ({parentThreadId}) => { diagnosticCaller = parentThreadId; return {available: true, rootCause: 'uncertain', events: []}; },
+      collectDiagnostics: async ({parentThreadId, registeredChildThreadIds}) => {
+        diagnosticCaller = parentThreadId;
+        diagnosticChildren.set(parentThreadId, registeredChildThreadIds);
+        return {available: true, rootCause: 'uncertain', events: []};
+      },
     });
     try {
       const readFor = async (threadId, id) => contextServer.handle({jsonrpc: '2.0', id, method: 'tools/call', params: {
@@ -190,11 +208,25 @@ try {
         name: 'router_connection_diagnostics', arguments: {}, _meta: {threadId: 'chat-b'},
       }}));
       equal(diagnosticCaller, 'chat-b', 'explicit connection diagnostic uses the trusted MCP caller context');
+      const diagnosticForA = payload(await contextServer.handle({jsonrpc: '2.0', id: 27, method: 'tools/call', params: {
+        name: 'router_connection_diagnostics', arguments: {}, _meta: {threadId: 'chat-a'},
+      }}));
+      const diagnosticForUnknown = payload(await contextServer.handle({jsonrpc: '2.0', id: 28, method: 'tools/call', params: {
+        name: 'router_connection_diagnostics', arguments: {}, _meta: {threadId: 'chat-unknown'},
+      }}));
+      deepEqual(diagnosticChildren.get('chat-a'), ['chat-a-api-child'], 'diagnostics correlate only children owned by chat A');
+      deepEqual(diagnosticChildren.get('chat-b'), ['chat-b-deepseek-child'], 'diagnostics correlate only children owned by chat B');
+      deepEqual(diagnosticChildren.get('chat-unknown'), [], 'unknown parent receives no guessed or cross-chat children');
+      const forgedChildren = await contextServer.handle({jsonrpc: '2.0', id: 29, method: 'tools/call', params: {
+        name: 'router_connection_diagnostics', arguments: {registeredChildThreadIds: ['chat-b-deepseek-child']}, _meta: {threadId: 'chat-a'},
+      }});
+      ok(isError(forgedChildren), 'MCP clients cannot inject diagnostic child identifiers');
+      deepEqual(diagnosticChildren.get('chat-a'), ['chat-a-api-child'], 'rejected client IDs never enter diagnostic correlation');
       const missingDiagnosticContext = await contextServer.handle({jsonrpc: '2.0', id: 26, method: 'tools/call', params: {
         name: 'router_connection_diagnostics', arguments: {},
       }});
       ok(isError(missingDiagnosticContext), 'diagnostics refuse to collect without trusted caller metadata');
-      equal(diagnosticCaller, 'chat-b', 'missing caller metadata does not trigger another local log read');
+      equal(diagnosticCaller, 'chat-unknown', 'missing caller metadata does not trigger another local log read');
     } finally {
       await contextServer.close();
     }

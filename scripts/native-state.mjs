@@ -109,6 +109,27 @@ export class NativeTasks {
       if (existing?.task_nonce && task && existing.task_nonce !== task) {
         throw new Error("This child's task nonce cannot be changed");
       }
+      const gatewayBinding = bound && ['api', 'deepseek'].includes(bound.executor) ? bound : null;
+      let gatewayReservation = null;
+      if (gatewayBinding) {
+        gatewayReservation = task ? data.dispatches[task] : null;
+        if (!gatewayReservation) throw new Error('gateway child binding requires a matching pending dispatch intent');
+        if (gatewayReservation.owner !== hashThread(parent) || gatewayReservation.executor !== gatewayBinding.executor
+            || (gatewayBinding.executor === 'api' && gatewayReservation.profile_id !== gatewayBinding.profileId)
+            || gatewayReservation.model !== gatewayBinding.model) {
+          throw new Error('gateway dispatch intent does not match the child binding');
+        }
+        const reuseChildId = gatewayReservation.reuse_child_id || null;
+        if (reuseChildId && reuseChildId !== child) throw new Error('gateway dispatch intent is linked to a different existing child');
+        if (existing && !reuseChildId) throw new Error('an existing gateway child requires a fresh follow-up intent linked to that child');
+        if (reuseChildId && !existing) throw new Error('follow-up intent references a child that is not registered to this parent');
+        if (Object.values(data.tasks).some(record => record.task_nonce === task && record.child_thread_id !== child)) {
+          throw new Error('gateway dispatch task nonce is already bound to a different child');
+        }
+      }
+      if (task && !gatewayBinding && data.dispatches[task]) {
+        throw new Error('a pending gateway dispatch nonce cannot be consumed by a non-gateway child');
+      }
       const at = new Date().toISOString();
       data.tasks[child] = {
         child_thread_id: child,
@@ -121,32 +142,44 @@ export class NativeTasks {
         created_at: existing?.created_at ?? at,
         updated_at: at,
       };
-      if (task && data.dispatches[task]) {
-        const reservation = data.dispatches[task];
-        if (!reservation || reservation.owner !== hashThread(parent) || reservation.executor !== bound?.executor
-            || (reservation.executor === 'api' && reservation.profile_id !== bound?.profileId)
-            || reservation.model !== (bound?.model ?? model)) {
-          throw new Error('gateway dispatch reservation does not match the child binding');
-        }
-        delete data.dispatches[task];
-      }
+      if (gatewayReservation) delete data.dispatches[task];
       return { ...data.tasks[child], owner: undefined };
     });
   }
 
-  async reserveDispatch({parentThreadId, taskNonce, executor, profileId = null, model}) {
+  async reserveDispatch({parentThreadId, taskNonce, executor, profileId = null, model, reuseChildThreadId = null}) {
     const owner = hashThread(parentId(parentThreadId));
     const task = nonce(taskNonce);
     if (!['api', 'deepseek'].includes(executor)) throw new Error('only gateway-backed executors can reserve dispatch');
     if (executor === 'api' && !/^[a-f0-9]{24}$/.test(profileId || '')) throw new Error('API dispatch reservation requires a profile id');
     if (executor === 'deepseek' && profileId !== null) throw new Error('DeepSeek dispatch reservation cannot have an API profile');
     if (typeof model !== 'string' || !model.trim()) throw new Error('dispatch reservation requires an exact model');
+    const reuseChild = reuseChildThreadId === null ? null : childId(reuseChildThreadId);
     return this._mutate(data => {
       const existing = data.dispatches[task];
-      if (existing && (existing.owner !== owner || existing.executor !== executor || existing.profile_id !== profileId || existing.model !== model.trim())) {
-        throw new Error('dispatch task nonce is already reserved for a different execution');
+      if (existing) throw new Error('dispatch task nonce already has a pending intent; duplicate gates cannot share it');
+      const nonceRecords = Object.values(data.tasks).filter(record => record.task_nonce === task);
+      if (reuseChild) {
+        const child = data.tasks[reuseChild];
+        if (!child || child.child_thread_id !== reuseChild || child.owner !== owner || (child.task_nonce && child.task_nonce !== task)) {
+          throw new Error('follow-up intent requires the exact existing child, owner, and task nonce');
+        }
+        if (nonceRecords.some(record => record.child_thread_id !== reuseChild)) {
+          throw new Error('task nonce is already bound to a different child');
+        }
+        const prior = child.binding ? normalizeBinding(child.binding) : null;
+        if (prior && (prior.executor !== executor || prior.profileId !== profileId || prior.model !== model.trim())) {
+          throw new Error('follow-up intent does not match the existing child executor binding');
+        }
+        if (!prior && child.model !== model.trim()) throw new Error('follow-up intent does not match the existing child model');
+        if (Object.values(data.dispatches).some(intent => intent.reuse_child_id === reuseChild)) {
+          throw new Error('this child already has a pending follow-up intent');
+        }
+      } else if (nonceRecords.length) {
+        throw new Error('dispatch task nonce is already bound; follow-up must name the existing child');
       }
-      const reservation = existing ?? {owner, task_nonce: task, executor, profile_id: profileId, model: model.trim(), state: 'pending', created_at: new Date().toISOString()};
+      const reservation = {owner, task_nonce: task, executor, profile_id: profileId, model: model.trim(),
+        ...(reuseChild ? {reuse_child_id: reuseChild} : {}), state: 'pending', created_at: new Date().toISOString()};
       data.dispatches[task] = reservation;
       return {...reservation, owner: undefined};
     });
@@ -159,9 +192,12 @@ export class NativeTasks {
       const existing = data.dispatches[task];
       if (!existing) return {cancelled: false, missing: true};
       if (existing.owner !== owner) throw new Error('dispatch reservation belongs to another parent chat');
-      const activeChild = Object.values(data.tasks).some(record => record.task_nonce === task
+      const activeChildren = Object.values(data.tasks).filter(record => record.task_nonce === task
         && !['idle', 'completed', 'error', 'interrupted', 'context_exhausted', 'closed'].includes(record.status));
-      if (activeChild) throw new Error('dispatch reservation is already bound to an active child; refusing cancellation');
+      if (activeChildren.length && (!existing.reuse_child_id
+          || activeChildren.some(record => record.child_thread_id !== existing.reuse_child_id))) {
+        throw new Error('dispatch reservation is already bound to an active child; refusing cancellation');
+      }
       delete data.dispatches[task];
       return {cancelled: true};
     });
@@ -175,6 +211,11 @@ export class NativeTasks {
       if (!existing || existing.owner !== hashThread(parent)) throw new Error("This child thread belongs to another parent chat");
       existing.status = status;
       existing.updated_at = new Date().toISOString();
+      if (['idle', 'completed', 'error', 'interrupted', 'context_exhausted', 'closed'].includes(status)) {
+        for (const [task, intent] of Object.entries(data.dispatches)) {
+          if (intent?.owner === existing.owner && intent.reuse_child_id === child) delete data.dispatches[task];
+        }
+      }
       return { ...existing, owner: undefined };
     });
   }

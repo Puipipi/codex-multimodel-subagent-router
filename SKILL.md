@@ -178,13 +178,22 @@ node .\scripts\native-state.mjs complete --child CHILD_THREAD_ID --status comple
 `record` and `complete` use the trusted `CODEX_THREAD_ID`; they never acquire or
 release the workspace writer lease. A different parent is rejected, and a
 different model/profile cannot overwrite the original binding. For every
-follow-up, read `binding`, rerun `native-agent.mjs --executor <profileId>
---task-nonce $taskNonce --json` against that original profile. For a write
-child, reacquire its writer reservation and bind it before `followup_task`; for
-a read-only child, `record` the existing child with the same nonce and binding
-before `followup_task`. This consumes the fresh gateway intent without
-reassigning the child. A confirmed pre-follow-up rejection can use
-`dispatch-cancel`; an uncertain outcome keeps the reservation. A global profile change affects only new children. Old
+API/DeepSeek follow-up, read `binding`, then run the gate against that original
+profile and child:
+
+```powershell
+node .\scripts\native-agent.mjs --executor <profileId> --task-nonce $taskNonce `
+  --reuse-child CHILD_THREAD_ID --json
+# Require reuse_child:true and spawn:false; do not call spawn_agent.
+# Send followup_task to CHILD_THREAD_ID.
+```
+
+For a write child, reacquire its writer reservation and bind the same child
+before `followup_task`; for a read-only child, `record` the same child with the
+same nonce and binding before `followup_task`. This consumes a fresh gateway
+intent without creating a second child. A confirmed pre-follow-up rejection
+can use `dispatch-cancel`; cancellation removes only the intent and preserves
+the existing child status. An uncertain outcome keeps the intent. A global profile change affects only new children. Old
 profiles cannot be removed by the settings schema; if the old profile gate
 fails, report the failure and do not silently substitute the new profile.
 
@@ -212,7 +221,7 @@ $taskNonce = [guid]::NewGuid().ToString()
 node .\scripts\native-agent.mjs --executor deepseek --task-nonce $taskNonce --json
 ```
 
-Before emitting the native spawn parameters, this command reads `SOL_LUNA_NATIVE_INSTALL_JOURNAL` from the managed user environment and verifies activated config, environment, launcher and owned Task Scheduler task, then starts/checks the isolated gateway. A private experiment may explicitly pass `--install-journal <path>` to override that environment value; an explicit empty value fails closed. Rerun the same gate immediately before each DeepSeek `followup_task`; if it fails, do not send the follow-up. A missing or unhealthy installation fails closed: do not register a task, start a DSH session, directly spawn the gateway, replay old work, or switch executors. It returns `agent_type: "native_deepseek"`, `fork_turns: "none"`, and an informational `resolved_model: "deepseek/deepseek-flash"`. Call `spawn_agent` with the bounded `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the child role selects its fixed DeepSeek model and `high` reasoning effort, regardless of the Sol parent’s effort setting. Keep the same child for corrections: use native `wait` for completion and `followup_task` for the same child; never spawn a replacement just because an observation window ended. The installer uses a current-user Task Scheduler task to keep the gateway independent of the DSH/Codex child process tree; DSH remains only an explicit legacy workflow and does not create native Codex child sessions. After activation, fully exit and restart Codex for future chats to inherit the new user environment; an already running app does not refresh it.
+Before emitting initial native spawn parameters, this command reads `SOL_LUNA_NATIVE_INSTALL_JOURNAL` from the managed user environment and verifies activated config, environment, launcher and owned Task Scheduler task, then starts/checks the isolated gateway. A private experiment may explicitly pass `--install-journal <path>` to override that environment value; an explicit empty value fails closed. For each DeepSeek follow-up, rerun the gate with the same nonce and `--reuse-child CHILD_THREAD_ID`; require `reuse_child:true` and `spawn:false`, then send `followup_task` to that child without spawning another. A missing or unhealthy installation fails closed: do not register a task, start a DSH session, directly spawn the gateway, replay old work, or switch executors. Initial work returns `agent_type: "native_deepseek"`, `fork_turns: "none"`, and an informational `resolved_model: "deepseek/deepseek-flash"`. Call `spawn_agent` only for initial work, with the bounded `task_name`, `agent_type: "native_deepseek"`, and `fork_turns: "none"`; omit `model` so the child role selects its fixed DeepSeek model and `high` reasoning effort, regardless of the Sol parent’s effort setting. Keep the same child for corrections: use native `wait` for completion and `followup_task` for that child; never spawn a replacement just because an observation window ended. The installer uses a current-user Task Scheduler task to keep the gateway independent of the DSH/Codex child process tree; DSH remains only an explicit legacy workflow and does not create native Codex child sessions. After activation, fully exit and restart Codex for future chats to inherit the new user environment; an already running app does not refresh it.
 
 Apply the shared writer and child-message contract above before this spawn. For a write task, reserve after the gate and before spawn; bind immediately after. For a read-only task, consume the intent with `record` after spawn using `--executor deepseek --model deepseek/deepseek-flash`. On a confirmed pre-spawn refusal, cancel with `native-state.mjs dispatch-cancel --task-nonce $taskNonce`.
 
