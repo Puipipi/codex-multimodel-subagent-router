@@ -1,23 +1,33 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { armApiBootstrap, disarmOwnedBootstrap, observeApiBackend } from '../scripts/native-bootstrap-maintenance.mjs';
+import { writeCompatibilityReceipt } from '../scripts/native-bootstrap-install.mjs';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'native-bootstrap-maintenance-test-'));
 try {
-  const officialPath = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe';
+  const officialPath = path.join(root, 'WindowsApps', 'OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0', 'app', 'resources', 'codex.exe');
   const runtimeDir = path.join(root, 'runtime', 'versions', 'approved');
   const bootstrapSourcePath = path.join(root, 'bootstrap-source.exe');
   const journalPath = path.join(root, 'runtime', 'bootstrap-install.json');
   const rootReceiptPath = path.join(root, 'runtime', 'compatibility.json');
   const priorReceiptBytes = Buffer.from('{"receipt":"preexisting"}\n');
+  const patchedBytes = Buffer.from('approved patched runtime fixture');
+  const patchedSha256 = createHash('sha256').update(patchedBytes).digest('hex');
+  const officialBytes = Buffer.from('official stock CLI fixture');
+  const officialSha256 = createHash('sha256').update(officialBytes).digest('hex');
   await writeFile(bootstrapSourcePath, 'approved bootstrap fixture');
+  await mkdir(path.dirname(officialPath), { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
+  await writeFile(officialPath, officialBytes);
+  await writeFile(path.join(runtimeDir, 'codex.exe'), patchedBytes);
   await writeFile(rootReceiptPath, priorReceiptBytes);
-  const manifest = { version: '0.164.0-alpha.11.1', source_commit: '6905ecede7816e91373e9eabda3f6b0368fc747b', patch_sha256: '87007c7188d32b7e4c4cd45cb86fbf41fa122fc48a998d99ab2f2536ce73100d', target: 'x86_64-pc-windows-msvc', stock_cli_version: '0.164.0-alpha.11.1', binary_sha256: 'a'.repeat(64), files: { 'codex.exe': 'a'.repeat(64) } };
+  const manifest = { version: '0.164.0-alpha.11.1', source_commit: '6905ecede7816e91373e9eabda3f6b0368fc747b', patch_sha256: '87007c7188d32b7e4c4cd45cb86fbf41fa122fc48a998d99ab2f2536ce73100d', target: 'x86_64-pc-windows-msvc', stock_cli_version: '0.164.0-alpha.11.1', binary_sha256: patchedSha256, files: { 'codex.exe': patchedSha256 } };
   const verified = { exePath: path.join(runtimeDir, 'codex.exe'), manifest };
-  const capability = { schemaVersion: 1, testBuild: false, runtimeVersion: manifest.version, sourceCommit: manifest.source_commit, approvedPatchHashes: [manifest.patch_sha256] };
+  assert.notEqual(manifest.patch_sha256, manifest.binary_sha256, 'fixture distinguishes source patch digest from compiled executable digest');
+  const capability = { schemaVersion: 1, testBuild: false, runtimeVersion: manifest.version, sourceCommit: manifest.source_commit, approvedPatchHashes: [manifest.binary_sha256] };
   const current = new Map([
     ['CODEX_CLI_PATH', { present: false, value: null }],
     ['SOL_LUNA_NATIVE_PLAINTEXT_V2', { present: false, value: null }],
@@ -43,6 +53,7 @@ try {
     runtimeDir,
     verifyRuntimeVersion: async () => verified,
     runBootstrap,
+    hashFile: async (file) => createHash('sha256').update(await readFile(file)).digest('hex'),
   };
 
   const stock = await observeApiBackend({ ...common, hashFile: async () => 'b'.repeat(64), runBootstrap: async (_exe, mode) => mode === '--bootstrap-capabilities' ? capability : { schemaVersion: 1, observed: true, exePath: officialPath, exeSha256: 'b'.repeat(64) } });
@@ -60,14 +71,17 @@ try {
   assert.equal(writes, 0, 'invalid runtime provenance refuses before writing user environment');
 
   const writeReceipt = async (args) => {
-    await writeFile(args.receiptPath, JSON.stringify({ schemaVersion: 1, officialSha256: 'c'.repeat(64), officialVersion: manifest.version, desktopPackageVersion: '26.1021.3705.0', patchedPath: verified.exePath, patchedSha256: manifest.binary_sha256, compatibility: { status: 'passed', probe: 'app-server-initialize', cliVersion: manifest.version } }));
-    return { status: 'passed', probe: 'app-server-initialize', cliVersion: manifest.version };
+    assert.deepEqual(args.approvedPatchHashes, [manifest.binary_sha256], 'receipt writer receives compiled binary hash rather than source patch hash');
+    return writeCompatibilityReceipt(args.receiptPath, {
+      officialPath, officialVersion: manifest.version, desktopPackageVersion: '26.1021.3705.0', patchedPath: verified.exePath,
+      probeResult: { status: 'passed', probe: 'app-server-initialize', cliVersion: manifest.version },
+      approvedPatchHashes: args.approvedPatchHashes,
+    });
   };
   const success = await armApiBootstrap({
     ...common, bootstrapSourcePath, runtimeRoot: path.join(root, 'runtime'), journalPath, adapter,
-    readCodexCliVersion: () => manifest.version,
-    readDesktopPackageVersion: () => '26.1021.3705.0',
-    hashFile: async (file) => file === verified.exePath ? manifest.binary_sha256 : 'c'.repeat(64),
+    readVersion: () => manifest.version,
+    readPackageVersion: () => '26.1021.3705.0',
     probeAndWriteCompatibilityReceipt: writeReceipt,
   });
   assert.equal(success.state, 'armed');
@@ -80,6 +94,7 @@ try {
   assert.equal(journal.schemaVersion, 1);
   assert.equal(journal.phase, 'applied');
   assert.equal(JSON.parse(await readFile(rootReceiptPath, 'utf8')).patchedSha256, manifest.binary_sha256, 'arm writes the receipt at the router-runtime root consumed by the C bootstrap');
+  assert.equal(JSON.parse(await readFile(rootReceiptPath, 'utf8')).officialSha256, officialSha256, 'the real receipt writer hashes the official fixture rather than using mocked metadata');
   assert.equal(journal.receiptFile.path, rootReceiptPath);
   assert.equal(Buffer.from(journal.receiptFile.priorBase64, 'base64').compare(priorReceiptBytes), 0, 'receipt prior bytes are journaled for CAS rollback');
 
@@ -96,9 +111,8 @@ try {
 
   const rearmed = await armApiBootstrap({
     ...common, bootstrapSourcePath, runtimeRoot: path.join(root, 'runtime'), journalPath, adapter,
-    readCodexCliVersion: () => manifest.version,
-    readDesktopPackageVersion: () => '26.1021.3705.0',
-    hashFile: async (file) => file === verified.exePath ? manifest.binary_sha256 : 'c'.repeat(64),
+    readVersion: () => manifest.version,
+    readPackageVersion: () => '26.1021.3705.0',
     probeAndWriteCompatibilityReceipt: writeReceipt,
   });
   assert.equal(rearmed.state, 'armed', 'the same owned root receipt can be atomically armed again after disarm');
@@ -111,9 +125,8 @@ try {
   const firstProbeSignal = new Promise((resolve) => { firstProbeEntered = resolve; });
   const firstArm = armApiBootstrap({
     ...common, bootstrapSourcePath, runtimeRoot: path.join(root, 'runtime'), journalPath, adapter,
-    readCodexCliVersion: () => manifest.version,
-    readDesktopPackageVersion: () => '26.1021.3705.0',
-    hashFile: async (file) => file === verified.exePath ? manifest.binary_sha256 : 'c'.repeat(64),
+    readVersion: () => manifest.version,
+    readPackageVersion: () => '26.1021.3705.0',
     probeAndWriteCompatibilityReceipt: async (args) => { firstProbeEntered(); await firstProbeGate; return writeReceipt(args); },
   });
   await firstProbeSignal;
@@ -123,9 +136,8 @@ try {
   const secondArm = armApiBootstrap({
     ...common, bootstrapSourcePath, runtimeRoot: path.join(root, 'runtime'), journalPath, adapter,
     verifyRuntimeVersion: async () => { secondVerifyCalled = true; await secondVerifyGate; return verified; },
-    readCodexCliVersion: () => manifest.version,
-    readDesktopPackageVersion: () => '26.1021.3705.0',
-    hashFile: async (file) => file === verified.exePath ? manifest.binary_sha256 : 'c'.repeat(64),
+    readVersion: () => manifest.version,
+    readPackageVersion: () => '26.1021.3705.0',
     probeAndWriteCompatibilityReceipt: writeReceipt,
   });
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -146,9 +158,8 @@ try {
   const armDisarmSignal = new Promise((resolve) => { armEnteredProbe = resolve; });
   const armBeforeDisarm = armApiBootstrap({
     ...common, bootstrapSourcePath, runtimeRoot: path.join(root, 'runtime'), journalPath, adapter,
-    readCodexCliVersion: () => manifest.version,
-    readDesktopPackageVersion: () => '26.1021.3705.0',
-    hashFile: async (file) => file === verified.exePath ? manifest.binary_sha256 : 'c'.repeat(64),
+    readVersion: () => manifest.version,
+    readPackageVersion: () => '26.1021.3705.0',
     probeAndWriteCompatibilityReceipt: async (args) => { armEnteredProbe(); await armDisarmGate; return writeReceipt(args); },
   });
   await armDisarmSignal;
@@ -169,9 +180,8 @@ try {
   const failureJournal = journalPath;
   await assert.rejects(() => armApiBootstrap({
     ...common, bootstrapSourcePath, runtimeRoot: failureRoot, journalPath: failureJournal, adapter,
-    readCodexCliVersion: () => manifest.version,
-    readDesktopPackageVersion: () => '26.1021.3705.0',
-    hashFile: async (file) => file === verified.exePath ? manifest.binary_sha256 : 'c'.repeat(64),
+    readVersion: () => manifest.version,
+    readPackageVersion: () => '26.1021.3705.0',
     probeAndWriteCompatibilityReceipt: writeReceipt,
   }), /injected env failure/);
   assert.deepEqual(current.get('CODEX_CLI_PATH'), { present: false, value: null }, 'failed application clears a restored WindowsApps prior pin instead of leaving the old kernel selected');
@@ -182,9 +192,8 @@ try {
 
   await armApiBootstrap({
     ...common, bootstrapSourcePath, runtimeRoot: path.join(root, 'runtime'), journalPath, adapter,
-    readCodexCliVersion: () => manifest.version,
-    readDesktopPackageVersion: () => '26.1021.3705.0',
-    hashFile: async (file) => file === verified.exePath ? manifest.binary_sha256 : 'c'.repeat(64),
+    readVersion: () => manifest.version,
+    readPackageVersion: () => '26.1021.3705.0',
     probeAndWriteCompatibilityReceipt: writeReceipt,
   });
   const laterReceiptBytes = Buffer.from('{"receipt":"later manual update"}\n');

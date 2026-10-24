@@ -86,11 +86,13 @@ function runBootstrap(exe, mode, runner = spawnSync) {
   try { return JSON.parse(text); } catch { throw new Error(`native bootstrap ${mode} returned invalid JSON`); }
 }
 function manifestMatchesCapabilities(manifest, capabilities) {
+  // The bootstrap's legacy `approvedPatchHashes` field contains the SHA-256
+  // of the compiled patched codex.exe, not the source patch file digest.
   return capabilities?.schemaVersion === 1 && capabilities.testBuild === false
     && capabilities.runtimeVersion === manifest.version
     && capabilities.sourceCommit === manifest.source_commit
     && Array.isArray(capabilities.approvedPatchHashes)
-    && capabilities.approvedPatchHashes.some((hash) => String(hash).toLowerCase() === String(manifest.patch_sha256).toLowerCase());
+    && capabilities.approvedPatchHashes.some((hash) => String(hash).toLowerCase() === String(manifest.binary_sha256).toLowerCase());
 }
 function validManifest(manifest) {
   return manifest?.version === NATIVE_RUNTIME_VERSION
@@ -167,16 +169,20 @@ async function armApiBootstrapUnlocked({
   const probeReceiptPath = path.join(probeReceiptDir, 'compatibility.json');
   let probeResult, receipt, receiptBytes;
   try {
-    probeResult = await probeAndWriteReceipt({ officialPath, patchedPath: verified.exePath, runtimeRoot: root, receiptPath: probeReceiptPath, approvedPatchHashes: [manifest.patch_sha256] });
+    probeResult = await probeAndWriteReceipt({ officialPath, patchedPath: verified.exePath, runtimeRoot: root, receiptPath: probeReceiptPath, approvedPatchHashes: [manifest.binary_sha256] });
     receiptBytes = await readFile(probeReceiptPath);
     receipt = JSON.parse(receiptBytes.toString('utf8'));
   } finally { await rm(probeReceiptDir, { recursive: true, force: true }); }
-  if (probeResult?.status !== 'passed' || probeResult.probe !== 'app-server-initialize' || probeResult.cliVersion !== manifest.version
+  if (probeResult?.schemaVersion !== 1 || probeResult.compatibility?.status !== 'passed'
+      || probeResult.compatibility?.probe !== 'app-server-initialize' || probeResult.compatibility?.cliVersion !== manifest.version
       || receipt.schemaVersion !== 1 || receipt.patchedPath !== path.resolve(verified.exePath)
       || receipt.officialSha256 !== officialSha256 || receipt.officialVersion !== officialVersion
       || receipt.desktopPackageVersion !== desktopPackageVersion || receipt.patchedSha256 !== patchedSha256
       || receipt.compatibility?.status !== 'passed' || receipt.compatibility?.probe !== 'app-server-initialize'
-      || receipt.compatibility?.cliVersion !== manifest.version) {
+      || receipt.compatibility?.cliVersion !== manifest.version
+      || probeResult.patchedSha256 !== receipt.patchedSha256 || probeResult.officialSha256 !== receipt.officialSha256
+      || probeResult.officialVersion !== receipt.officialVersion || probeResult.desktopPackageVersion !== receipt.desktopPackageVersion
+      || probeResult.patchedPath !== receipt.patchedPath) {
     throw new Error('isolated initialize/config-read compatibility probe did not produce a matching receipt');
   }
 
