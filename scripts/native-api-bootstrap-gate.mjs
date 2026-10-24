@@ -1,11 +1,12 @@
 import {createHash} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import {lstat, readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {decodeJournal} from './native-isolated-install.mjs';
 import {API_BOOTSTRAP_JOURNAL, API_BOOTSTRAP_OWNER, armApiBootstrap, disarmOwnedBootstrap, observeApiBackend} from './native-bootstrap-maintenance.mjs';
 import {routerRuntimeRoot} from './native-upgrade-status.mjs';
 import {verifyRuntimeVersion} from './native-runtime.mjs';
-import {NATIVE_BOOTSTRAP_PATH} from './native-bootstrap-install.mjs';
+import {NATIVE_BOOTSTRAP_PATH, readCodexCliVersion, readDesktopPackageVersion} from './native-bootstrap-install.mjs';
 import {createWindowsUserEnvironmentAdapter} from './native-runtime-env.mjs';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -18,6 +19,17 @@ const exactPath = (a, b) => typeof a === 'string' && typeof b === 'string'
 const snapshotValue = value => value && typeof value === 'object' && typeof value.present === 'boolean'
   ? value.present ? String(value.value ?? '') : null
   : value == null ? null : String(value);
+async function regularFile(file) {
+  try { const info = await lstat(file); return info.isFile() && !info.isSymbolicLink(); }
+  catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+}
+function runNativeBootstrap(exe, mode) {
+  const result = spawnSync(exe, [mode], {encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'pipe']});
+  if (result.error || result.status !== 0) throw new Error(`native bootstrap ${mode} failed`);
+  const output = (result.stdout || '').trim();
+  if (mode === '--bootstrap-resolve-official-cli') return {exePath: output};
+  try { return JSON.parse(output); } catch { throw new Error(`native bootstrap ${mode} returned invalid JSON`); }
+}
 
 async function readJson(file, read = readFile) {
   return JSON.parse(await read(file, 'utf8'));
@@ -137,7 +149,11 @@ export async function assertGatewayBackendReady(options = {}) {
 
 export async function armOrReuseApiBootstrap({runtimeDir, codexHome, env = process.env, adapter = createWindowsUserEnvironmentAdapter(),
   bootstrapSourcePath = NATIVE_BOOTSTRAP_PATH, read = readFile, verifyRuntimeVersion: verifyRuntime = verifyRuntimeVersion,
-  arm = armApiBootstrap, disarm = disarmOwnedBootstrap, ...maintenanceOptions} = {}) {
+  arm = armApiBootstrap, disarm = disarmOwnedBootstrap,
+  runBootstrap = (exe, mode) => runNativeBootstrap(exe, mode),
+  readVersion = readCodexCliVersion, readPackageVersion = readDesktopPackageVersion,
+  hashFile = async file => createHash('sha256').update(await readFile(file)).digest('hex'),
+  ...maintenanceOptions} = {}) {
   const root = path.resolve(codexHome, 'router-runtime');
   const runtime = path.resolve(runtimeDir);
   if (!isInside(path.join(root, 'versions'), runtime)) throw new Error('API runtime is not staged under the approved CODEX_HOME/router-runtime/versions directory');
@@ -147,11 +163,42 @@ export async function armOrReuseApiBootstrap({runtimeDir, codexHome, env = proce
     if (!exactPath(current.runtimeDir, runtime)) throw new Error('an owned API bootstrap is armed for a different approved runtime');
     const configured = snapshotValue(await adapter.get('CODEX_CLI_PATH'));
     if (!exactPath(configured, current.bootstrapPath)) throw new Error('owned API bootstrap is no longer the active CODEX_CLI_PATH');
-    return {state: 'armed', restartRequired: true, ready: false, reused: true, journalPath, bootstrapPath: current.bootstrapPath, runtimeVersionDir: runtime};
+    const manifest = (await verifyRuntime(runtime)).manifest;
+    if (!manifest || !/^[a-f0-9]{64}$/i.test(manifest.binary_sha256 || '')) throw new Error('approved runtime identity is unavailable; preserving the current API bootstrap');
+    if (!await regularFile(current.bootstrapPath)) throw new Error('owned native bootstrap is unavailable; preserving the current API bootstrap');
+    const capabilities = await runBootstrap(current.bootstrapPath, '--bootstrap-capabilities');
+    if (capabilities?.schemaVersion !== 1 || capabilities.testBuild !== false
+        || capabilities.runtimeVersion !== manifest.version || capabilities.sourceCommit !== manifest.source_commit
+        || !Array.isArray(capabilities.approvedPatchHashes)
+        || !capabilities.approvedPatchHashes.some(value => String(value).toLowerCase() === manifest.binary_sha256.toLowerCase())) {
+      throw new Error('approved native bootstrap does not authorize this runtime; preserving the current API bootstrap');
+    }
+    const resolved = await runBootstrap(current.bootstrapPath, '--bootstrap-resolve-official-cli');
+    const officialPath = resolved?.exePath;
+    if (typeof officialPath !== 'string' || !path.isAbsolute(officialPath)
+        || !/\\WindowsApps\\OpenAI\.Codex_[^\\]+\\app\\resources\\codex\.exe$/i.test(officialPath)
+        || !await regularFile(officialPath)) throw new Error('registered official Codex CLI identity is unavailable; preserving the current API bootstrap');
+    const [officialVersion, desktopPackageVersion, officialSha256] = await Promise.all([
+      readVersion(officialPath), readPackageVersion(officialPath), hashFile(officialPath),
+    ]);
+    if (typeof officialVersion !== 'string' || !officialVersion || !/^\d+(?:\.\d+){2,}$/.test(desktopPackageVersion || '')
+        || !/^[a-f0-9]{64}$/i.test(officialSha256 || '') || officialSha256.toLowerCase() === manifest.binary_sha256.toLowerCase()) {
+      throw new Error('registered official Codex CLI identity is incomplete; preserving the current API bootstrap');
+    }
+    if (officialVersion !== manifest.version) throw new Error(`registered Codex CLI version ${officialVersion} is unsupported by approved runtime ${manifest.version}; preserving the current API bootstrap`);
+    const matchesReceipt = current.receipt.officialSha256?.toLowerCase() === officialSha256.toLowerCase()
+      && current.receipt.officialVersion === officialVersion
+      && current.receipt.desktopPackageVersion === desktopPackageVersion;
+    if (matchesReceipt) return {state: 'armed', restartRequired: true, ready: false, reused: true, journalPath, bootstrapPath: current.bootstrapPath, runtimeVersionDir: runtime};
+    const disarmed = await disarm({journalPath, adapter});
+    if (disarmed?.disarmed !== true) throw new Error(`registered Codex CLI changed but owned bootstrap could not be safely refreshed: ${disarmed?.reason || 'ownership changed'}; preserving later environment edits`);
+    const refreshed = await arm({runtimeDir: runtime, runtimeRoot: root, journalPath, bootstrapSourcePath, adapter,
+      verifyRuntimeVersion: verifyRuntime, runBootstrap, readVersion, readPackageVersion, hashFile, ...maintenanceOptions});
+    return {...refreshed, reused: false, refreshed: true};
   }
   try {
     const result = await arm({runtimeDir: runtime, runtimeRoot: root, journalPath, bootstrapSourcePath, adapter,
-      verifyRuntimeVersion: verifyRuntime, ...maintenanceOptions});
+      verifyRuntimeVersion: verifyRuntime, runBootstrap, readVersion, readPackageVersion, hashFile, ...maintenanceOptions});
     return {...result, reused: false};
   } catch (error) {
     throw error;

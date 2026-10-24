@@ -14,8 +14,12 @@ try {
   const runtimeRoot = path.join(codexHome, 'router-runtime');
   const runtimeDir = path.join(runtimeRoot, 'versions', 'approved-v1');
   const bootstrapPath = path.join(runtimeRoot, 'bootstrap', 'owned.exe');
+  const bootstrapSourcePath = path.join(root, 'approved-bootstrap.exe');
   const profileId = 'abcdefabcdefabcdefabcdef';
-  const receipt = {schemaVersion: 1, patchedPath: path.join(runtimeDir, 'codex.exe'), patchedSha256: 'a'.repeat(64), compatibility: {status: 'passed', probe: 'app-server-initialize', cliVersion: 'test-version'}};
+  const officialPath = path.join(root, 'WindowsApps', 'OpenAI.Codex_26.1.2.3_x64__fixture', 'app', 'resources', 'codex.exe');
+  const officialBytes = Buffer.from('official CLI fixture');
+  const officialSha256 = createHash('sha256').update(officialBytes).digest('hex');
+  const receipt = {schemaVersion: 1, officialSha256, officialVersion: 'test-version', desktopPackageVersion: '26.1.2.3', patchedPath: path.join(runtimeDir, 'codex.exe'), patchedSha256: 'a'.repeat(64), compatibility: {status: 'passed', probe: 'app-server-initialize', cliVersion: 'test-version'}};
   const receiptBytes = Buffer.from(JSON.stringify(receipt));
   const bootstrapBytes = Buffer.from('owned bootstrap');
   const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -30,9 +34,12 @@ try {
   const env = {CODEX_HOME: codexHome, CODEX_CLI_PATH: bootstrapPath};
   await mkdir(path.dirname(generic.paths.receiptPath), {recursive: true});
   await writeFile(generic.paths.receiptPath, receiptBytes);
+  await mkdir(path.dirname(officialPath), {recursive: true});
+  await writeFile(officialPath, officialBytes);
   await mkdir(runtimeDir, {recursive: true});
   await mkdir(path.dirname(bootstrapPath), {recursive: true});
   await writeFile(bootstrapPath, bootstrapBytes);
+  await writeFile(bootstrapSourcePath, 'approved bootstrap source');
   await writeFile(path.join(runtimeDir, 'codex.exe'), 'approved runtime');
   const genericJournalPath = path.join(runtimeRoot, 'bootstrap-install.json');
   await writeFile(genericJournalPath, JSON.stringify(generic));
@@ -103,12 +110,84 @@ try {
   await assert.rejects(armOrReuseApiBootstrap({runtimeDir, codexHome: armedHome, env: {CODEX_HOME: armedHome}, arm: async () => {armCalls += 1;}}), /router-runtime\/versions/);
   assert.equal(armCalls, 1, 'runtime outside the managed CODEX_HOME root cannot arm');
 
+  const resolvedOfficialModes = [];
   const reused = await armOrReuseApiBootstrap({runtimeDir, codexHome, env, verifyRuntimeVersion,
+    bootstrapSourcePath,
     adapter: {get: async () => ({present: true, value: bootstrapPath}), set: async () => {throw new Error('reuse must not write');}},
+    runBootstrap: async (_exe, mode) => {
+      assert.equal(_exe, bootstrapPath, 'identity commands execute through the currently owned C resolver binary');
+      resolvedOfficialModes.push(mode);
+      if (mode === '--bootstrap-capabilities') return {schemaVersion: 1, testBuild: false, runtimeVersion: 'test-version', sourceCommit: 'test-source', approvedPatchHashes: ['a'.repeat(64)]};
+      if (mode === '--bootstrap-resolve-official-cli') return {exePath: officialPath};
+      throw new Error(`unexpected bootstrap mode ${mode}`);
+    },
+    readVersion: async () => 'test-version', readPackageVersion: async () => '26.1.2.3',
+    hashFile: async file => digest(await readFile(file)),
     arm: async () => {armCalls += 1; throw new Error('existing owned bootstrap must be reused');},
   });
   assert.equal(reused.reused, true, 'repeated Apply reuses a verified owned bootstrap');
   assert.equal(armCalls, 1, 'repeated Apply does not collide with or rewrite the owned journal');
+  assert.deepEqual(resolvedOfficialModes, ['--bootstrap-capabilities', '--bootstrap-resolve-official-cli'], 'reuse resolves current official identity through the registered native bootstrap before declaring reuse');
+
+  const changedOfficialBytes = Buffer.from('official CLI fixture repackaged');
+  await writeFile(officialPath, changedOfficialBytes);
+  let disarmCount = 0;
+  let refreshArmCount = 0;
+  const refreshed = await armOrReuseApiBootstrap({runtimeDir, codexHome, env, verifyRuntimeVersion,
+    bootstrapSourcePath,
+    adapter: {get: async () => ({present: true, value: bootstrapPath}), set: async () => {throw new Error('refresh fixture does not mutate process environment');}},
+    runBootstrap: async (_exe, mode) => {
+      assert.equal(_exe, bootstrapPath, 'refresh identity commands use the owned registered resolver');
+      return mode === '--bootstrap-capabilities'
+        ? {schemaVersion: 1, testBuild: false, runtimeVersion: 'test-version', sourceCommit: 'test-source', approvedPatchHashes: ['a'.repeat(64)]}
+        : {exePath: officialPath};
+    },
+    readVersion: async () => 'test-version', readPackageVersion: async () => '26.1.2.4',
+    hashFile: async file => digest(file === officialPath ? changedOfficialBytes : await readFile(file)),
+    disarm: async options => {disarmCount += 1; assert.equal(options.journalPath, genericJournalPath); return {disarmed: true};},
+    arm: async options => {refreshArmCount += 1; assert.equal(options.runtimeDir, runtimeDir); return {state: 'armed', restartRequired: true, ready: false};},
+  });
+  assert.equal(refreshed.refreshed, true, 'same approved full CLI version with a changed registered package/hash rebuilds the compatibility receipt');
+  assert.equal(disarmCount, 1, 'owned CAS disarm runs before refreshing the receipt');
+  assert.equal(refreshArmCount, 1, 'the existing real arm seam is invoked once for a refreshed official identity');
+
+  let unsupportedDisarmCount = 0;
+  let unsupportedArmCount = 0;
+  await assert.rejects(armOrReuseApiBootstrap({runtimeDir, codexHome, env, verifyRuntimeVersion,
+    bootstrapSourcePath,
+    adapter: {get: async () => ({present: true, value: bootstrapPath}), set: async () => {throw new Error('unsupported fixture does not mutate environment');}},
+    runBootstrap: async (_exe, mode) => mode === '--bootstrap-capabilities'
+      ? {schemaVersion: 1, testBuild: false, runtimeVersion: 'test-version', sourceCommit: 'test-source', approvedPatchHashes: ['a'.repeat(64)]}
+      : {exePath: officialPath},
+    readVersion: async () => 'test-version-1', readPackageVersion: async () => '26.1.2.4',
+    hashFile: async file => digest(file === officialPath ? changedOfficialBytes : await readFile(file)),
+    disarm: async () => {unsupportedDisarmCount += 1; return {disarmed: true};},
+    arm: async () => {unsupportedArmCount += 1; return {state: 'armed'};},
+  }), /unsupported by approved runtime/);
+  assert.equal(unsupportedDisarmCount, 0, 'unsupported full CLI version preserves owned bootstrap and environment');
+  assert.equal(unsupportedArmCount, 0, 'unsupported full CLI version never attempts to arm a stale receipt');
+
+  let manualDisarmCount = 0;
+  await assert.rejects(armOrReuseApiBootstrap({runtimeDir, codexHome, env, verifyRuntimeVersion,
+    bootstrapSourcePath,
+    adapter: {get: async () => ({present: true, value: 'D:\\Tools\\manual-codex.exe'}), set: async () => {throw new Error('manual path must be preserved');}},
+    disarm: async () => {manualDisarmCount += 1; return {disarmed: true};},
+  }), /no longer the active CODEX_CLI_PATH/);
+  assert.equal(manualDisarmCount, 0, 'a later manual CODEX_CLI_PATH edit is preserved without disarm');
+
+  let unresolvedDisarmCount = 0;
+  let unresolvedArmCount = 0;
+  await assert.rejects(armOrReuseApiBootstrap({runtimeDir, codexHome, env, verifyRuntimeVersion,
+    bootstrapSourcePath,
+    adapter: {get: async () => ({present: true, value: bootstrapPath}), set: async () => {throw new Error('unresolved fixture cannot mutate environment');}},
+    runBootstrap: async (_exe, mode) => mode === '--bootstrap-capabilities'
+      ? {schemaVersion: 1, testBuild: false, runtimeVersion: 'test-version', sourceCommit: 'test-source', approvedPatchHashes: ['a'.repeat(64)]}
+      : {exePath: 'C:\\Tools\\unregistered-codex.exe'},
+    disarm: async () => {unresolvedDisarmCount += 1; return {disarmed: true};},
+    arm: async () => {unresolvedArmCount += 1; return {state: 'armed'};},
+  }), /registered official Codex CLI identity is unavailable/);
+  assert.equal(unresolvedDisarmCount, 0, 'unresolved registered official path preserves current ownership');
+  assert.equal(unresolvedArmCount, 0, 'unresolved official identity never starts a refresh');
 
   const legacyHome = path.join(root, 'legacy-home');
   const legacyRoot = path.join(legacyHome, 'router-runtime');
