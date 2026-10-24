@@ -105,6 +105,9 @@ applyApiConfiguration({settings, expectedSha256?}, {settingsPath})
 - 生产 apply 把 `{settings, expectedSha256}` 和当前服务的 `settingsPath` 交给生命周期模块，确保保存、读取与应用使用同一路径；不下载或替换 runtime、不启动或重启 Codex、不调用模型。
 - 若保存设置的 `enabled` 为 `false`，Apply 返回“自动分工已关闭”且不探测 runtime、不激活角色、不 arm 启动器。启用后，Apply 只接受经批准且位于 `CODEX_HOME/router-runtime/versions` 的 runtime；首次 arm 需要兼容性探针和当前用户环境 CAS，重复 Apply 仅复用同一有效 owned journal。失败时不报告 ready；dispatch 还会在 CLI 子进程上下文校验实际 Codex 祖先 executable hash，stock 或尚未重启时不 spawn。
 - 保存 off 会先 CAS 解除 `router-runtime/bootstrap-install.json` 的 owned API 启动器；只有该文件真实缺失才尝试 legacy native-isolated journal。损坏或 foreign owner 会保留环境值并报告。现有 child 不会被终止；当前 Codex 进程不会热切换，解除只影响下次启动。
+- Apply、设置更新及 off 清理跨 MCP 实例共用 `CODEX_HOME/router-runtime/maintenance.lock`。off 保存与停止在同一临界区完成；Apply 在锁内重新读取设置，拒绝已关闭或过期的配置，避免关闭响应后仍 arm 后台执行器。
+- NativeTasks 终态回调先提交并释放其状态锁，再等待 maintenance lock 做 pending-disable 收尾，锁顺序不会反向嵌套。
+- API dispatch 只接受 generic API bootstrap journal；DeepSeek dispatch 必须独立验证 legacy DeepSeek 安装 journal 和相符 receipt，不能借用 API journal。
 
 在已安装且兼容的 runtime 下，lifecycle 的 apply 只应用 owned API profile roles/catalog/provider/Task；不自动下载或安装 runtime，不关闭或重启 Codex，也不调用模型。新增角色需要提示完整重启 Codex 后生效；当前状态读取只报告采用未知。
 

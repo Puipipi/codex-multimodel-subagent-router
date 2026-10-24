@@ -11,6 +11,7 @@ import {OwnershipStore, resolveStateDir, TERMINAL_STATUSES} from './plugin-state
 import {createWindowsUserEnvironmentAdapter} from './native-runtime-env.mjs';
 import {readUpgradeGuardStatus, routerRuntimeRoot} from './native-upgrade-status.mjs';
 import {API_BOOTSTRAP_JOURNAL, API_BOOTSTRAP_OWNER, disarmOwnedBootstrap} from './native-bootstrap-maintenance.mjs';
+import {withRouterMaintenanceLock} from './native-router-maintenance-lock.mjs';
 
 export {readUpgradeGuardStatus, routerRuntimeRoot, upgradeStatusPath} from './native-upgrade-status.mjs';
 
@@ -107,7 +108,7 @@ async function disableOwnedTaskService({journal, taskAdapter, label}) {
   return {stopped: true};
 }
 
-export async function stopOwnedIdleExecutions({
+async function stopOwnedIdleExecutionsUnlocked({
   settings,
   settingsPath = defaultRouterSettingsPath(),
   stateDir,
@@ -170,6 +171,12 @@ export async function stopOwnedIdleExecutions({
   } catch {
     return unavailableStop('后台执行器状态无法确认或停止失败；设置已关闭，请在路由设置中重试。', 'stop_failed');
   }
+}
+
+export async function stopOwnedIdleExecutions(options = {}) {
+  if (options.maintenanceLockHeld === true) return stopOwnedIdleExecutionsUnlocked(options);
+  return withRouterMaintenanceLock({env: options.env},
+    () => stopOwnedIdleExecutionsUnlocked({...options, maintenanceLockHeld: true}));
 }
 
 export async function stopIfRoutingDisabled({

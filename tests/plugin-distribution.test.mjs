@@ -31,6 +31,7 @@ const files = new Map([
   ["scripts/native-bootstrap-install.mjs", "export const bootstrap = true;"],
   ["scripts/native-bootstrap-maintenance.mjs", "export const maintenance = true;"],
   ["scripts/native-api-bootstrap-gate.mjs", "export const apiGate = true;"],
+  ["scripts/native-router-maintenance-lock.mjs", "export const maintenanceLock = true;"],
   ["scripts/native-upgrade-guard.mjs", "export const guard = true;"],
   ["scripts/native-upgrade-status.mjs", "export const status = true;"],
   ["scripts/normalize-cargo-workspace-lock.mjs", "CI build helper; do not ship"],
@@ -103,7 +104,7 @@ try {
   }
   const listed = new Set(result.files.map((entry) => entry.path));
   for (const excluded of ["tests/fixture.test.mjs", "evidence/report.json", "procedures/private.md", "work/generated.txt", ".env", ".env.local", "credentials/token.txt", "AGENTS.md", "CLAUDE.md", "scripts/untracked-helper.mjs", "scripts/normalize-cargo-workspace-lock.mjs", "scripts/patch-backend-windows.mjs", "docs/superpowers/specs/private-review.md"]) assert.equal(listed.has(excluded), false, `${excluded} is excluded`);
-  for (const required of [".codex-plugin/plugin.json", ".agents/plugins/marketplace.json", ".mcp.json", "hooks/hooks.json", "ui/router-settings.html", "scripts/native-bootstrap-install.mjs", "scripts/native-bootstrap-maintenance.mjs", "scripts/native-api-bootstrap-gate.mjs", "scripts/native-upgrade-guard.mjs", "scripts/native-upgrade-status.mjs", "native/bootstrap/codex-bootstrap.exe", "native/bootstrap/bootstrap.c", "SKILL.md", "README.md", "LICENSE"]) assert.equal(listed.has(required), true, `${required} is packaged`);
+  for (const required of [".codex-plugin/plugin.json", ".agents/plugins/marketplace.json", ".mcp.json", "hooks/hooks.json", "ui/router-settings.html", "scripts/native-bootstrap-install.mjs", "scripts/native-bootstrap-maintenance.mjs", "scripts/native-api-bootstrap-gate.mjs", "scripts/native-router-maintenance-lock.mjs", "scripts/native-upgrade-guard.mjs", "scripts/native-upgrade-status.mjs", "native/bootstrap/codex-bootstrap.exe", "native/bootstrap/bootstrap.c", "SKILL.md", "README.md", "LICENSE"]) assert.equal(listed.has(required), true, `${required} is packaged`);
   assert.equal(JSON.stringify(result.packageManifest).includes(source), false, "package metadata contains no source absolute path");
   assert.equal(JSON.stringify(result.packageManifest).includes("fixture-secret"), false, "package metadata contains no fixture secret");
   assert.equal(result.packageManifest.files.some((entry) => entry.path === "package-manifest.json"), false, "manifest does not self-hash");

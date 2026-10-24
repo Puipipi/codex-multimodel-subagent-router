@@ -487,6 +487,7 @@ try {
   await writeFile(applyRolePath, applyRoleBytes);
   const secondApply = await applyApiConfiguration({ settings: applySettings, expectedSha256: applySnapshot.sha256 }, applyDeps);
   equal(secondApply.alreadyInstalled.length, 1, "repeated Apply is idempotent");
+  equal(secondApply.restartRequired, true, "reused owned bootstrap continues to require host restart even when every profile is already installed");
   equal(applyTasks.registers, 1, "repeated Apply does not duplicate the task");
   await rejects(() => applyApiConfiguration({ settings: applySettings, expectedSha256: "0".repeat(64) }, applyDeps), /changed since/);
   const unsupported = await applyApiConfiguration({ settings: applySettings }, {

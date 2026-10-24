@@ -27,7 +27,7 @@ const REQUIRED_FILES = [
   ".codex-plugin/plugin.json", ".agents/plugins/marketplace.json", ".mcp.json", "agents/openai.yaml",
   "hooks/hooks.json", "ui/router-settings.html", "scripts/plugin-mcp.mjs", "scripts/route-hook.mjs",
   "scripts/native-bootstrap-install.mjs", "scripts/native-upgrade-guard.mjs", "scripts/native-upgrade-status.mjs",
-  "scripts/native-api-bootstrap-gate.mjs", "scripts/native-bootstrap-maintenance.mjs",
+  "scripts/native-api-bootstrap-gate.mjs", "scripts/native-bootstrap-maintenance.mjs", "scripts/native-router-maintenance-lock.mjs",
   "native/bootstrap/bootstrap.c", "native/bootstrap/codex-bootstrap.exe", "README.md", "SKILL.md", "PLUGIN.md", "LICENSE",
 ];
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");

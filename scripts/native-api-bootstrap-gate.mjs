@@ -99,10 +99,12 @@ async function resolveLegacyDeepseek({runtimeRoot, env, read, readDeepseekJourna
 
 export async function resolveOwnedGatewayBootstrap({executor, profileId, env = process.env, apiDir, read = readFile, readDeepseekJournal, verifyRuntimeVersion: verifyRuntime = verifyRuntimeVersion} = {}) {
   const root = path.resolve(routerRuntimeRoot(env));
-  if (executor === 'api' && (!/^[a-f0-9]{24}$/.test(profileId || '') || typeof apiDir !== 'string')) throw new Error('API profile identity is required for bootstrap readiness');
-  const generic = await resolveGeneric({runtimeRoot: root, env, read, verifyRuntime});
-  if (generic) return generic;
-  if (executor === 'api') throw new Error('API bootstrap is not armed; explicitly Apply API configuration and restart Codex');
+  if (executor === 'api') {
+    if (!/^[a-f0-9]{24}$/.test(profileId || '') || typeof apiDir !== 'string') throw new Error('API profile identity is required for bootstrap readiness');
+    const generic = await resolveGeneric({runtimeRoot: root, env, read, verifyRuntime});
+    if (generic) return generic;
+    throw new Error('API bootstrap is not armed; explicitly Apply API configuration and restart Codex');
+  }
   if (executor === 'deepseek') return resolveLegacyDeepseek({runtimeRoot: root, env, read, readDeepseekJournal, verifyRuntime});
   throw new Error('unsupported gateway executor');
 }

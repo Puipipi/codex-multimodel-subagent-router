@@ -14,6 +14,7 @@ import {readNativeModelOptions} from './native-model-catalog.mjs';
 import {listApiModels} from './native-api-models.mjs';
 import {resolveCurrentMainModel} from './native-current-model.mjs';
 import {stopOwnedIdleExecutions as stopOwnedIdleExecutionsDefault} from './native-execution-lifecycle.mjs';
+import {withRouterMaintenanceLock} from './native-router-maintenance-lock.mjs';
 import {readUpgradeGuardStatus} from './native-upgrade-status.mjs';
 import {collectConnectionDiagnostics} from './native-connection-diagnostics.mjs';
 import {NativeTasks} from './native-state.mjs';
@@ -756,7 +757,7 @@ export function createRouterSettingsService({
     : () => readUpgradeGuardStatus({env});
   const stopIdle = typeof stopOwnedIdleExecutions === 'function' ? stopOwnedIdleExecutions : stopOwnedIdleExecutionsDefault;
   async function stopRoutingIdleServices(settings) {
-    try { return await stopIdle({settings, settingsPath, stateDir, env}); }
+    try { return await stopIdle({settings, settingsPath, stateDir, env, maintenanceLockHeld: true}); }
     catch { return {stopped: false, message: '后台执行器停止失败；路由设置已保存，请在设置中重试。'}; }
   }
   async function currentMainModel(context = {}) {
@@ -829,6 +830,10 @@ export function createRouterSettingsService({
   }
 
   async function updateSettings(args) {
+    return withRouterMaintenanceLock({env}, () => updateSettingsLocked(args));
+  }
+
+  async function updateSettingsLocked(args) {
     exactObject(args, new Set(['set', 'expectedSha256']), 'router_settings_update arguments');
     const set = exactObject(args.set, new Set(['enabled', 'mode', 'fixedExecutor', 'peak', 'valley']), 'set');
     if (!Object.keys(set).length) throw new Error('set must contain at least one setting.');
@@ -877,6 +882,10 @@ export function createRouterSettingsService({
   }
 
   async function saveSettings(args, context = {}) {
+    return withRouterMaintenanceLock({env}, () => saveSettingsLocked(args, context));
+  }
+
+  async function saveSettingsLocked(args, context = {}) {
     exactObject(args, new Set(['settings', 'expectedSha256']), 'router_settings_save arguments');
     if (!plainObject(args.settings)) throw new Error('settings must be an object.');
     const expected = requireHash(args.expectedSha256, 'expectedSha256');
@@ -901,6 +910,10 @@ export function createRouterSettingsService({
   }
 
   async function saveProfile(args, context = {}) {
+    return withRouterMaintenanceLock({env}, () => saveProfileLocked(args, context));
+  }
+
+  async function saveProfileLocked(args, context = {}) {
     exactObject(args, new Set(['expectedSha256', 'basedOnProfileId', 'definition', 'label', 'aliases']), 'router_settings_save_profile arguments');
     const expected = requireHash(args.expectedSha256, 'expectedSha256');
     if (!plainObject(args.definition)) throw new Error('definition must be an object.');

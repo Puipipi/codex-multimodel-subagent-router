@@ -40,6 +40,7 @@ import { verifyRuntimeVersion } from "./native-runtime.mjs";
 import { defaultRouterSettingsPath, readRouterSettingsSnapshot, resolveApiCredential, validateRouterSettings } from "./native-api-settings.mjs";
 import { withFileLock } from "./plugin-state.mjs";
 import { armOrReuseApiBootstrap, disarmApiBootstrap } from "./native-api-bootstrap-gate.mjs";
+import { withRouterMaintenanceLock } from "./native-router-maintenance-lock.mjs";
 
 const JOURNAL_VERSION = 1;
 const REGISTRY_VERSION = 1;
@@ -1129,18 +1130,13 @@ async function repairLegacyApiRoleRegistrations(journal, { codexHome, runtimeDir
   });
 }
 
-export async function applyApiConfiguration({ settings, expectedSha256 } = {}, dependencies = {}) {
+export async function applyApiConfiguration(args = {}, dependencies = {}) {
+  return withRouterMaintenanceLock({env: dependencies.env, codexHome: dependencies.codexHome},
+    () => applyApiConfigurationUnlocked(args, dependencies));
+}
+
+async function applyApiConfigurationUnlocked({ settings, expectedSha256 } = {}, dependencies = {}) {
   const validated = validateRouterSettings(settings);
-  if (validated.enabled === false) {
-    return {
-      applied: false,
-      supported: true,
-      restartRequired: false,
-      detail: "自动分工已关闭；API 配置已保留，启用分工后再显式应用。",
-      appliedProfiles: [],
-      alreadyInstalled: [],
-    };
-  }
   const apiDir = dependencies.apiDir || defaultNativeApiDir();
   const paths = nativeApiPaths(apiDir);
   const settingsPath = assertAbsolute("settingsPath", dependencies.settingsPath || paths.settings);
@@ -1151,6 +1147,16 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
   }
   if (JSON.stringify(stableJson(snapshot.settings)) !== JSON.stringify(stableJson(validated))) {
     throw new Error("router settings must be saved before applying API configuration");
+  }
+  if (snapshot.settings.enabled === false) {
+    return {
+      applied: false,
+      supported: true,
+      restartRequired: false,
+      detail: "自动分工已关闭；API 配置已保留，启用分工后再显式应用。",
+      appliedProfiles: [],
+      alreadyInstalled: [],
+    };
   }
   const runtime = await (dependencies.discoverApplyCompatibleRuntime || discoverApplyCompatibleRuntime)({
     codexHome,
@@ -1227,13 +1233,13 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
       continue;
     }
     if (existing?.phase === "prepared") {
-      await activate({ journalPath }, dependencies);
+      await (dependencies.activateApiProfile || activate)({ journalPath }, dependencies);
       applied.push(profileId);
       activatedThisApply.push(profileId);
       continue;
     }
     if (existing) throw new Error(`API profile ${profileId} is in an unsupported install phase`);
-    await prepare({
+    await (dependencies.prepareApiProfile || prepare)({
       profileId,
       settingsPath,
       apiDir,
@@ -1242,13 +1248,13 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
       journalPath,
       pluginRoot: dependencies.pluginRoot || REPO_ROOT,
     }, dependencies);
-    await activate({ journalPath }, dependencies);
+    await (dependencies.activateApiProfile || activate)({ journalPath }, dependencies);
     applied.push(profileId);
     activatedThisApply.push(profileId);
   } } catch (error) {
     const recoveryErrors = [];
     for (const profileId of [...activatedThisApply].reverse()) {
-      try { await rollback({journalPath: paths.journal(profileId)}, dependencies); }
+      try { await (dependencies.rollbackApiProfile || rollback)({journalPath: paths.journal(profileId)}, dependencies); }
       catch (rollbackError) { recoveryErrors.push(rollbackError); }
     }
     if (bootstrap && !bootstrap.reused) {
@@ -1263,7 +1269,7 @@ export async function applyApiConfiguration({ settings, expectedSha256 } = {}, d
   return {
     applied: applied.length > 0,
     supported: true,
-    restartRequired: applied.length > 0,
+    restartRequired: applied.length > 0 || bootstrap?.restartRequired === true,
     detail: applied.length > 0
       ? repairedProfiles.length
         ? "API 角色目录或 provider 注册已修复；受管启动器已验证或复用，需要完整重启 Codex。"

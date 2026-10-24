@@ -41,6 +41,10 @@ try {
   const resolved = await resolveOwnedGatewayBootstrap({executor: 'api', profileId, env, apiDir: path.join(root, 'api'), verifyRuntimeVersion});
   assert.equal(resolved.runtimeDir, runtimeDir, 'API dispatch resolves only the owned persistent runtime from generic journal');
   assert.equal(resolved.bootstrapPath, bootstrapPath, 'API dispatch uses the exact owned bootstrap path');
+  await assert.rejects(resolveOwnedGatewayBootstrap({executor: 'deepseek',
+    env: {...env, SOL_LUNA_NATIVE_INSTALL_JOURNAL: path.join(root, 'missing-deepseek-journal.json')},
+    verifyRuntimeVersion}), /DeepSeek install journal is missing/i,
+  'a generic API bootstrap journal cannot stand in for DeepSeek ownership');
 
   let observed = 0;
   const approval = await observeOwnedGatewayBackend({executor: 'api', profileId, env, apiDir: path.join(root, 'api'),

@@ -31,6 +31,7 @@ for (const file of [
   'scripts/native-bootstrap-install.mjs',
   'scripts/native-bootstrap-maintenance.mjs',
   'scripts/native-api-bootstrap-gate.mjs',
+  'scripts/native-router-maintenance-lock.mjs',
   'scripts/native-upgrade-guard.mjs',
   'native/bootstrap/bootstrap.c',
   'native/bootstrap/codex-bootstrap.exe',
