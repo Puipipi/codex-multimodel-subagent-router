@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -10,6 +11,7 @@ import {
   readDesktopPackageVersion,
 } from './native-bootstrap-install.mjs';
 import { NATIVE_RUNTIME_PATCH_SHA256, NATIVE_RUNTIME_SOURCE_COMMIT, NATIVE_RUNTIME_VERSION, NATIVE_RUNTIME_TARGET, verifyRuntimeVersion } from './native-runtime.mjs';
+import { withFileLock } from './plugin-state.mjs';
 
 export const API_BOOTSTRAP_OWNER = 'sol-luna-native-api-bootstrap';
 export const API_BOOTSTRAP_JOURNAL = 'bootstrap-install.json';
@@ -54,9 +56,10 @@ async function removeOwnedJournal(file, expectedHash) {
   const bytes = await readFile(file).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
   if (bytes && sha256(bytes) === expectedHash) await rm(file);
 }
-async function deployOwnedBootstrap(file, sourceBytes) {
+async function deployOwnedBootstrap(file, sourceBytes, expectedPriorBytes, comparePrior = false) {
   const target = path.resolve(file);
   const prior = await readFile(target).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+  if (comparePrior && (prior === null ? expectedPriorBytes !== null : !prior.equals(expectedPriorBytes))) throw new Error(`owned file changed before deployment: ${target}`);
   if (prior?.equals(sourceBytes)) return { path: target, prior, deployedSha256: sha256(sourceBytes), changed: false };
   await mkdir(path.dirname(target), { recursive: true });
   const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
@@ -122,7 +125,7 @@ export async function observeApiBackend({ bootstrapPath = NATIVE_BOOTSTRAP_PATH,
   }
 }
 
-export async function armApiBootstrap({
+async function armApiBootstrapUnlocked({
   runtimeDir, runtimeRoot = path.dirname(path.dirname(path.resolve(runtimeDir))),
   bootstrapPath = NATIVE_BOOTSTRAP_PATH, bootstrapSourcePath = bootstrapPath,
   journalPath = path.join(runtimeRoot, API_BOOTSTRAP_JOURNAL), adapter,
@@ -156,9 +159,18 @@ export async function armApiBootstrap({
   const officialSha256 = (await hashFile(officialPath)).toLowerCase();
   const patchedSha256 = (await hashFile(verified.exePath)).toLowerCase();
   if (officialSha256 === patchedSha256 || patchedSha256 !== manifest.binary_sha256.toLowerCase()) throw new Error('patched CLI hash does not match the verified runtime manifest');
-  const receiptPath = path.join(path.resolve(runtimeDir), 'compatibility.json');
-  const probeResult = await probeAndWriteReceipt({ officialPath, patchedPath: verified.exePath, runtimeRoot: path.resolve(runtimeDir), receiptPath, approvedPatchHashes: [manifest.patch_sha256] });
-  const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+  const receiptPath = path.join(root, 'compatibility.json');
+  const receiptInfo = await lstat(receiptPath).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+  if (receiptInfo && (!receiptInfo.isFile() || receiptInfo.isSymbolicLink())) throw new Error('existing bootstrap compatibility receipt must be a regular file');
+  const priorReceiptBytes = receiptInfo ? await readFile(receiptPath) : null;
+  const probeReceiptDir = await mkdtemp(path.join(os.tmpdir(), 'codex-api-bootstrap-probe-'));
+  const probeReceiptPath = path.join(probeReceiptDir, 'compatibility.json');
+  let probeResult, receipt, receiptBytes;
+  try {
+    probeResult = await probeAndWriteReceipt({ officialPath, patchedPath: verified.exePath, runtimeRoot: root, receiptPath: probeReceiptPath, approvedPatchHashes: [manifest.patch_sha256] });
+    receiptBytes = await readFile(probeReceiptPath);
+    receipt = JSON.parse(receiptBytes.toString('utf8'));
+  } finally { await rm(probeReceiptDir, { recursive: true, force: true }); }
   if (probeResult?.status !== 'passed' || probeResult.probe !== 'app-server-initialize' || probeResult.cliVersion !== manifest.version
       || receipt.schemaVersion !== 1 || receipt.patchedPath !== path.resolve(verified.exePath)
       || receipt.officialSha256 !== officialSha256 || receipt.officialVersion !== officialVersion
@@ -170,6 +182,7 @@ export async function armApiBootstrap({
 
   if (sha256(await readFile(bootstrapSourcePath)) !== sourceHash) throw new Error('native bootstrap changed during compatibility setup');
   const persistentBootstrap = path.join(root, 'bootstrap', `${sourceHash}.exe`);
+  const receiptFileChanged = !priorReceiptBytes || !priorReceiptBytes.equals(receiptBytes);
   const currentEnvironment = await readEnvironment(adapter);
   const plan = await planBootstrapEnvironment({ bootstrapPath: persistentBootstrap, bootstrapSourcePath, officialPath, currentEnvironment, journalPath: journal });
   const priorCli = normalize(plan.prior[CODEX_CLI_PATH]);
@@ -179,21 +192,26 @@ export async function armApiBootstrap({
     prior: Object.fromEntries(API_ENV_KEYS.map((key) => [key, normalize(plan.prior[key])])),
     next: Object.fromEntries(API_ENV_KEYS.map((key) => [key, normalize(plan.next[key])])),
   };
+  const bootstrapInfo = await lstat(persistentBootstrap).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
+  if (bootstrapInfo && (!bootstrapInfo.isFile() || bootstrapInfo.isSymbolicLink())) throw new Error('existing bootstrap destination must be a regular file');
+  const priorBootstrapBytes = bootstrapInfo ? await readFile(persistentBootstrap) : null;
   const record = {
     owner: API_BOOTSTRAP_OWNER, schemaVersion: 1, phase: 'prepared', updatedAt: new Date().toISOString(),
     runtime: { version: manifest.version, sourceCommit: manifest.source_commit, patchSha256: manifest.patch_sha256, binarySha256: patchedSha256 },
     paths: { maintenanceRoot: root, runtimeDir: path.resolve(runtimeDir), officialPath, bootstrapPath: persistentBootstrap, receiptPath },
     environment: { prior: apiPlan.prior, next: apiPlan.next },
-    bootstrapFile: null,
+    bootstrapFile: { path: persistentBootstrap, priorBase64: priorBootstrapBytes?.toString('base64') ?? null, deployedSha256: sourceHash, changed: !priorBootstrapBytes || !priorBootstrapBytes.equals(sourceBytes) },
+    receiptFile: { path: receiptPath, priorBase64: priorReceiptBytes?.toString('base64') ?? null, deployedSha256: sha256(receiptBytes), changed: receiptFileChanged },
   };
   let journalHash = await atomicJson(journal, record);
   let fileSnapshot = null;
+  let receiptSnapshot = { path: receiptPath, prior: priorReceiptBytes, deployedSha256: sha256(receiptBytes), changed: receiptFileChanged };
+  let receiptDeployed = false;
   let envWriteAttempted = false;
   try {
     for (const key of API_ENV_KEYS) if (!same(await adapter.get(key), apiPlan.prior[key])) throw new Error(`environment changed since API bootstrap plan: ${key}`);
-    fileSnapshot = await deployOwnedBootstrap(persistentBootstrap, sourceBytes);
-    record.bootstrapFile = { path: fileSnapshot.path, priorBase64: fileSnapshot.prior?.toString('base64') ?? null, deployedSha256: fileSnapshot.deployedSha256, changed: fileSnapshot.changed };
-    journalHash = await atomicJson(journal, record);
+    if (receiptSnapshot.changed) { receiptSnapshot = await deployOwnedBootstrap(receiptPath, receiptBytes, priorReceiptBytes, true); receiptDeployed = true; }
+    fileSnapshot = await deployOwnedBootstrap(persistentBootstrap, sourceBytes, priorBootstrapBytes, true);
     if (!same(await adapter.get(CODEX_CLI_PATH), apiPlan.prior[CODEX_CLI_PATH])) throw new Error(`environment changed since API bootstrap plan: ${CODEX_CLI_PATH}`);
     envWriteAttempted = true;
     await adapter.set(CODEX_CLI_PATH, apiPlan.next[CODEX_CLI_PATH]);
@@ -211,20 +229,32 @@ export async function armApiBootstrap({
       } catch (rollbackError) { recoveryErrors.push(rollbackError); }
     }
     if (fileSnapshot) try { await rollbackOwnedBootstrap(fileSnapshot); } catch (rollbackError) { recoveryErrors.push(rollbackError); }
+    if (receiptDeployed) try { await rollbackOwnedBootstrap(receiptSnapshot); } catch (rollbackError) { recoveryErrors.push(rollbackError); }
     if (recoveryErrors.length) throw new AggregateError([error, ...recoveryErrors], 'API bootstrap apply failed and rollback requires recovery; ownership journal retained');
     await removeOwnedJournal(journal, journalHash);
     throw error;
   }
-  return { state: 'armed', restartRequired: true, ready: false, owner: API_BOOTSTRAP_OWNER, journalPath: journal, bootstrapPath: persistentBootstrap, runtimeVersionDir: path.resolve(runtimeDir), reason: 'Codex must restart before the model-host backend can be verified' };
+  return { state: 'armed', restartRequired: true, ready: false, owner: API_BOOTSTRAP_OWNER, journalPath: journal, bootstrapPath: persistentBootstrap, receiptPath, runtimeVersionDir: path.resolve(runtimeDir), reason: 'Codex must restart before the model-host backend can be verified' };
 }
 
-export async function disarmOwnedBootstrap({ journalPath, adapter } = {}) {
+export async function armApiBootstrap(options = {}) {
+  const runtimeDir = options.runtimeDir;
+  if (typeof runtimeDir !== 'string') throw new Error('runtimeDir is required');
+  const runtimeRoot = path.resolve(options.runtimeRoot ?? path.dirname(path.dirname(path.resolve(runtimeDir))));
+  const journalPath = path.resolve(options.journalPath ?? path.join(runtimeRoot, API_BOOTSTRAP_JOURNAL));
+  if (journalPath !== path.join(runtimeRoot, API_BOOTSTRAP_JOURNAL)) throw new Error('API bootstrap journal must be router-runtime/bootstrap-install.json');
+  return withFileLock(`${journalPath}.lock`, () => armApiBootstrapUnlocked({ ...options, runtimeRoot, journalPath }), { timeoutMs: 120_000, staleMs: 300_000 });
+}
+
+async function disarmOwnedBootstrapUnlocked({ journalPath, adapter } = {}) {
   if (typeof journalPath !== 'string' || !adapter?.get || !adapter?.set) throw new Error('journalPath and Windows user environment adapter are required');
   const journal = path.resolve(journalPath);
   const record = JSON.parse(await readFile(journal, 'utf8'));
   if (record?.owner !== API_BOOTSTRAP_OWNER || record.schemaVersion !== 1 || !['prepared', 'applied'].includes(record.phase)) throw new Error('bootstrap journal is not owned by this API maintenance helper');
   if (path.basename(journal) !== API_BOOTSTRAP_JOURNAL || path.resolve(path.join(record.paths?.maintenanceRoot || '', API_BOOTSTRAP_JOURNAL)) !== journal
       || !inside(path.join(record.paths.maintenanceRoot, 'bootstrap'), record.paths?.bootstrapPath || '')
+      || record.paths?.receiptPath !== path.join(record.paths.maintenanceRoot, 'compatibility.json')
+      || record.receiptFile?.path !== record.paths.receiptPath
       || !same(record.environment?.next?.[CODEX_CLI_PATH], { present: true, value: record.paths.bootstrapPath })
       || !Object.keys(record.environment?.next || {}).every((key) => key === CODEX_CLI_PATH)
       || !Object.keys(record.environment?.prior || {}).every((key) => key === CODEX_CLI_PATH)
@@ -240,11 +270,18 @@ export async function disarmOwnedBootstrap({ journalPath, adapter } = {}) {
       changed: record.bootstrapFile?.changed === true,
     },
   };
+  const receiptSnapshot = {
+    path: record.receiptFile.path,
+    prior: record.receiptFile.priorBase64 === null ? null : Buffer.from(record.receiptFile.priorBase64 || '', 'base64'),
+    deployedSha256: record.receiptFile.deployedSha256,
+    changed: record.receiptFile.changed === true,
+  };
   const currentCli = normalize(await adapter.get(CODEX_CLI_PATH));
   if (!same(currentCli, snapshot.next?.[CODEX_CLI_PATH])) {
     if (same(currentCli, snapshot.prior?.[CODEX_CLI_PATH])) {
       let cleanupWarning = null;
       try { await rollbackOwnedBootstrap(snapshot.bootstrapFile); } catch (error) { cleanupWarning = error instanceof Error ? error.message : String(error); }
+      try { await rollbackOwnedBootstrap(receiptSnapshot); } catch (error) { cleanupWarning = [cleanupWarning, error instanceof Error ? error.message : String(error)].filter(Boolean).join('; '); }
       await rm(journal);
       return { disarmed: true, alreadyDisarmed: true, journalPath: journal, cleanupWarning };
     }
@@ -256,6 +293,13 @@ export async function disarmOwnedBootstrap({ journalPath, adapter } = {}) {
   await adapter.set(CODEX_CLI_PATH, safePrior);
   let cleanupWarning = null;
   try { await rollbackOwnedBootstrap(snapshot.bootstrapFile); } catch (error) { cleanupWarning = error instanceof Error ? error.message : String(error); }
+  try { await rollbackOwnedBootstrap(receiptSnapshot); } catch (error) { cleanupWarning = [cleanupWarning, error instanceof Error ? error.message : String(error)].filter(Boolean).join('; '); }
   await rm(journal);
   return { disarmed: true, journalPath: journal, cleanupWarning };
+}
+
+export async function disarmOwnedBootstrap(options = {}) {
+  if (typeof options.journalPath !== 'string') throw new Error('journalPath is required');
+  const journalPath = path.resolve(options.journalPath);
+  return withFileLock(`${journalPath}.lock`, () => disarmOwnedBootstrapUnlocked({ ...options, journalPath }), { timeoutMs: 120_000, staleMs: 300_000 });
 }
