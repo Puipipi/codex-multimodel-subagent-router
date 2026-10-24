@@ -2063,7 +2063,7 @@ index 17e22cc5a..efb6cd8f9 100644
  pub mod user_input;
 diff --git a/codex-rs/protocol/src/sol_luna_wire_aliases.rs b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
 new file mode 100644
-index 000000000..ad7be7d21
+index 000000000..ae5b868cb
 --- /dev/null
 +++ b/codex-rs/protocol/src/sol_luna_wire_aliases.rs
 @@ -0,0 +1,504 @@
@@ -2286,8 +2286,8 @@ index 000000000..ad7be7d21
 +fn transform_response_item(item: &mut ResponseItem, direction: Direction) -> Result<(), String> {
 +    match item {
 +        ResponseItem::AdditionalTools { tools, .. } => {
-+            let transformed = transform_tools(Value::Array(tools.clone()), direction)?;
-+            *tools = transformed.as_array().cloned().unwrap_or_default();
++            let transformed = transform_tools(Value::Array(tools.to_vec()), direction)?;
++            *tools = transformed.as_array().cloned().unwrap_or_default().into();
 +        }
 +        ResponseItem::FunctionCall { name, namespace, encrypted_function_args, .. } => {
 +            let effective_namespace = namespace.as_deref().map(str::to_string);

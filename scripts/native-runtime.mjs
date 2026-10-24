@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 export const NATIVE_RUNTIME_VERSION = "0.164.0-alpha.11.1";
 export const NATIVE_RUNTIME_SOURCE_COMMIT = "6905ecede7816e91373e9eabda3f6b0368fc747b";
-export const NATIVE_RUNTIME_PATCH_SHA256 = "827a8ef35290fc20d914b7af2b55e7e5c3f25ff68adf7bb410f899ac7302d513";
+export const NATIVE_RUNTIME_PATCH_SHA256 = "87007c7188d32b7e4c4cd45cb86fbf41fa122fc48a998d99ab2f2536ce73100d";
 export const NATIVE_RUNTIME_TARGET = "x86_64-pc-windows-msvc";
 export const REQUIRED_COMPANIONS = [
   "codex-code-mode-host.exe",
