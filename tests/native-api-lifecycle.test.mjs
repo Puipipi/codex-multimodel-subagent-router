@@ -521,7 +521,7 @@ try {
 
   const patchBytes = await readFile(path.join(repoRoot, "patches", "native-isolated-cli.patch"));
   equal(NATIVE_RUNTIME_PATCH_SHA256, createHash("sha256").update(patchBytes).digest("hex"), "runtime approval hash tracks the tracked patch");
-  equal(NATIVE_RUNTIME_PATCH_SHA256, "6bf7b652781cfbb3c0789f01524ab1daff27ac2856bf26aa36ed63a909f5dd8d", "runtime approval hash matches the current integration patch");
+  equal(NATIVE_RUNTIME_PATCH_SHA256, "d0cb44027e64296045dfa26dbc79ed878ee8b5feee325267640c6337b9c8e76e", "runtime approval hash matches the current integration patch");
   const nativeBuildWorkflow = await readFile(path.join(repoRoot, ".github", "workflows", "native-isolated-cli.yml"), "utf8");
   ok(nativeBuildWorkflow.includes(`STABLE_GIT_COMMIT: ${NATIVE_RUNTIME_SOURCE_COMMIT}`), "Windows workflow pins the runtime-approved source commit");
   ok(nativeBuildWorkflow.includes(`EXPECTED_PATCH_SHA256: ${NATIVE_RUNTIME_PATCH_SHA256}`), "Windows workflow checks the runtime-approved patch digest");

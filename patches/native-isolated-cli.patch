@@ -1,5 +1,5 @@
 diff --git a/codex-rs/codex-api/src/endpoint/responses_websocket.rs b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
-index c59683d69..1fee3b0fd 100644
+index c59683d69..f3ce6b01e 100644
 --- a/codex-rs/codex-api/src/endpoint/responses_websocket.rs
 +++ b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
 @@ -726,6 +726,7 @@ async fn run_websocket_response_stream(
@@ -93,7 +93,7 @@ index c59683d69..1fee3b0fd 100644
 +            None,
 +            None,
 +            &timing_log_context,
-+            futures::future::ready(ResponseInterrupt::Drain),
++            futures::future::pending::<ResponseInterrupt>(),
 +            &mut completion,
 +        )
 +        .await;
