@@ -36,6 +36,7 @@ function usage() {
   return [
     "Usage: node tests/native-api-role-cli-smoke.mjs --binary PATH --sha256 HASH",
     "       node tests/native-api-role-cli-smoke.mjs --mock-self-test",
+    "       node tests/native-api-role-cli-smoke.mjs --failure-self-test",
     "",
     "Runs one hidden app-server turn in a disposable CODEX_HOME. All parent and",
     "native_api child model responses come from a local loopback mock. No API",
@@ -397,26 +398,32 @@ async function startGateway(profile, mockPort) {
   return { gateway, token, baseUrl: "http://127.0.0.1:" + address.port + "/" + token };
 }
 
-async function runMockSelfTest() {
-  const mock = await startMock();
-  mock.state.roleName = "native_api_0123456789abcdef01234567";
-  const fakeParent = { model: PARENT_MODEL, input: USER_TASK_MARKER, tools: [{ name: "spawn_agent" }] };
-  const firstParent = await fetch("http://127.0.0.1:" + mock.mockPort + "/parent/v1/responses", {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakeParent),
-  });
-  assertSafe(firstParent.status === 200, "self-test parent mock failed");
-  const firstText = await firstParent.text();
-  assertSafe(firstText.includes("spawn_agent") && firstText.includes(CHILD_TASK_MARKER), "self-test spawn response is malformed");
-
-  const profile = createApiProfile({
-    protocol: "responses",
-    baseUrl: "http://127.0.0.1:" + mock.mockPort + "/child/v1",
-    model: CHILD_MODEL,
-    reasoning: { supported: ["high"], default: "high", parameter: "reasoning_effort" },
-    credential: { type: "env", name: "OPENAI_API_KEY" },
-  });
-  const route = await startGateway(profile, mock.mockPort);
+async function runMockSelfTest({ setupFailureAt, onResources } = {}) {
+  let mock = null;
+  let route = null;
   try {
+    mock = await startMock();
+    onResources?.({ mock });
+    if (setupFailureAt === "after-mock") throw Object.assign(new Error("fixture setup failure"), { code: "FIXTURE_SETUP_FAILURE" });
+    mock.state.roleName = "native_api_0123456789abcdef01234567";
+    const fakeParent = { model: PARENT_MODEL, input: USER_TASK_MARKER, tools: [{ name: "spawn_agent" }] };
+    const firstParent = await fetch("http://127.0.0.1:" + mock.mockPort + "/parent/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(fakeParent),
+    });
+    assertSafe(firstParent.status === 200, "self-test parent mock failed");
+    const firstText = await firstParent.text();
+    assertSafe(firstText.includes("spawn_agent") && firstText.includes(CHILD_TASK_MARKER), "self-test spawn response is malformed");
+
+    const profile = createApiProfile({
+      protocol: "responses",
+      baseUrl: "http://127.0.0.1:" + mock.mockPort + "/child/v1",
+      model: CHILD_MODEL,
+      reasoning: { supported: ["high"], default: "high", parameter: "reasoning_effort" },
+      credential: { type: "env", name: "OPENAI_API_KEY" },
+    });
+    route = await startGateway(profile, mock.mockPort);
+    onResources?.({ mock, route });
+    if (setupFailureAt === "after-gateway") throw Object.assign(new Error("fixture setup failure"), { code: "FIXTURE_SETUP_FAILURE" });
     const firstChild = await fetch(route.baseUrl + "/profiles/" + profile.profileId + "/v1/responses", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: CHILD_MODEL, input: CHILD_TASK_MARKER, tools: [{ name: "exec_command" }] }),
@@ -433,9 +440,47 @@ async function runMockSelfTest() {
     assertSafe(mock.state.parentTaskSeen && mock.state.childTaskSeen && mock.state.childToolResultSeen, "self-test state did not observe the scripted round trip");
     process.stdout.write(JSON.stringify({ status: "mock_protocol_passed", model_requests: mock.state.parentRequests + mock.state.childRequests, external_model_calls: 0 }) + "\n");
   } finally {
-    await route.gateway.close();
-    await closeServer(mock.server);
+    await route?.gateway.close().catch(() => {});
+    await closeServer(mock?.server);
   }
+}
+
+async function runFailureCleanupSelfTest() {
+  for (const setupFailureAt of ["after-mock", "after-gateway"]) {
+    let resources = {};
+    try {
+      await runMockSelfTest({ setupFailureAt, onResources: (value) => { resources = value; } });
+      throw new Error("failure injection did not fail");
+    } catch (error) {
+      assertSafe(error?.code === "FIXTURE_SETUP_FAILURE", "unexpected setup failure fixture result");
+    }
+    assertSafe(resources.mock?.server.listening === false, "mock server survived setup failure");
+    if (resources.route) assertSafe(resources.route.gateway.server.listening === false, "gateway server survived setup failure");
+  }
+
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+    env: minimalChildEnv(os.tmpdir(), 1),
+  });
+  const app = new AppServer({ exe: process.execPath, codexHome: os.tmpdir(), cwd: os.tmpdir(), eventLog: null });
+  app.child = child;
+  app.liveOwnedProcess = true;
+  child.once("exit", () => { app.exitObserved = true; });
+  try {
+    throw Object.assign(new Error("fixture setup failure"), { code: "FIXTURE_SETUP_FAILURE" });
+  } catch (error) {
+    assertSafe(error?.code === "FIXTURE_SETUP_FAILURE", "unexpected owned process fixture result");
+  } finally {
+    await closeOwnedApp(app);
+  }
+  assertSafe(app.child === null && app.exitObserved, "owned child process survived setup failure");
+  process.stdout.write(JSON.stringify({ status: "failure_cleanup_passed", mockServersClosed: 2, gatewayServersClosed: 1, ownedProcessExited: true }) + "\n");
+}
+
+async function closeOwnedApp(app) {
+  if (!app) return;
+  try { await app.close({ timeoutMs: 12_000, killAfterMs: 4_000 }); } catch { /* only this fixture's owned process */ }
 }
 
 async function runRealSmoke(binary, expectedHash) {
@@ -446,38 +491,44 @@ async function runRealSmoke(binary, expectedHash) {
   const binaryHash = await sha256File(binary);
   assertSafe(binaryHash === expectedHash.toLowerCase(), "binary SHA-256 did not match the expected pinned artifact");
 
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "native-api-role-smoke-"));
-  const codexHome = path.join(root, "codex-home");
-  const workspace = path.join(root, "workspace");
-  await fs.mkdir(codexHome, { recursive: true });
-  await fs.mkdir(workspace, { recursive: true });
-  const mock = await startMock();
-  const proxy = await createBlockProxy();
-  const parentProfile = createApiProfile({
-    protocol: "responses",
-    baseUrl: "http://127.0.0.1:" + mock.mockPort + "/parent/v1",
-    model: PARENT_MODEL,
-    reasoning: { supported: ["high"], default: "high", parameter: "reasoning_effort" },
-    credential: { type: "env", name: "OPENAI_API_KEY" },
-  }, { label: "loopback smoke parent" });
-  const childProfile = createApiProfile({
-    protocol: "responses",
-    baseUrl: "http://127.0.0.1:" + mock.mockPort + "/child/v1",
-    model: CHILD_MODEL,
-    reasoning: { supported: ["high"], default: "high", parameter: "reasoning_effort" },
-    credential: { type: "env", name: "OPENAI_API_KEY" },
-  }, { label: "loopback smoke native API child" });
-  const gateway = await startGateway(childProfile, mock.mockPort);
-  mock.state.roleName = "native_api_" + childProfile.profileId;
-  mock.state.workspace = workspace;
-  const app = await makeAppServer(binary, codexHome, workspace, proxy.port);
+  let root = null;
+  let mock = null;
+  let proxy = null;
+  let gateway = null;
+  let app = null;
+  let watchdog = null;
   let appExit = null;
   let rootThreadId = null;
-  const watchdog = setTimeout(() => {
-    try { app.child?.kill(); } catch { /* only the owned app-server process */ }
-  }, DEADLINE_MS);
-  watchdog.unref?.();
   try {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "native-api-role-smoke-"));
+    const codexHome = path.join(root, "codex-home");
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.mkdir(workspace, { recursive: true });
+    mock = await startMock();
+    proxy = await createBlockProxy();
+    const parentProfile = createApiProfile({
+      protocol: "responses",
+      baseUrl: "http://127.0.0.1:" + mock.mockPort + "/parent/v1",
+      model: PARENT_MODEL,
+      reasoning: { supported: ["high"], default: "high", parameter: "reasoning_effort" },
+      credential: { type: "env", name: "OPENAI_API_KEY" },
+    }, { label: "loopback smoke parent" });
+    const childProfile = createApiProfile({
+      protocol: "responses",
+      baseUrl: "http://127.0.0.1:" + mock.mockPort + "/child/v1",
+      model: CHILD_MODEL,
+      reasoning: { supported: ["high"], default: "high", parameter: "reasoning_effort" },
+      credential: { type: "env", name: "OPENAI_API_KEY" },
+    }, { label: "loopback smoke native API child" });
+    gateway = await startGateway(childProfile, mock.mockPort);
+    mock.state.roleName = "native_api_" + childProfile.profileId;
+    mock.state.workspace = workspace;
+    app = await makeAppServer(binary, codexHome, workspace, proxy.port);
+    watchdog = setTimeout(() => {
+      try { app?.child?.kill(); } catch { /* only the owned app-server process */ }
+    }, DEADLINE_MS);
+    watchdog.unref?.();
     await prepareHome(codexHome, mock.mockPort, gateway.baseUrl);
     await app.start();
     app.child?.once("exit", (code, signal) => { appExit = { code, signal }; });
@@ -565,14 +616,12 @@ async function runRealSmoke(binary, expectedHash) {
     assertSafe(result.noExternalModelCalls, "loopback-only model-routing proof failed");
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
   } finally {
-    clearTimeout(watchdog);
-    if (app) {
-      try { await app.close({ timeoutMs: 12_000, killAfterMs: 4_000 }); } catch { /* owned process cleanup */ }
-    }
-    await gateway.gateway.close().catch(() => {});
-    await closeServer(proxy.server);
-    await closeServer(mock.server);
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
+    if (watchdog) clearTimeout(watchdog);
+    await closeOwnedApp(app);
+    await gateway?.gateway.close().catch(() => {});
+    await closeServer(proxy?.server);
+    await closeServer(mock?.server);
+    if (root) await fs.rm(root, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
   }
 }
 
@@ -585,11 +634,16 @@ async function main(argv) {
     await runMockSelfTest();
     return;
   }
+  if (argv.includes("--failure-self-test")) {
+    await runFailureCleanupSelfTest();
+    return;
+  }
   const binary = option(argv, "binary");
   const expectedHash = option(argv, "sha256");
   assertSafe(typeof binary === "string" && binary.trim().length > 0, "an explicit --binary path is required");
+  assertSafe(path.isAbsolute(binary), "binary path must be absolute");
   assertSafe(typeof expectedHash === "string" && expectedHash.length > 0, "an explicit --sha256 is required");
-  await runRealSmoke(path.resolve(binary), expectedHash);
+  await runRealSmoke(binary, expectedHash);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
