@@ -1,3 +1,150 @@
+diff --git a/codex-rs/codex-api/src/endpoint/responses_websocket.rs b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
+index c59683d69..d2add99d2 100644
+--- a/codex-rs/codex-api/src/endpoint/responses_websocket.rs
++++ b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
+@@ -726,6 +726,7 @@ async fn run_websocket_response_stream(
+         // No request reached the backend, so this socket is still reusable.
+         return Ok(());
+     }
++    let request_bytes = request_text.len();
+     send_websocket_request(
+         ws_stream,
+         request_text,
+@@ -942,9 +943,11 @@ async fn run_websocket_response_stream(
+             Message::Binary(_) => {
+                 return Err(ApiError::Stream("unexpected binary websocket event".into()));
+             }
+-            Message::Close(_) => {
+-                return Err(ApiError::Stream(
+-                    "websocket closed by server before response.completed".into(),
++            Message::Close(frame) => {
++                let close_code = frame.map(|frame| frame.code.to_string());
++                return Err(websocket_closed_before_completed_error(
++                    close_code,
++                    request_bytes,
+                 ));
+             }
+             Message::Frame(_) => {}
+@@ -955,6 +958,16 @@ async fn run_websocket_response_stream(
+     Ok(())
+ }
+ 
++fn websocket_closed_before_completed_error(
++    close_code: Option<String>,
++    request_bytes: usize,
++) -> ApiError {
++    let close_code = close_code.unwrap_or_else(|| "unknown".to_string());
++    ApiError::Stream(format!(
++        "websocket closed by server before response.completed (close_code={close_code} request_bytes={request_bytes})"
++    ))
++}
++
+ fn emit_responses_websocket_timing_event(
+     kind: &str,
+     payload: &str,
+@@ -1113,6 +1126,102 @@ mod tests {
+         assert_eq!(wire_payload, expected_payload);
+     }
+ 
++    async fn run_websocket_message_fixture(
++        messages: Vec<Message>,
++        request_text: &str,
++    ) -> (Result<(), ApiError>, Option<ResponseEvent>) {
++        let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(1);
++        let (tx_message, rx_message) = mpsc::unbounded_channel();
++        let pump_task = tokio::spawn(async move {
++            let Some(WsCommand::Send { tx_result, .. }) = rx_command.recv().await else {
++                return;
++            };
++            let _ = tx_result.send(Ok(()));
++            for message in messages {
++                if tx_message.send(Ok(message)).is_err() {
++                    break;
++                }
++            }
++        });
++        let mut ws_stream = WsStream {
++            tx_command,
++            rx_message,
++            pump_task,
++        };
++        let (tx_event, _rx_event) = mpsc::channel(4);
++        let timing_log_context = ResponsesWebsocketTimingLogContext {
++            model: "test".to_string(),
++            session_id: None,
++            thread_id: None,
++            turn_id: None,
++            traceparent: None,
++            previous_response_id: None,
++            request_start_ms: None,
++            warmup: false,
++            connection_reused: false,
++        };
++        let mut completion = None;
++        let result = run_websocket_response_stream(
++            &mut ws_stream,
++            tx_event,
++            request_text.to_string(),
++            Duration::from_secs(1),
++            None,
++            None,
++            &timing_log_context,
++            futures::future::ready(ResponseInterrupt::Drain),
++            &mut completion,
++        )
++        .await;
++        (result, completion)
++    }
++
++    #[tokio::test]
++    async fn premature_websocket_close_reports_code_and_request_size_without_free_text() {
++        let request_text = r#"{"type":"response.create","input":"SENSITIVE_REQUEST_MARKER"}"#;
++        let frame = CloseFrame {
++            code: tungstenite::protocol::frame::coding::CloseCode::from(1009),
++            reason: "SENSITIVE_REASON_MARKER".into(),
++        };
++        let (result, completion) = run_websocket_message_fixture(
++            vec![Message::Close(Some(frame))],
++            request_text,
++        )
++        .await;
++        let error = result.expect_err("premature close must fail the Responses stream");
++        let text = error.to_string();
++        assert!(text.contains("websocket closed by server before response.completed"));
++        assert!(text.contains("close_code=1009"));
++        assert!(text.contains(&format!("request_bytes={}", request_text.len())));
++        assert!(!text.contains("SENSITIVE_REASON_MARKER"));
++        assert!(!text.contains("SENSITIVE_REQUEST_MARKER"));
++        assert!(completion.is_none());
++    }
++
++    #[tokio::test]
++    async fn premature_websocket_close_without_frame_keeps_code_unknown() {
++        let (result, completion) =
++            run_websocket_message_fixture(vec![Message::Close(None)], "{}")
++                .await;
++        let error = result.expect_err("premature close must fail the Responses stream");
++        assert!(error.to_string().contains("close_code=unknown"));
++        assert!(error.to_string().contains("request_bytes=2"));
++        assert!(completion.is_none());
++    }
++
++    #[tokio::test]
++    async fn response_completed_remains_successful_before_later_close() {
++        let completed = Message::Text(
++            r#"{"type":"response.completed","response":{"id":"resp1","end_turn":false}}"#
++                .into(),
++        );
++        let (result, completion) =
++            run_websocket_message_fixture(vec![completed, Message::Close(None)], "{}")
++                .await;
++        assert!(result.is_ok());
++        assert!(matches!(completion, Some(ResponseEvent::Completed { .. })));
++    }
++
+     #[test]
+     fn websocket_config_enables_permessage_deflate() {
+         let config = websocket_config();
 diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
 index 34d55118c..c4ade90e2 100644
 --- a/codex-rs/codex-api/src/sse/responses.rs

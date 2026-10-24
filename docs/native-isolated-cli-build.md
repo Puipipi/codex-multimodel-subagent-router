@@ -2,9 +2,9 @@
 
 ## 0.164.0-alpha.11.1 candidate
 
-当前手动 Windows MSVC workflow 固定上游 `openai/codex` 提交 `6905ecede7816e91373e9eabda3f6b0368fc747b`（Codex `0.164.0-alpha.11.1`），并要求补丁 SHA-256 `827a8ef35290fc20d914b7af2b55e7e5c3f25ff68adf7bb410f899ac7302d513`。workflow 在应用补丁前同时核对源码提交和补丁摘要，缓存键由源码提交、补丁和 Cargo.lock 共同决定。
+当前手动 Windows MSVC workflow 固定上游 `openai/codex` 提交 `6905ecede7816e91373e9eabda3f6b0368fc747b`（Codex `0.164.0-alpha.11.1`），并要求补丁 SHA-256 `b9a9bfede7bb8c4e729acea532d6672c51622c0bec98929c9804f08d32a375c2`。workflow 在应用补丁前同时核对源码提交和补丁摘要，缓存键由源码提交、补丁和 Cargo.lock 共同决定。
 
-构建保留协议 wire-alias、native DeepSeek、独立 API profile、role 的 bounded-retry 回归测试，并生成 Windows MSVC release CLI。当前候选尚未获得此次提交对应的 CI artifact；binary SHA-256 与 provenance 只能在 workflow 成功后记录，之前 0.163 构建的二进制摘要不适用于本候选。构建不表示已安装、已激活或桌面已接受该 CLI。
+补丁在 Responses WebSocket 等待 `response.completed` 时记录数值 `close_code`（无 Close frame 时为 `unknown`）和序列化请求 UTF-8 字节数，保留原错误前缀；不记录 close reason、请求正文或 URL，也不改变重试/fallback/provider 行为。workflow 增加该 WebSocket stream 路径的定向 Rust 测试。当前没有本地 Cargo/Rust 工具链，测试须以该 pinned source 的 CI 结果确认。构建保留协议 wire-alias、native DeepSeek、独立 API profile、role 的 bounded-retry 回归测试，并生成 Windows MSVC release CLI。当前候选尚未获得此次提交对应的 CI artifact；binary SHA-256 与 provenance 只能在 workflow 成功后记录，之前 0.163 构建的二进制摘要不适用于本候选。构建不表示已安装、已激活或桌面已接受该 CLI。
 
 
 The prior 0.163 workflow built a custom Codex CLI from upstream commit `4ebc485ca321243727539187169425fcf972f2c4`, using the bounded-retry candidate `patches/native-isolated-cli.patch` (SHA-256 `7a5c127a24c2c2b80d3933ad9590c4766fb7a1a99b4a917bc607eedde1f734d8`). The patch allows a role to disable unbounded connection retries while preserving the disable-only restriction. Its targeted regression produced the expected RED in run `39113348109`; the exact one-test regression and Windows release build passed in run `39115060111`. The resulting executable contains custom backend changes and is **not the unmodified official Codex CLI**.

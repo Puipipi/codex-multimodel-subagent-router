@@ -53,8 +53,8 @@ function makeEvent(row, parentThreadId, registeredChildThreadIds) {
   const process = /\bprocess_uuid\s*[:=]\s*["']?([0-9a-f-]{8,})/i.exec(raw)?.[1] ?? null;
   const retryNumber = numericCapture(text, [/\bretry(?:ing)?\s+(?:sampling|request)\D{0,12}(\d+)\s*\//i, /\bretry\s+(\d+)\s*\//i], 100);
   const httpStatus = numericCapture(text, [/\bhttp(?: status| code| response)?\s*[:=]?\s*(\d{3})\b/i, /\bstatus\s*[:=]\s*(\d{3})\b/i], 599);
-  const closeCode = numericCapture(text, [/\b(?:websocket\s+)?close(?:d)?\s+code\s*[:=]\s*(\d{3,5})\b/i], 49999);
-  const requestBytes = numericCapture(text, [/\b(?:request|body|payload)(?:_size| size| bytes)?\s*[:=]\s*(\d+)\s*(?:bytes?)?\b/i, /\b(\d+)\s+bytes\b/i]);
+  const closeCode = numericCapture(text, [/\bclose_code\s*[:=]\s*(\d{3,5})\b/i, /\b(?:websocket\s+)?close(?:d)?\s+code\s*[:=]\s*(\d{3,5})\b/i], 49999);
+  const requestBytes = numericCapture(text, [/\b(?:request|body|payload)(?:_size|_bytes| size| bytes)?\s*[:=]\s*(\d+)\s*(?:bytes?)?\b/i, /\b(\d+)\s+bytes\b/i]);
   const timestampUtc = safeIso(row.ts, row.ts_nanos);
   if (!timestampUtc) return null;
   return {
@@ -64,7 +64,7 @@ function makeEvent(row, parentThreadId, registeredChildThreadIds) {
     retryNumber,
     httpStatus: errorClass === "http_5xx" ? httpStatus : null,
     closeCode: errorClass === "websocket_closed_before_completed" ? closeCode : null,
-    requestBytes: errorClass === "payload_too_large" ? requestBytes : null,
+    requestBytes: ["websocket_closed_before_completed", "payload_too_large"].includes(errorClass) ? requestBytes : null,
     threadHash: tid ? sha(tid) : null,
     processHash: process ? sha(process) : null,
     correlation,

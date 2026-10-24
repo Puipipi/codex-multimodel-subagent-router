@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 180
     env:
       STABLE_GIT_COMMIT: 6905ecede7816e91373e9eabda3f6b0368fc747b
-      EXPECTED_PATCH_SHA256: 87007c7188d32b7e4c4cd45cb86fbf41fa122fc48a998d99ab2f2536ce73100d
+      EXPECTED_PATCH_SHA256: b9a9bfede7bb8c4e729acea532d6672c51622c0bec98929c9804f08d32a375c2
       CARGO_BUILD_JOBS: 2
       LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -129,6 +129,19 @@ jobs:
           $testPath = Join-Path $env:GITHUB_WORKSPACE 'router/tests/normalize-cargo-workspace-lock.test.mjs'
           node $testPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run Responses WebSocket metadata tests
+        shell: pwsh
+        working-directory: codex-rs
+        run: |
+          $output = cargo test --locked -p codex-api endpoint::responses_websocket::tests --lib 2>&1
+          $testExit = $LASTEXITCODE
+          $outputText = $output | Out-String
+          Write-Output $outputText
+          if ($outputText -notmatch '(?m)^running [1-9]\d* tests?\r?$') {
+            throw 'Expected Responses WebSocket unit tests to execute.'
+          }
+          if ($testExit -ne 0) { exit $testExit }
 
       - name: Run protocol wire-alias tests
         shell: pwsh

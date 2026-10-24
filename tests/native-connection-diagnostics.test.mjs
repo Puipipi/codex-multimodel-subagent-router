@@ -33,7 +33,8 @@ try {
   const base = fixedNow - 10_000;
   for (let n = 1; n <= 5; n++) {
     add(db, base + n * 500, "codex_core::client", `sampling request failed; retry ${n}/5 thread_id=01a1491e-cc5c-7743-8d1a-a935dcd54cb9 process_uuid=feedface-1234`);
-    add(db, base + n * 500 + 100, "codex_api::endpoint::responses_websocket", `websocket closed by server before response.completed thread_id=01a1491e-cc5c-7743-8d1a-a935dcd54cb9`);
+    const metadata = n === 1 ? " (close_code=1009 request_bytes=12345)" : "";
+    add(db, base + n * 500 + 100, "codex_api::endpoint::responses_websocket", `websocket closed by server before response.completed${metadata} thread_id=01a1491e-cc5c-7743-8d1a-a935dcd54cb9`);
   }
   add(db, base + 3_000, "codex_core::client", "falling back to HTTP thread_id=01a1491e-cc5c-7743-8d1a-a935dcd54cb9 https://secret.example/v1/responses?api_key=do-not-leak");
   add(db, base + 3_500, "codex_core::client", "sampling request failed; retry 1/5 websocket closed thread_id=other-thread process_uuid=other-process");
@@ -50,6 +51,7 @@ try {
   eq(result.events.some(e => e.errorClass === "sampling_retry" && e.retryNumber === 7), true, "feedback field is used when message is empty and contains untrusted text");
   eq(result.events.filter(e => e.errorClass === "sampling_retry").length, 7, "retry rows including unrelated thread are classified");
   eq(result.events.filter(e => e.errorClass === "websocket_closed_before_completed").length, 5, "five WS close events are classified");
+  eq(result.events.find(e => e.closeCode === 1009)?.requestBytes, 12345, "explicit WS close code and serialized request byte count are retained");
   eq(result.events.find(e => e.errorClass === "http_fallback").correlation, "parent", "explicit matching parent ID is recognized");
   eq(result.events.find(e => e.threadHash && e.correlation === "registered_child")?.correlation, "registered_child", "registered child is explicitly recognized");
   eq(result.events.find(e => e.retryNumber === 1 && e.correlation === "other_or_unknown")?.correlation, "other_or_unknown", "unrelated chats are never attributed to parent");
