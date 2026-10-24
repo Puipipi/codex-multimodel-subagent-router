@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter, once } from "node:events";
 import os from "node:os";
 import { join } from "node:path";
@@ -233,7 +233,16 @@ test("close retains the bounded kill fallback when a child ignores stdin EOF", a
   const realKill = child.kill.bind(child);
   child.kill = (...args) => { killCalls += 1; return realKill(...args); };
   const exited = once(child, "exit");
-  const app = new AppServer({ exe: process.execPath, codexHome: os.tmpdir(), cwd: os.tmpdir(), eventLog: null });
+  const app = new AppServer({
+    exe: process.execPath,
+    codexHome: os.tmpdir(),
+    cwd: os.tmpdir(),
+    eventLog: null,
+    terminateProcessTree(pid) {
+      assert.equal(pid, child.pid, "only the child owned by this test is targeted");
+      child.kill();
+    },
+  });
   app.child = child;
   app.liveOwnedProcess = true;
 
@@ -245,6 +254,75 @@ test("close retains the bounded kill fallback when a child ignores stdin EOF", a
   assert.ok(signal, "the child exit was caused by the bounded kill");
   assert.equal(app.exitObserved, true, "close observed termination after the bounded fallback");
   assert.equal(app.child, null, "closed child ownership is released after the fallback");
+});
+
+test("Windows close terminates an owned wrapper process tree and releases its working directory", { skip: process.platform !== "win32" }, async () => {
+  const ownedDir = mkdtempSync(join(os.tmpdir(), "codex-app-server-tree-"));
+  const grandchildScript = 'process.stdin.resume(); setInterval(() => {}, 1000);';
+  const wrapperScript = [
+    'const { spawn } = require("node:child_process");',
+    `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], { stdio: "ignore", windowsHide: true, detached: true });`,
+    'process.stdout.write(String(grandchild.pid) + "\\n");',
+    'process.stdin.resume();',
+    'process.stdin.on("end", () => setInterval(() => {}, 1000));',
+    'setInterval(() => {}, 1000);',
+  ].join("\n");
+  const child = spawn(process.execPath, ["-e", wrapperScript], {
+    cwd: ownedDir,
+    stdio: ["pipe", "pipe", "ignore"],
+    windowsHide: true,
+  });
+  let grandchildPid;
+  let stdout = "";
+  const grandchildReady = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("wrapper did not report its grandchild PID")), 3000);
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
+      stdout += chunk;
+      const line = stdout.split("\n")[0];
+      if (/^\d+$/.test(line)) {
+        grandchildPid = Number(line);
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      reject(new Error("wrapper exited before reporting its grandchild PID"));
+    });
+  });
+  const app = new AppServer({ exe: process.execPath, codexHome: ownedDir, cwd: ownedDir, eventLog: null });
+  app.child = child;
+  app.liveOwnedProcess = true;
+  const rootExited = once(child, "exit");
+
+  try {
+    await grandchildReady;
+    const startedGrandchild = spawnSync("tasklist.exe", ["/FI", `PID eq ${grandchildPid}`, "/FO", "CSV", "/NH"], {
+      encoding: "utf8",
+      timeout: 3000,
+      windowsHide: true,
+    });
+    assert.equal(startedGrandchild.error, undefined, "the pre-close process query completed");
+    assert.ok((startedGrandchild.stdout ?? "").includes(`"${grandchildPid}"`), "the fixture grandchild is running before close");
+    await app.close({ timeoutMs: 2000, killAfterMs: 40 });
+    await rootExited;
+    const grandchildListing = spawnSync("tasklist.exe", ["/FI", `PID eq ${grandchildPid}`, "/FO", "CSV", "/NH"], {
+      encoding: "utf8",
+      timeout: 3000,
+      windowsHide: true,
+    });
+    assert.equal(grandchildListing.error, undefined, "the process query completed");
+    assert.equal(grandchildListing.status, 0, "the process query succeeded");
+    assert.equal((grandchildListing.stdout ?? "").includes(`"${grandchildPid}"`), false, "the owned grandchild exited with its wrapper");
+    rmSync(ownedDir, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
+    assert.equal(existsSync(ownedDir), false, "the working directory is unlocked after the owned process tree exits");
+  } finally {
+    if (grandchildPid && process.platform === "win32") {
+      spawnSync("taskkill.exe", ["/PID", String(grandchildPid), "/T", "/F"], { stdio: "ignore", windowsHide: true, timeout: 3000 });
+    }
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    if (existsSync(ownedDir)) rmSync(ownedDir, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
+  }
 });
 
 test("model-list RPC errors fail without leaking the RPC payload and close the app-server", async () => {
