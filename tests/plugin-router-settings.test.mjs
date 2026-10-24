@@ -176,6 +176,8 @@ try {
 
   const updateTool = tools.find(tool => tool.name === "router_settings_update");
   ok(updateTool.inputSchema.properties.set, "the settings update tool accepts set");
+  deepEqual(updateTool.inputSchema.properties.set.properties.enabled, {type: "boolean"},
+    "the serialized settings update schema accepts the enabled toggle");
   deepEqual(updateTool.inputSchema.required, ["set"], "the settings update tool requires set");
   ok(updateTool.outputSchema.properties.values, "the settings update tool returns values");
   const profileTool = tools.find(tool => tool.name === "router_settings_save_profile");

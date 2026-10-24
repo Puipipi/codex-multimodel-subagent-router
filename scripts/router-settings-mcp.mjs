@@ -209,6 +209,7 @@ export const ROUTER_SETTINGS_TOOLS = [
           additionalProperties: false,
           minProperties: 1,
           properties: {
+            enabled: {type: 'boolean'},
             mode: {type: 'string', enum: ['auto', 'fixed', 'scheduled']},
             fixedExecutor: {type: 'string'},
             peak: {type: 'string'},
