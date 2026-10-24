@@ -19,6 +19,10 @@ node tests/native-api-role-cli-smoke.mjs --binary 'C:\path\to\ci-validated\codex
 
 脚本在启动服务前核对 hash；不查询、选择或安装当前系统 CLI，也不读取用户 Codex 配置或凭据。它使用合成 API key，所有固定模型响应均来自 loopback。若无法提供可信 CI provenance，不要用二进制自身计算的 hash 代替期望值。
 
+测试只在其临时 `CODEX_HOME/config.toml` 中启用 `[features] multi_agent_v2_dynamic_tools = true`，让固定只读工具可用于回环链路。最终 CI artifact `d0cb`（SHA-256 `7ee484bc13f475848449bc2acbf9ca2f841cb235a24def3714d2ed2e09fc47d0`）已在此 fixture 下通过：父/子请求分别为 4/2，`item/tool/call` 回调、子线程历史与退出状态均通过，外部模型调用为 0。结果记录在 `work/runtime-artifacts-20261024/final-d0cb/native-api-role-smoke-result.json`。
+
+这个临时全局 feature 只证明该二进制在显式启用动态工具时可以完成这条原生 API 子代理链路；它不证明角色文件能单独启用该 feature，也不代表真实 root 配置或生产角色会继承父动态工具。测试没有更改真实 root 配置。
+
 `--failure-self-test` 在 localhost mock/gateway 已启动后注入初始化失败，并验证监听服务与测试自有子进程都已关闭；它不启动 Codex CLI。
 
 ## 验收范围
