@@ -214,6 +214,7 @@ export class AppServer {
       this.child = null;
       return;
     }
+    child.stdin?.end();
     const started = Date.now();
     const deadline = started + Math.max(1, timeoutMs);
     const normalDeadline = Math.min(deadline, started + Math.max(0, killAfterMs));

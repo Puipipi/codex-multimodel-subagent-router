@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import os from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -195,6 +196,55 @@ test("spawn rejection is handled and close does not wait for a nonexistent proce
   await app.close({ timeoutMs: 50, killAfterMs: 10 });
   assert.equal(app.child, null);
   assert.equal(app.exitObserved, true);
+});
+
+test("close ends owned child stdin and observes its normal EOF exit before the kill bound", async () => {
+  const child = spawn(process.execPath, ["-e", 'process.stdin.on("end", () => { process.stdout.write("stdin-eof\\n"); process.exit(0); }); process.stdin.resume();'], {
+    stdio: ["pipe", "pipe", "ignore"],
+    windowsHide: true,
+  });
+  let stdout = "";
+  let killCalls = 0;
+  child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+  const realKill = child.kill.bind(child);
+  child.kill = (...args) => { killCalls += 1; return realKill(...args); };
+  const exited = once(child, "exit");
+  const app = new AppServer({ exe: process.execPath, codexHome: os.tmpdir(), cwd: os.tmpdir(), eventLog: null });
+  app.child = child;
+  app.liveOwnedProcess = true;
+
+  await app.close({ timeoutMs: 1000, killAfterMs: 800 });
+  const [code, signal] = await exited;
+
+  assert.equal(stdout, "stdin-eof\n", "the child exits only after receiving stdin EOF");
+  assert.equal(code, 0, "the owned child completed its normal EOF shutdown");
+  assert.equal(signal, null, "the child was not terminated by a signal");
+  assert.equal(killCalls, 0, "close did not use the bounded force-kill path");
+  assert.equal(app.exitObserved, true, "close observed the actual child exit");
+  assert.equal(app.child, null, "closed child ownership is released");
+});
+
+test("close retains the bounded kill fallback when a child ignores stdin EOF", async () => {
+  const child = spawn(process.execPath, ["-e", 'process.stdin.on("end", () => { setInterval(() => {}, 1000); }); process.stdin.resume();'], {
+    stdio: ["pipe", "ignore", "ignore"],
+    windowsHide: true,
+  });
+  let killCalls = 0;
+  const realKill = child.kill.bind(child);
+  child.kill = (...args) => { killCalls += 1; return realKill(...args); };
+  const exited = once(child, "exit");
+  const app = new AppServer({ exe: process.execPath, codexHome: os.tmpdir(), cwd: os.tmpdir(), eventLog: null });
+  app.child = child;
+  app.liveOwnedProcess = true;
+
+  await app.close({ timeoutMs: 500, killAfterMs: 30 });
+  const [code, signal] = await exited;
+
+  assert.equal(killCalls, 1, "a child that ignores EOF still uses the existing bounded kill fallback");
+  assert.equal(code, null, "the child did not exit normally");
+  assert.ok(signal, "the child exit was caused by the bounded kill");
+  assert.equal(app.exitObserved, true, "close observed termination after the bounded fallback");
+  assert.equal(app.child, null, "closed child ownership is released after the fallback");
 });
 
 test("model-list RPC errors fail without leaking the RPC payload and close the app-server", async () => {
