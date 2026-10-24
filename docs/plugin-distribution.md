@@ -6,7 +6,7 @@
 
 当前 0.12.0 源中的 `native/bootstrap` 有跟踪的 C 源和 EXE，没有单独的编译来源收据。包清单会记录这两个文件的确切哈希和仓库 commit，但这不证明 EXE 可由该 C 源可复现构建。
 
-打包使用本机 Windows PowerShell 和 .NET ZIP 支持，不安装新依赖，也不调用模型。只支持 `.zip`，不会覆盖已有输出文件。
+打包使用本机 Windows PowerShell 和 .NET ZIP 支持，不安装新依赖，也不调用模型。Windows 是该 ZIP helper 的受支持平台；非 Windows 上的分发测试会明确显示 `SKIP`，真实 ZIP 创建和解压哈希验收由 Windows 测试作业负责。只支持 `.zip`，不会覆盖已有输出文件。
 
 ```powershell
 node scripts/package-plugin.mjs `
@@ -20,5 +20,5 @@ node scripts/package-plugin.mjs `
 
 ## 验证
 
-真实 Git fixture 测试覆盖 ZIP 创建及哈希、Unicode 和空格路径、未跟踪文件排除、关键 bootstrap 文件存在、源 tracked dirty 拒绝、manifest 不支持/关键文件缺失、tracked symlink 拒绝、外部输出和重复输出不覆盖。测试使用 .NET ZIP API 检查 archive，逐项重新计算解压流内容哈希，并读取压缩包内的 manifest 比对清单；这不是只检查 manifest 是否存在。
+真实 Git fixture 测试覆盖 ZIP 创建及哈希、Unicode 和空格路径、未跟踪文件排除、关键 bootstrap 文件存在、源 tracked dirty 拒绝、manifest 不支持/关键文件缺失、tracked symlink 与用户传入 source junction 拒绝、外部输出和重复输出不覆盖。fixture 根目录先解析 `os.tmpdir()` 的真实路径，兼容 CI 临时目录本身经过 junction 的情况；生产打包器仍拒绝用户指定的 symlink/junction source/output 路径。测试使用 .NET ZIP API 检查 archive，逐项重新计算解压流内容哈希，并读取压缩包内的 manifest 比对清单；这不是只检查 manifest 是否存在。
 

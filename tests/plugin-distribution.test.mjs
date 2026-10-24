@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { packagePlugin } from "../scripts/package-plugin.mjs";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "plugin-distribution-fixture-"));
+if (process.platform !== "win32") {
+  console.log("SKIP: plugin ZIP packaging uses Windows PowerShell/.NET; the Windows job runs the real archive tests.");
+} else {
+await runWindowsZipTests();
+}
+
+async function runWindowsZipTests() {
+const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "plugin-distribution-fixture-"));
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const powershell = process.env.POWERSHELL_EXE || "powershell.exe";
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8" }).trim();
@@ -127,8 +134,13 @@ try {
   git(symlinkSource, "checkout-index", "--force", "--", "scripts/helper.ps1");
   git(symlinkSource, "commit", "--quiet", "-m", "tracked symlink fixture");
   await assert.rejects(() => packagePlugin({ source: symlinkSource, out: path.join(root, "external distributions 文件夹", "symlink.zip") }), /symlink/i, "tracked symlink is rejected without resolving its target");
+
+  const junction = path.join(root, "source junction");
+  await symlink(source, junction, "junction");
+  await assert.rejects(() => packagePlugin({ source: junction, out: path.join(root, "external distributions 文件夹", "junction.zip") }), /symlink or junction/i, "a user-provided source junction is rejected");
   console.log("plugin distribution tests passed");
 } finally {
   try { await rm(root, { recursive: true, force: true }); } catch (error) { if (error.code !== "EBUSY") throw error; }
+}
 }
 
