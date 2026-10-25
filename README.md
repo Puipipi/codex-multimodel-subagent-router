@@ -6,7 +6,7 @@ One routing skill and an optional Codex plugin. Sol keeps the current conversati
 
 ## Status
 
-This page describes **main / plugin 0.10.4**. The separate **0.12.3 development preview** in [PR #1](https://github.com/Puipipi/sol-luna-deepseek-router/pull/1) adds API profiles and settings work. It is not part of main and is not a claim of completed acceptance. Use documentation from the same branch as your installation.
+**0.12.3 is installed and usable on the maintained local deployment**, with scoped verification of routing, the settings UI, and native delegation. Its source is in [PR #1](https://github.com/Puipipi/sol-luna-deepseek-router/pull/1) / `feat/native-api-integration-20261018`; GitHub default **main still contains 0.10.4**, which this page documents. Match documentation to your source version; custom API end-to-end acceptance is tracked separately, and local usability does not imply every provider has been verified.
 
 ## Components
 
@@ -22,7 +22,7 @@ The formal native DeepSeek route uses the isolated `native_deepseek` role and it
 
 ## Documentation and reports
 
-Reports are dated, host-specific evidence. A configured installation does not prove desktop behavior on another host; **desktop acceptance remains pending** for the main baseline.
+Reports are dated, host-specific evidence with independent acceptance scopes. For the historical main / 0.10.4 baseline, full desktop acceptance remains pending; this does not describe the usability of the maintained 0.12.3 deployment.
 
 | Document | Scope |
 | --- | --- |
