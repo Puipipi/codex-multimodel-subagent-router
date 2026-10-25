@@ -132,3 +132,7 @@ node .\tests\plugin-mcp.test.mjs
 测试使用真实 stdio MCP 子进程完成 `initialize`、`tools/list`、`resources/list`、`resources/read`、设置读取/更新/重读、CAS 冲突、非法 profile、alias 迁移、`resourceProvided`、生产只读状态、旧 runtime unsupported apply 与旧 DSH 工具 ownership guard。另用注入 mock 覆盖 installed/healthy 状态、`apiVerified` 强制 false、状态详情脱敏、并发 apply 锁和 stale apply CAS。`contextWindow` 成功保存分支必须实际执行。
 
 宿主实际是否把入口显示为永久侧栏或线程侧面板，仍需要在目标桌面版本中人工验收；静态测试和模拟宿主不能证明该显示行为。
+
+## 界面语言
+
+面板优先使用 MCP Apps `ui/initialize` 返回的 `hostContext.locale`，并监听 `ui/notifications/host-context-changed`。`zh` 语言使用简体中文，其他语言使用英文；宿主未提供 locale 时使用浏览器语言。切换只更新界面文本，不重新读取或保存设置，不重建编辑器，不修改输入值或原生执行器选择。用户命名与无法识别的上游诊断保留原文。

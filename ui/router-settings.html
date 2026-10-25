@@ -256,7 +256,7 @@ footer p + p { margin-top: 3px; }
 <main>
   <header class="top">
     <div>
-      <p class="eyebrow">SOL / ROUTER</p>
+      <p class="eyebrow">CODEX / ROUTER</p>
       <h1>路由设置</h1>
       <p class="lede">给新任务选择执行器。保存路由会立即关闭新分工，并请求清理本插件拥有的空闲后台执行器；API 配置应用仍需单独操作。</p>
     </div>
@@ -449,6 +449,259 @@ footer p + p { margin-top: 3px; }
     <p>应用 API 配置只会在你点击后调用；不会自动下载或安装 runtime，也不会关闭或重启 Codex，也不代表 API 已验证。</p>
   </footer>
 </main>
+<script id="router-locale">
+(() => {
+  "use strict";
+  const EN = {
+    "路由设置": "Router settings",
+    "给新任务选择执行器。保存路由会立即关闭新分工，并请求清理本插件拥有的空闲后台执行器；API 配置应用仍需单独操作。": "Choose an executor for new tasks. Turning delegation off stops new dispatch and requests cleanup of owned idle executors. Applying API configuration is a separate action.",
+    "重新载入": "Reload",
+    "配置状态": "Configuration status",
+    "已保存": "Saved",
+    "读取中": "Loading",
+    "执行器状态": "Executor status",
+    "未知": "Unknown",
+    "需重启": "Restart required",
+    "本地网关": "Local gateway",
+    "API 调用": "API calls",
+    "未验证": "Not verified",
+    "生命周期状态未接入；未启动服务或模型，未验证 API。": "Lifecycle status is unavailable. No service or model has been started and no API has been verified.",
+    "新增角色应用后需要完整重启；当前采用状态无法自动确认。": "Newly applied roles require a full restart; current adoption cannot be confirmed automatically.",
+    "连接诊断": "Connection diagnostics",
+    "仅点击后读取有限的本地错误分类，不调用模型或 API。": "Read bounded local error categories only when clicked. No model or API calls.",
+    "运行连接诊断": "Run diagnostics",
+    "启用自动子代理分工": "Enable automatic subagent delegation",
+    "关闭时保留全部设置并停止新派发；本插件会停用已确认所有权的空闲网关，活动任务结束后再清理，并仅解除本插件拥有的 CLI 覆盖供下次启动使用官方 Codex。当前进程不热切换；失败可再次保存关闭状态重试。": "Turning this off preserves settings and stops new dispatch. Only verified plugin-owned idle gateways and CLI overrides are cleaned up, after active work finishes. The current process does not switch backends; save the off setting again to retry cleanup.",
+    "模式": "Mode",
+    "路由模式": "Routing mode",
+    "自动峰谷": "Automatic peak/valley",
+    "高峰 Luna，低谷 DeepSeek": "Luna at peak, DeepSeek off-peak",
+    "固定执行器": "Fixed executor",
+    "不按峰谷切换": "Ignore the peak/valley schedule",
+    "自定义峰谷": "Custom peak/valley",
+    "为峰、谷分别选择": "Choose each phase separately",
+    "执行器": "Executor",
+    "峰谷配对": "Peak/valley pair",
+    "高峰": "Peak",
+    "低谷": "Off-peak",
+    "高峰和低谷只读取这一对选择；固定模式不使用它们。": "Scheduled mode uses this pair; fixed mode does not.",
+    "保存路由": "Save routing",
+    "API 配置": "API profiles",
+    "每个配置是不可变版本；编辑会生成新 ID，旧版本保留。": "Profiles are immutable. Editing creates a new ID and preserves the previous version.",
+    "新增配置": "New profile",
+    "还没有 API 配置。自动账号路径保持原样。": "No API profiles yet. The automatic account path is unchanged.",
+    "新增 API 配置": "New API profile",
+    "只保存引用，不保存真实密钥。": "Save credential references, never secret values.",
+    "取消": "Cancel",
+    "名称": "Name",
+    "例如 MiMo": "For example, MiMo",
+    "服务预设": "Provider preset",
+    "自定义": "Custom",
+    "OpenAI 官方": "OpenAI official",
+    "OpenAI 兼容 / 通用": "OpenAI-compatible / generic",
+    "DeepSeek 官方": "DeepSeek official",
+    "协议": "Protocol",
+    "模型": "Model",
+    "精确 wire model": "Exact wire model ID",
+    "模型发现（手动触发）": "Model discovery (on request)",
+    "获取模型列表": "Fetch models",
+    "已发现的模型": "Discovered models",
+    "选择已发现模型": "Select a discovered model",
+    "仅在点击后连接当前 Base URL；失败时保留手动填写的模型名。": "Connect to the current Base URL only when clicked. Keep the manually entered model if discovery fails.",
+    "别名": "Aliases",
+    "逗号分隔，可留空": "Comma-separated; optional",
+    "推理参数": "Reasoning parameters",
+    "默认强度": "Default effort",
+    "参数名": "Parameter name",
+    "参数名 none 表示不发送推理参数并使用供应商默认值，不保证关闭 thinking；关闭 DeepSeek thinking 请选择 reasoning 或 reasoning_effort，并把强度设为 none。": "Parameter none omits reasoning parameters and uses the provider default; it does not guarantee thinking is off. To disable DeepSeek thinking, select reasoning or reasoning_effort with effort none.",
+    "支持的推理强度": "Supported reasoning efforts",
+    "凭据来源": "Credential source",
+    "来源": "Source",
+    "DeepSeek 自动账号": "Automatic DeepSeek account",
+    "环境变量": "Environment variable",
+    "密钥文件": "Secret file",
+    "变量名": "Variable name",
+    "密钥文件路径": "Secret file path",
+    "绝对路径；页面不回显文件内容": "Absolute path; file contents are never displayed",
+    "检查本地凭据": "Check local credentials",
+    "只检查本地是否可用，不发起 API 请求，也不声称认证成功。": "Check local availability only. No API request or authentication claim.",
+    "高级": "Advanced",
+    "上下文预算（tokens）": "Context budget (tokens)",
+    "新配置默认 128000；按所选模型的上下文上限设置。这是工作预算，不代表探测到的模型真实上限；留空则不写入该字段。": "New profiles default to 128000. Set a working budget within the model's context limit; this is not a detected limit. Leave blank to omit the field.",
+    "保存新版本": "Save new version",
+    "应用 API 配置": "Apply API configuration",
+    "只在你点击后调用生命周期接口；不会自动下载或安装 runtime，也不会关闭或重启 Codex。": "Call the lifecycle interface only when clicked. No automatic runtime download, installation, or Codex restart.",
+    "当前 runtime 未提供 API 配置应用接口；不会自动下载或安装 runtime，也不会关闭或重启 Codex。": "The current runtime has no API apply interface. No automatic runtime download, installation, or Codex restart.",
+    "默认生命周期状态为未知；接入只读状态模块后显示真实安装、网关与验证结果。": "Lifecycle status starts as unknown. Read-only status reports actual installation, gateway, and verification results.",
+    "应用 API 配置只会在你点击后调用；不会自动下载或安装 runtime，也不会关闭或重启 Codex，也不代表 API 已验证。": "Applying is explicit. It does not download or install a runtime, restart Codex, or prove API verification.",
+    "配置尚未载入；应用接口暂不可用。": "Settings have not loaded; Apply is unavailable.",
+    "正在应用…": "Applying…",
+    "有未保存的路由更改；先保存后再应用。": "Save the routing changes before applying.",
+    "仅在你点击后调用已注入的生命周期应用接口；不会自动下载或安装 runtime，也不会关闭或重启 Codex。": "Invoke the available lifecycle apply interface only when clicked. No automatic runtime download, installation, or Codex restart.",
+    "没有可用的宿主父窗口。": "No host parent window is available.",
+    "宿主未提供 tools/call 代理能力，面板不能读写配置。": "The host does not provide tools/call; settings cannot be read or written.",
+    "工具调用失败。": "Tool call failed.",
+    "宿主返回错误。": "The host returned an error.",
+    "是": "Yes",
+    "否": "No",
+    "路由 JSON 的保存状态。": "Whether the routing JSON has been saved.",
+    "生命周期只读状态；未知不会当作已安装。": "Read-only lifecycle state; unknown does not mean installed.",
+    "应用新角色后是否需要完整重启；不会自动重启 Codex。": "Whether a full restart is required for new roles. Codex is never restarted automatically.",
+    "本地网关是否运行或健康；健康不代表模型或认证已验证。": "Local gateway state. Health does not verify the model or authentication.",
+    "API 调用是否经过显式验证；本地健康不会推断为已验证。": "Whether an API call was explicitly verified. Local health is insufficient.",
+    "API 角色已安装": "API role installed",
+    "未运行": "Stopped",
+    "异常": "Unhealthy",
+    "健康": "Healthy",
+    "已运行": "Running",
+    "本地健康": "Locally healthy",
+    "已验证": "Verified",
+    "runtime 兼容": "Compatible runtime",
+    "runtime 不兼容": "Incompatible runtime",
+    "凭据 可用": "Credentials available",
+    "凭据 不可用": "Credentials unavailable",
+    "生命周期未提供可读状态；未验证 API。": "No readable lifecycle status; API not verified.",
+    "自动分工": "Automatic delegation",
+    "分工已关闭": "Delegation off",
+    "由生命周期确认": "Reported by lifecycle",
+    "未调用": "Not called",
+    "生命周期守卫已停用自动分工；用户设置仍保持启用。现有 child 与后台空闲执行器状态由生命周期单独报告。": "The lifecycle guard disabled delegation; the saved setting remains enabled. Existing children and idle executors are reported separately.",
+    "配置保留，新的自动子代理派发已关闭；已请求停用本插件拥有的后台计划任务，并在活动任务完成后停止空闲网关。": "Settings preserved; new delegation is off. Owned background tasks are disabled and idle gateways stop after active work finishes.",
+    "当前原生执行器": "Current native executor",
+    "当前聊天模型未知": "Current chat model unknown",
+    "本地目录可用": "Local catalog available",
+    "目录未知或模型缺失": "Catalog unknown or model missing",
+    "原生执行器": "Native executor",
+    "随 DeepSeek 路由": "Used for DeepSeek routing",
+    "不需要": "Not needed",
+    "不需要 API 角色": "No API role needed",
+    "状态来自本地 Codex 模型目录；不会调用 API。": "Status comes from the local Codex model catalog; no API call.",
+    " same 当前聊天模型未知，派发会明确失败。": " The current chat model is unknown; same-model dispatch will fail explicitly.",
+    "无法读取当前聊天模型；same 派发会明确失败，不使用全局默认模型。": "Cannot read the current chat model. Same-model dispatch fails explicitly instead of using a global default.",
+    "当前路由使用原生执行器；API 角色安装状态不适用。": "The route uses a native executor; API role installation does not apply.",
+    "API 角色状态": "API role status",
+    "API 本地网关": "API local gateway",
+    "按 profile 检查": "Check each profile",
+    "计划中包含 API profile；逐个展开 API 配置查看其角色和网关状态。自动峰谷或原生模型选择不由 API profile 数量判定。": "This plan includes API profiles. Expand each profile for role and gateway status. Profile count does not determine native routing availability.",
+    "选择执行器": "Select an executor",
+    "当前设置核心尚未支持上下文预算字段；带此值的保存会被拒绝。可留空先保存配置，等待集成后再添加预算。": "The settings core does not support context budgets yet. Leave the field blank to save without it.",
+    "自动账号": "Automatic account",
+    "未知凭据": "Unknown credentials",
+    "编辑为新版本": "Edit as a new version",
+    "配置尚未载入，请先重新载入。": "Settings have not loaded. Reload first.",
+    "编辑 API 配置": "Edit API profile",
+    "接口没有返回模型；可继续手动填写。": "No models were returned; manual entry is still available.",
+    "上下文预算必须是 1024–2000000 的整数 tokens。": "Context budget must be an integer from 1024 to 2000000 tokens.",
+    "请填写 Base URL。": "Enter the Base URL.",
+    "请填写精确模型名。": "Enter the exact model ID.",
+    "至少选择一个推理强度。": "Select at least one reasoning effort.",
+    "默认强度必须在已选强度中。": "The default effort must be one of the selected efforts.",
+    "请填写环境变量名。": "Enter the environment variable name.",
+    "请填写密钥文件绝对路径。": "Enter an absolute secret file path.",
+    "配置尚未载入。": "Settings have not loaded.",
+    "固定模式需要选择一个执行器。": "Fixed mode requires an executor.",
+    "正在读取配置…": "Loading settings…",
+    "读取失败": "Load failed",
+    "配置读取失败；生命周期状态未读取。": "Settings could not be loaded; lifecycle status was not read.",
+    "有未保存更改": "Unsaved changes",
+    "正在保存路由…": "Saving routing…",
+    "路由设置已保存。": "Routing settings saved.",
+    "配置已被其他窗口修改。请重新载入，确认后再保存。": "Another window changed the settings. Reload and review before saving.",
+    "API 配置已保存。": "API profile saved.",
+    "检查中…": "Checking…",
+    "本地凭据可用。未发起 API 请求，也未验证认证。": "Local credentials are available. No API request or authentication test was made.",
+    "已应用。新增或更新的角色需要完整重启 Codex 后生效。": "Applied. Restart Codex fully to load new or updated roles.",
+    "已应用。": "Applied.",
+    "API 配置已应用。": "API configuration applied.",
+    "未应用。": "Not applied.",
+    "宿主未提供 tools/call 代理能力（hostCapabilities.serverTools），面板不能读写配置。请更新宿主，或从插件设置页使用结构化设置。": "The host lacks tools/call (hostCapabilities.serverTools). Update the host or use structured plugin settings.",
+    "正在读取本地诊断…": "Reading local diagnostics…",
+    "本地诊断暂不可用；根因仍不确定。": "Local diagnostics are unavailable; the cause is still uncertain.",
+    "未找到可分类的近期连接错误；根因仍不确定。": "No classifiable recent connection errors were found; the cause is still uncertain.",
+    "原生 Luna": "Native Luna",
+    "原生 DeepSeek": "Native DeepSeek",
+    "与当前聊天相同的模型": "Same model as the current chat",
+    "设置已保存。运行服务停止结果由后台生命周期状态确认；安装与 API 验证仍需单独报告。": "Settings saved. Background lifecycle status reports service cleanup; installation and API verification remain separate.",
+    "配置已保存；新增角色尚需安装并完整重启 Codex；安装与验证状态以生命周期为准。": "Profile saved. New roles still require installation and a full Codex restart; check lifecycle status separately.",
+    "标签或别名已保存；API 定义未变，本次未新增角色。安装与验证状态仍需单独确认。": "Label or aliases saved. The API definition is unchanged and no role was added. Installation and verification remain separate.",
+    "后台执行器停止失败；路由设置已保存，请在设置中重试。": "Background executor cleanup failed. Routing settings were saved; retry from settings."
+};
+  const patterns = [
+    [/^别名 (.*)$/, "Alias $1"],
+    [/^预算 (\d+)$/, "Budget $1"],
+    [/^环境变量 · (.*)$/, "Environment variable · $1"],
+    [/^跟随 (.*)$/, "Following $1"],
+    [/^基于 (.*) 创建新版本；旧版本会保留。$/, "Create a new version from $1; the old version is preserved."],
+    [/^已获取 (\d+) 个模型；当前手填模型保持不变。$/, "Fetched $1 models; the manually entered model is unchanged."],
+    [/^宿主未在时限内响应 (.*)。$/, "The host did not respond to $1 in time."],
+    [/^same 将为当前聊天模型 (.*) 创建独立 child；API 角色安装状态不适用。$/, "same creates a separate child with current chat model $1; API role installation does not apply."],
+    [/^ same 跟随当前聊天模型 (.*)。$/, " same follows the current chat model $1."],
+    [/^选定原生模型不在当前目录：(.*)。派发会明确失败，不会替换模型。$/, "Selected native models are absent from the current catalog: $1. Dispatch fails explicitly without substitution."],
+    ...[
+      ["执行器状态读取失败：", "Executor status read failed: "],
+      ["获取模型列表失败；手填模型已保留：", "Model discovery failed; the manually entered model was preserved: "],
+      ["读取失败：", "Load failed: "], ["保存失败：", "Save failed: "],
+      ["配置未保存：", "Profile not saved: "], ["检查失败：", "Check failed: "],
+      ["本地凭据不可用。", "Local credentials unavailable. "],
+      ["未应用：", "Not applied: "], ["应用失败：", "Apply failed: "],
+      ["宿主未完成 MCP App 初始化：", "The host did not finish MCP App initialization: "],
+      ["诊断失败：", "Diagnostics failed: "],
+    ].map(([prefix, replacement]) => [new RegExp("^" + prefix + "([\\s\\S]*)$"), replacement + "$1"]),
+  ];
+  let language = "en";
+  const originals = new WeakMap();
+  const attributes = new WeakMap();
+  let observer;
+  function english(value) {
+    if (Object.hasOwn(EN, value)) return EN[value];
+    for (const [pattern, replacement] of patterns) {
+      if (pattern.test(value)) return value.replace(pattern, replacement);
+    }
+    // Lifecycle facts are composed independently; provider diagnostics stay verbatim.
+    if (value.includes(" · ")) return value.split(" · ").map(part => english(part)).join(" · ");
+    return value;
+  }
+  function translate(value) { return language === "en" ? english(String(value)) : String(value); }
+  function refresh() {
+    observer?.disconnect();
+    document.documentElement.lang = language === "en" ? "en" : "zh-CN";
+    document.title = translate("路由设置");
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node; (node = walker.nextNode());) {
+      if (node.parentElement?.closest("script, style, input, textarea, code, [data-user-content]")) continue;
+      const prior = originals.get(node);
+      const original = prior && node.nodeValue === prior.rendered ? prior.original : node.nodeValue;
+      const trimmed = original.trim();
+      const translated = translate(trimmed);
+      const rendered = trimmed ? original.replace(trimmed, () => translated) : original;
+      originals.set(node, {original, rendered});
+      if (node.nodeValue !== rendered) node.nodeValue = rendered;
+    }
+    for (const node of document.querySelectorAll("[placeholder], [title], [aria-label]")) {
+      let entries = attributes.get(node);
+      if (!entries) { entries = new Map(); attributes.set(node, entries); }
+      for (const name of ["placeholder", "title", "aria-label"]) {
+        const current = node.getAttribute(name);
+        if (current == null) continue;
+        const prior = entries.get(name);
+        const original = prior && current === prior.rendered ? prior.original : current;
+        const rendered = translate(original);
+        entries.set(name, {original, rendered});
+        if (current !== rendered) node.setAttribute(name, rendered);
+      }
+    }
+    observer?.observe(document.body, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["placeholder", "title", "aria-label"]});
+  }
+  function setLocale(locale) {
+    if (typeof locale !== "string" || !locale.trim()) return;
+    language = /^zh(?:-|_|$)/i.test(locale) ? "zh-CN" : "en";
+    refresh();
+  }
+  window.RouterLocale = {setLocale, translate, refresh};
+  observer = new MutationObserver(() => refresh());
+  setLocale(window.navigator?.language || "en");
+})();
+</script>
 <script>
 (() => {
   "use strict";
@@ -521,6 +774,7 @@ footer p + p { margin-top: 3px; }
   function applyHostContext(context) {
     if (!context || typeof context !== "object") return;
     state.hostContext = {...(state.hostContext || {}), ...context};
+    if (typeof context.locale === "string") window.RouterLocale.setLocale(context.locale);
     if (context.theme === "dark" || context.theme === "light") {
       document.documentElement.dataset.theme = context.theme;
       document.documentElement.style.colorScheme = context.theme;
@@ -644,6 +898,7 @@ footer p + p { margin-top: 3px; }
     for (const item of options) {
       const option = document.createElement("option");
       option.value = item.value;
+      if (item.kind === "profile" || item.kind === "native") option.setAttribute("data-user-content", "");
       option.textContent = optionLabel(item);
       select.append(option);
     }
@@ -891,11 +1146,15 @@ footer p + p { margin-top: 3px; }
       row.className = "profile-row";
       const info = document.createElement("div");
       const title = document.createElement("strong");
+      title.setAttribute("data-user-content", "");
       title.textContent = text(profile.label) || text(profile.model) || profile.profileId;
       const meta = document.createElement("div");
       meta.className = "meta";
       const budget = Number.isInteger(profile.contextWindow) ? ` · 预算 ${profile.contextWindow}` : "";
-      meta.textContent = `${profile.model} · ${profile.protocol === "chat_completions" ? "Chat Completions" : "Responses"} · ${credentialLabel(profile.credential)}${budget}`;
+      const modelLabel = document.createElement("span");
+      modelLabel.setAttribute("data-user-content", "");
+      modelLabel.textContent = profile.model;
+      meta.append(modelLabel, document.createTextNode(` · ${profile.protocol === "chat_completions" ? "Chat Completions" : "Responses"} · ${credentialLabel(profile.credential)}${budget}`));
       const chips = document.createElement("div");
       for (const alias of profile.aliases || []) {
         const chip = document.createElement("span");
@@ -1034,7 +1293,11 @@ footer p + p { margin-top: 3px; }
       });
       const models = Array.isArray(result.models) ? result.models : [];
       select.replaceChildren(new Option("选择已发现模型", ""));
-      for (const model of models) select.append(new Option(model, model));
+      for (const model of models) {
+        const option = new Option(model, model);
+        option.setAttribute("data-user-content", "");
+        select.append(option);
+      }
       select.hidden = models.length === 0;
       byId("profile-model").value = currentModel;
       setNotice(models.length ? `已获取 ${models.length} 个模型；当前手填模型保持不变。` : "接口没有返回模型；可继续手动填写。", models.length ? "success" : "error");

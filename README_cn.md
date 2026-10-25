@@ -1,4 +1,4 @@
-# Sol 主控 · 多模型峰谷子代理
+# Codex 多模型子代理路由
 
 [English](README.md) / [简体中文](README_cn.md)
 
@@ -8,7 +8,15 @@
 
 ## 状态
 
-**本分支源码版本为 0.12.3**。维护中的本地部署已安装并可用，路由、设置界面和原生分工已有明确范围内的验证。报告中的历史版本保留各自日期与验收范围；本地可用不代表所有自定义 API 提供方均已通过端到端验收。
+**本分支源码版本为 0.12.4**。维护中的本地部署已安装并可用，路由、设置界面和原生分工已有明确范围内的验证。报告中的历史版本保留各自日期与验收范围；本地可用不代表所有自定义 API 提供方均已通过端到端验收。
+
+## 下载
+
+[下载插件 ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/codex-multimodel-subagent-router.zip) · [SHA-256 校验值](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/SHA256SUMS.txt) · [源码 ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/archive/refs/heads/main.zip)
+
+Release ZIP 包含插件、独立技能、中英文说明和 bootstrap。解压后按下方本地 marketplace 命令安装。API 执行器需要的完整定制 Codex CLI 是独立前提；下载插件不会自动安装或激活该 runtime。安装 ID 保持 `sol-luna-deepseek-router@sol-luna`，兼容已有安装。
+
+设置面板跟随 Codex 宿主语言，提供中文和英文，并响应运行中的语言切换。宿主未提供语言时使用浏览器语言，其他语言回退到英文。用户填写的值和上游诊断原文保持不变。
 
 ## 组件
 

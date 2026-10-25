@@ -20,7 +20,7 @@ const powershell = process.env.POWERSHELL_EXE || "powershell.exe";
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8" }).trim();
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const manifest = {
-  name: "sol-luna-deepseek-router", version: "0.12.3", mcpServers: "./.mcp.json",
+  name: "sol-luna-deepseek-router", version: "0.12.4", mcpServers: "./.mcp.json",
 };
 const marketplace = {
   name: "fixture-registry", plugins: [{ name: manifest.name, source: { source: "local", path: "./" } }],
@@ -46,7 +46,7 @@ const files = new Map([
   ["scripts/helper.ps1", "Write-Output 'runtime helper'"],
   ["native/bootstrap/bootstrap.c", "int main(void) { return 0; }"],
   ["native/bootstrap/codex-bootstrap.exe", Buffer.from([0x4d, 0x5a, 0x00, 0xff])],
-  ["README.md", "# Router\n"], ["SKILL.md", "# Skill\n"], ["PLUGIN.md", "# Plugin\n"], ["LICENSE", "MIT\n"],
+  ["README.md", "# Router\n"], ["README_cn.md", "# 中文说明\n"], ["SKILL.md", "# Skill\n"], ["PLUGIN.md", "# Plugin\n"], ["LICENSE", "MIT\n"],
   ["docs/native-isolated-install.md", "Install notes\n"],
   ["docs/native-connection-diagnostics.md", "Diagnostics notes\n"],
   ["docs/superpowers/specs/private-review.md", "must not ship"],
@@ -91,13 +91,14 @@ try {
   const outputDir = path.join(root, "external distributions 文件夹");
   const output = path.join(outputDir, "router candidate.zip");
   const result = await packagePlugin({ source, out: output });
-  assert.equal(result.version, "0.12.3");
+  assert.equal(result.version, "0.12.4");
   assert.equal(result.registryId, "fixture-registry");
   assert.equal(result.sourceCommit, git(source, "rev-parse", "HEAD"));
   assert.ok(result.fileCount >= 15, "runtime inventory is nonempty and includes required modules");
   assert.ok(result.bytes > 0, "the output is a real nonempty ZIP");
   const zipEntries = await inspectZip(output);
   const zipMap = new Map(zipEntries.map((entry) => [entry.path, entry]));
+  assert.ok(zipMap.has("README_cn.md"), "the directly downloadable ZIP includes its Chinese guide");
   const manifestEntry = zipMap.get("package-manifest.json");
   assert.ok(manifestEntry, "archive contains package-manifest.json");
   assert.equal(manifestEntry.sha256, result.manifestSha256, "archive manifest bytes match returned manifest digest");

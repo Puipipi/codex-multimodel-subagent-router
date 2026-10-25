@@ -1,4 +1,4 @@
-# Sol-led Codex Executor Router
+# Codex Multimodel Subagent Router
 
 [English](README.md) / [简体中文](README_cn.md)
 
@@ -8,7 +8,15 @@ One routing skill and an optional Codex plugin. Sol keeps the current conversati
 
 ## Status
 
-**This branch contains source version 0.12.3**. The maintained local deployment is installed and usable, with scoped verification of routing, settings UI, and native delegation. Historical reports retain their dated acceptance scope; local usability does not imply end-to-end verification of every custom API provider.
+**This branch contains source version 0.12.4**. The maintained local deployment is installed and usable, with scoped verification of routing, settings UI, and native delegation. Historical reports retain their dated acceptance scope; local usability does not imply end-to-end verification of every custom API provider.
+
+## Download
+
+[Download the plugin ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/codex-multimodel-subagent-router.zip) · [SHA-256 checksums](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/SHA256SUMS.txt) · [Source ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/archive/refs/heads/main.zip)
+
+The release ZIP contains the plugin, standalone skill, English/Chinese guides, and bootstrap. Extract it before using the local marketplace installation below. The full custom Codex CLI is a separate prerequisite for API executors; downloading the plugin does not install or activate that runtime. The existing installation ID `sol-luna-deepseek-router@sol-luna` remains compatible with earlier installations.
+
+The settings panel follows the Codex host language (Chinese or English), including live language changes. When the host omits its locale, the browser language is used; other languages fall back to English. User-entered values and upstream diagnostics remain unchanged.
 
 ## Components
 
