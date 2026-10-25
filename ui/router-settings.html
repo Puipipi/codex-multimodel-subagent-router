@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -699,7 +699,14 @@ footer p + p { margin-top: 3px; }
   }
   window.RouterLocale = {setLocale, translate, refresh};
   observer = new MutationObserver(() => refresh());
-  setLocale(window.navigator?.language || "en");
+  setLocale(document.documentElement.lang || window.navigator?.language || "en");
+  // Some hosts mirror their language to the document instead of sending a locale notification.
+  const hostLanguageObserver = new MutationObserver(() => {
+    const locale = document.documentElement.lang;
+    const normalized = /^zh(?:-|_|$)/i.test(locale) ? "zh-CN" : "en";
+    if (locale && normalized !== language) setLocale(locale);
+  });
+  hostLanguageObserver.observe(document.documentElement, {attributes: true, attributeFilter: ["lang"]});
 })();
 </script>
 <script>
