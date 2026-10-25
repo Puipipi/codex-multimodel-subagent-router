@@ -11,10 +11,10 @@ const ROOT_FILES = new Set([
   ".codex-plugin/plugin.json", ".agents/plugins/marketplace.json", ".mcp.json", "agents/openai.yaml",
   "hooks/hooks.json", "ui/router-settings.html", "scripts/plugin-mcp.mjs", "scripts/route-hook.mjs",
   "native/bootstrap/bootstrap.c", "native/bootstrap/codex-bootstrap.exe",
-  "README.md", "SKILL.md", "PLUGIN.md", "LICENSE",
+  "README.md", "README_cn.md", "SKILL.md", "PLUGIN.md", "LICENSE",
 ]);
 const GUIDE_DOCS = new Set([
-  "docs/native-account-auth.md", "docs/native-api-executors.md", "docs/native-catalog.md",
+  "docs/plugin-distribution.md", "docs/native-account-auth.md", "docs/native-api-executors.md", "docs/native-catalog.md",
   "docs/native-connection-diagnostics.md", "docs/native-isolated-cli-build.md", "docs/native-isolated-files.md",
   "docs/native-isolated-install.md", "docs/native-runtime-env.md", "docs/native-timeout.md",
   "docs/native-upgrade-guard.md", "docs/router-settings-mcp.md",

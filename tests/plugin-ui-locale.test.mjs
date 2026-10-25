@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+
+const html = readFileSync(new URL('../ui/router-settings.html', import.meta.url), 'utf8');
+const source = html.match(/<script id="router-locale">([\s\S]*?)<\/script>/)?.[1];
+assert.ok(source, 'the settings page includes its locale adapter');
+function fixture(browserLocale, documentLocale = '') {
+  const text = (value, protectedContent = false) => ({nodeValue: value, parentElement: {closest: () => protectedContent ? {} : null}});
+  const texts = [text('保存路由'), text('有未保存更改'), text('我的配置', true), text('别名 我的别名')];
+  const input = {value: '不要改变输入', attributes: new Map([['placeholder', '例如 MiMo']]), getAttribute(k) {return this.attributes.get(k) ?? null;}, setAttribute(k, v) {this.attributes.set(k, v);}};
+  const document = {body: {}, title: '路由设置', documentElement: {lang: documentLocale}, createTreeWalker() {let i = 0; return {nextNode: () => texts[i++] ?? null};}, querySelectorAll: () => [input]};
+  const window = {navigator: {language: browserLocale}, MutationObserver: class {observe() {} disconnect() {}}, addEventListener() {}};
+  const context = {window, document, navigator: window.navigator, NodeFilter: {SHOW_TEXT: 4}, MutationObserver: window.MutationObserver, queueMicrotask: fn => fn()};
+  vm.runInNewContext(source, context);
+  return {locale: window.RouterLocale, document, texts, input};
+}
+const f = fixture('en-US');
+assert.equal(f.document.documentElement.lang, 'en');
+assert.equal(f.texts[0].nodeValue, 'Save routing');
+assert.equal(f.input.getAttribute('placeholder'), 'For example, MiMo');
+assert.equal(f.input.value, '不要改变输入');
+assert.equal(f.texts[2].nodeValue, '我的配置');
+assert.equal(f.texts[3].nodeValue, 'Alias 我的别名');
+f.locale.setLocale('zh-CN');
+assert.equal(f.texts[0].nodeValue, '保存路由', 'host locale overrides the browser fallback');
+assert.equal(f.texts[1].nodeValue, '有未保存更改');
+assert.equal(f.input.getAttribute('placeholder'), '例如 MiMo');
+f.locale.setLocale('en-GB');
+assert.equal(f.texts[1].nodeValue, 'Unsaved changes');
+f.texts[1].nodeValue = '正在保存路由…';
+f.locale.refresh();
+assert.equal(f.texts[1].nodeValue, 'Saving routing…', 'new status messages use the active locale');
+f.locale.setLocale('zh-TW');
+assert.equal(f.document.documentElement.lang, 'zh-CN');
+assert.equal(f.texts[1].nodeValue, '正在保存路由…');
+f.locale.setLocale('fr-FR');
+assert.equal(f.document.documentElement.lang, 'en', 'unsupported locales use English');
+assert.equal(f.locale.translate('原生 Luna'), 'Native Luna');
+assert.equal(f.locale.translate('与当前聊天相同的模型'), 'Same model as the current chat');
+assert.equal(f.locale.translate('来自上游的原始错误'), '来自上游的原始错误', 'unknown provider diagnostics remain verbatim');
+assert.equal(fixture('en-US', 'zh-CN').document.documentElement.lang, 'zh-CN', 'host-mirrored document language overrides browser fallback');
+assert.match(html, /RouterLocale\.setLocale\(context\.locale\)/, 'host-context updates select the UI language');
+console.log('UI locale checks passed');

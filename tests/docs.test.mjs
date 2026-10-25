@@ -50,7 +50,7 @@ assert.match(nativeApiAgentMessageFix, /task execution did not pass/i);
 assert.match(nativeApiAgentMessageFix, /apiVerified.*false/i);
 assert.doesNotMatch(readme, /currently installed 0\.10\.5\/6ec/i, 'README does not describe the historical runtime as current');
 assert.doesNotMatch(pluginDoc, /actual isolated CLI installation has not been run/i, 'PLUGIN reflects the recorded formal installation');
-assert.match(readme, /^# Sol-led Codex Executor Router$/m, 'README uses the English project title');
+assert.match(readme, /^# Codex Multimodel Subagent Router$/m, 'README uses the English project title');
 assert.match(skill, /^# Sol 主控 · 多模型峰谷子代理$/m, 'SKILL.md uses the unified display name');
 assert.match(pluginDoc, /^# Sol 主控 · 多模型峰谷子代理$/m, 'PLUGIN.md uses the unified display name');
 assert.match(readme, /\$sol-luna-deepseek-router/, 'README names the canonical skill');
