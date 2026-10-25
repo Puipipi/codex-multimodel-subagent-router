@@ -2,11 +2,13 @@
 
 [English](README.md) / [简体中文](README_cn.md)
 
-One routing skill and an optional Codex plugin. Sol keeps the current conversation, breaks down work, makes decisions, and reviews results. Repository searches, file edits, debugging, and tests go to native Luna during peak hours or an isolated native DeepSeek child during valley hours. Ordinary Q&A stays with Sol; users can explicitly request direct execution.
+Canonical skill: `$sol-luna-deepseek-router`. UI label: Sol 主控 · 多模型峰谷子代理.
+
+One routing skill and an optional Codex plugin. Sol keeps the current conversation, breaks down work, makes decisions, and reviews results. Choose a native executor from the live model catalog or an immutable custom API profile for repository searches, file edits, debugging, and tests. The default peak-Luna / valley-DeepSeek schedule is one available plan; fixed and custom peak/valley choices are also supported. Ordinary Q&A stays with Sol; users can explicitly request direct execution.
 
 ## Status
 
-**0.12.3 is installed and usable on the maintained local deployment**, with scoped verification of routing, the settings UI, and native delegation. Its source is in [PR #1](https://github.com/Puipipi/sol-luna-deepseek-router/pull/1) / `feat/native-api-integration-20261018`; GitHub default **main still contains 0.10.4**, which this page documents. Match documentation to your source version; custom API end-to-end acceptance is tracked separately, and local usability does not imply every provider has been verified.
+**This branch contains source version 0.12.3**. The maintained local deployment is installed and usable, with scoped verification of routing, settings UI, and native delegation. Historical reports retain their dated acceptance scope; local usability does not imply end-to-end verification of every custom API provider.
 
 ## Components
 
@@ -16,16 +18,28 @@ One routing skill and an optional Codex plugin. Sol keeps the current conversati
 | Route helper | Schedule, one-task choice, and chat-scoped overrides | [scripts/route.mjs](scripts/route.mjs) |
 | Optional plugin | MCP wrapper, active-chat hooks, and DSH trace | [PLUGIN.md](PLUGIN.md) |
 | Isolated native backend | Patched CLI, dedicated DeepSeek role/provider/catalog, owned gateway lifecycle | [Installation guide](docs/native-isolated-install.md) |
+| Custom API executors | Immutable profiles, Responses/Chat Completions, separate lifecycle | [API guide](docs/native-api-executors.md) |
 | Legacy DSH compatibility | External bridge with chat ownership and workspace writer leases | [DSH client](scripts/dsh-mcp-client.mjs) |
 
 The formal native DeepSeek route uses the isolated `native_deepseek` role and its own `deepseek-native` provider and catalog. Sol and native Luna retain their normal provider and live model catalog. The native backend and external DSH bridge are separate execution paths; DSH is never an automatic fallback.
 
+
+The settings panel supports an enabled switch, a fixed executor, or separate peak/valley choices. `off` disables automatic delegation and Sol performs the work directly. `same` still creates an isolated child using the exact current parent-chat model. `native:<slug>` must exist in the current `CODEX_HOME/models_cache.json`; unavailable selections fail explicitly. Native Luna is also resolved from the live catalog.
+
+Custom API profiles have immutable IDs and support Responses and Chat Completions. Editing creates a new ID; existing children retain their original profile. Credentials resolve through the official DeepSeek/DSH account path or manual environment/file references, without embedding keys or trying another account or provider. Fixed mode ignores the clock; explicit scheduled mode chooses each phase separately. Saving settings, applying API configuration, fully restarting, and verifying real calls are separate steps. API children disable built-in web_search; local fixtures do not establish acceptance of every API.
+
 ## Documentation and reports
 
-Reports are dated, host-specific evidence with independent acceptance scopes. For the historical main / 0.10.4 baseline, full desktop acceptance remains pending; this does not describe the usability of the maintained 0.12.3 deployment.
+The dated desktop record lists host-specific observed behavior. Reports are dated, host-specific evidence with independent acceptance scopes; older records do not describe the current release status.
 
 | Document | Scope |
 | --- | --- |
+| [Settings panel and off/same](docs/router-settings-mcp.md) | Settings panel and off/same |
+| [Immutable API profiles and lifecycle](docs/native-api-executors.md) | Immutable API profiles and lifecycle |
+| [0.11.2 role registration record](docs/native-api-role-registration-0.11.2-2026-10-19.md) | 0.11.2 role registration record |
+| [0.11.3 catalog repair and acceptance limits](docs/native-api-catalog-instructions-0.11.3-2026-10-19.md) | 0.11.3 catalog repair and acceptance limits |
+| [0.11.4 wire repair and real-call limits](docs/native-api-agent-message-0.11.4-2026-10-19.md) | 0.11.4 wire repair and real-call limits |
+| [Historical desktop behavior evidence](docs/native-desktop-acceptance-0.10.5-2026-10-18.md) | Historical desktop behavior evidence |
 | [Plugin guide](PLUGIN.md) | Packaging, lifecycle, and standalone skill synchronization |
 | [Isolated native installation](docs/native-isolated-install.md) | Explicit prepare, status, activate, and rollback workflow |
 | [CLI build notes](docs/native-isolated-cli-build.md) | Matching custom CLI prerequisites and build boundaries |
@@ -52,6 +66,8 @@ codex plugin add sol-luna-deepseek-router@sol-luna
 For a local marketplace, rerun the second command after updating its source. Synchronize the standalone skill separately. Reload plugins or restart Codex after installation or updates. The plugin has no bundled skill; it auto-discovers `hooks/hooks.json`, and no manifest `hooks` pointer is required. Hooks are initially untrusted: inspect and approve them in `/hooks`.
 
 3. For native DeepSeek, follow the [isolated installation guide](docs/native-isolated-install.md). This requires a matching patched Codex CLI and dedicated gateway setup; installing the skill or plugin alone is insufficient. Perform setup only when requested, then fully restart Codex after activation. Other hosts require local verification.
+For custom APIs, save a profile in the [settings panel](docs/router-settings-mcp.md), explicitly Apply an approved compatible runtime, then fully exit and restart Codex before checking role discovery and real calls. Ordinary routing does not install or activate a runtime; credential availability is not authentication or inference acceptance.
+
 4. Only if you explicitly need legacy DSH compatibility, install the pinned external bridge without its companion skill:
 
 ```powershell
@@ -90,6 +106,20 @@ node .\tests\plugin-trace.test.mjs
 node .\tests\plugin-mcp.test.mjs
 node .\tests\plugin-client.test.mjs
 node .\tests\dsh-mcp-client.test.mjs
+node .\tests\plugin-router-settings.test.mjs
+node .\tests\plugin-mcp-env.test.mjs
+node .\tests\plugin-distribution.test.mjs
+node .\tests\native-api-settings.test.mjs
+node .\tests\native-api-routing.test.mjs
+node .\tests\native-api-protocol.test.mjs
+node .\tests\native-api-artifacts.test.mjs
+node .\tests\native-api-install.test.mjs
+node .\tests\native-api-lifecycle.test.mjs
+node .\tests\native-api-origin.test.mjs
+node .\tests\native-api-manager.test.mjs
+node .\tests\native-current-model.test.mjs
+node .\tests\native-execution-lifecycle.test.mjs
+node .\tests\native-connection-diagnostics.test.mjs
 node .\scripts\patch-backend-windows.test.mjs
 pwsh -NoProfile -File .\tests\dsh-agent-helper.test.ps1
 ```
