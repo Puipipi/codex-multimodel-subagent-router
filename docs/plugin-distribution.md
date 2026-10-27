@@ -4,7 +4,9 @@
 
 包内保留插件清单、市场注册信息、MCP 配置、技能、hook、UI、运行脚本、运行所需文档、许可证及 `native/bootstrap` 中跟踪的源码/二进制。CI 专用锁归一化器、CLI 源码 patcher、测试、evidence、procedures、计划和本机环境文件不会打包。`package-manifest.json` 记录相对路径、字节数和 SHA-256，以及版本、registry ID 和源提交；它不记录本机绝对路径，也不对自身做递归哈希。ZIP 创建后由 Windows .NET 解压流逐项核对实际内容哈希，再以不覆盖方式写入目标。受限目录不跟随 Git symlink；输出目录必须与源树分离。
 
-当前 0.12.7 源中的 `native/bootstrap` 有跟踪的 C 源和 EXE，没有单独的编译来源收据。包清单会记录这两个文件的确切哈希和仓库 commit，但这不证明 EXE 可由该 C 源可复现构建。
+当前 0.12.8 源中的 `native/bootstrap` 有跟踪的 C 源和 EXE，没有单独的编译来源收据。包清单会记录这两个文件的确切哈希和仓库 commit，但这不证明 EXE 可由该 C 源可复现构建。
+
+0.12.8 将 marketplace 的插件源固定到同步的 codex-plugin 子目录；修改发布文件后运行 `node scripts/package-plugin.mjs --sync --source <仓库绝对路径>`，提交副本前用 `--check` 检查一致性。
 
 0.12.7 澄清配置状态和最近错误记录，重复查看保留窗口内记录。
 

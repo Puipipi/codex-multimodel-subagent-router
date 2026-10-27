@@ -1,0 +1,5 @@
+# Native runtime environment transaction
+
+The runtime environment module creates reversible environment transactions. A generic plan verifies the staged runtime and snapshots only `CODEX_CLI_PATH` and `SOL_LUNA_NATIVE_PLAINTEXT_V2`; unrelated values are neither returned nor changed. The installer explicitly opts into a third owned value, `SOL_LUNA_NATIVE_INSTALL_JOURNAL`, and supplies the resolved journal path. The Windows adapter permits that key only when the installer opts in; its default allowlist remains the original two keys. Existing two-key plans and journals remain valid.
+
+Apply refuses a stale plan. Its rollback snapshot restores the previous values only while every key in that transaction still matches what it applied. If a value changed afterward, rollback refuses and preserves the user's current settings. Failed partial application attempts try every eligible transaction key even if one restoration fails, then report the original error together with all restoration failures.

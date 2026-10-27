@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { link, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -51,6 +51,11 @@ function safeRelative(relative) {
   return relative.split("/").every((part) => part && part !== "." && part !== ".." && !part.includes(":"));
 }
 function isIncluded(relative) {
+  if (relative.startsWith("codex-plugin/")) return true;
+  return isRuntimeFile(relative) || relative === ".agents/plugins/marketplace.json";
+}
+function isRuntimeFile(relative) {
+  if (relative === ".agents/plugins/marketplace.json") return false;
   if (ROOT_FILES.has(relative) || GUIDE_DOCS.has(relative)) return true;
   if (relative.startsWith("scripts/")) {
     return /\.(?:mjs|ps1)$/i.test(relative)
@@ -75,7 +80,7 @@ function validateContracts(entries) {
   }
   const registry = parseManifest(byPath.get(".agents/plugins/marketplace.json"), ".agents/plugins/marketplace.json");
   const matching = Array.isArray(registry.plugins) ? registry.plugins.filter((item) => item?.name === plugin.name) : [];
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(registry.name ?? "") || matching.length !== 1 || matching[0].source?.path !== "./") {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(registry.name ?? "") || matching.length !== 1 || matching[0].source?.path !== "./codex-plugin") {
     throw new Error("unsupported marketplace registry contract");
   }
   const mcp = parseManifest(byPath.get(".mcp.json"), ".mcp.json");
@@ -85,6 +90,54 @@ function validateContracts(entries) {
   }
   return { pluginName: plugin.name, version: plugin.version, registryId: registry.name };
 }
+// Project the same allowlist used by the ZIP into the installable, Git-free subtree.
+export async function syncPluginDirectory({source, check = false} = {}) {
+  const root = await canonicalDirectory(source, "source");
+  const listing = git(root, ["ls-files", "--stage", "-z"], "buffer").toString("utf8");
+  const expected = new Map();
+  for (const record of listing.split("\0")) {
+    if (!record) continue;
+    const tab = record.indexOf("\t");
+    const [mode, , stage] = record.slice(0, tab).split(" ");
+    const relative = record.slice(tab + 1);
+    if (!isRuntimeFile(relative)) continue;
+    if (!safeRelative(relative) || !["100644", "100755"].includes(mode) || stage !== "0") throw new Error("invalid runtime projection path");
+    const info = await lstat(path.join(root, ...relative.split("/")));
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`invalid runtime projection file: ${relative}`);
+    expected.set(relative, await readFile(path.join(root, ...relative.split("/"))));
+  }
+  const target = path.join(root, "codex-plugin");
+  async function walk(directory, prefix = "") {
+    let items;
+    try { items = await readdir(directory, {withFileTypes: true}); }
+    catch (error) { if (error.code === "ENOENT") return []; throw error; }
+    const result = [];
+    for (const item of items) {
+      const relative = prefix ? `${prefix}/${item.name}` : item.name;
+      if (item.isDirectory()) result.push(...await walk(path.join(directory, item.name), relative));
+      else if (item.isFile()) result.push(relative);
+      else throw new Error(`invalid bundle entry: ${relative}`);
+    }
+    return result;
+  }
+  if (check) {
+    const actual = await walk(target);
+    if (actual.length !== expected.size || actual.some(name => !expected.has(name)) ||
+        (await Promise.all([...expected].map(async ([name, bytes]) => {
+          try { return !(await readFile(path.join(target, ...name.split("/")))).equals(bytes); } catch { return true; }
+        }))).some(Boolean)) throw new Error("plugin directory is missing, extra, or out of sync");
+  } else {
+    const extras = (await walk(target)).filter(name => !expected.has(name));
+    if (extras.length) throw new Error(`plugin directory contains an unexpected file: ${extras[0]}`);
+    for (const [name, bytes] of expected) {
+      const destination = path.join(target, ...name.split("/"));
+      await mkdir(path.dirname(destination), {recursive: true});
+      await writeFile(destination, bytes);
+    }
+  }
+  return {fileCount: expected.size};
+}
+
 async function canonicalDirectory(value, label) {
   if (typeof value !== "string" || !path.isAbsolute(value)) throw new Error(`${label} must be an absolute path`);
   let canonical;
@@ -193,6 +246,9 @@ export async function packagePlugin({ source, out } = {}) {
 
   const selected = readTrackedFiles(sourceRoot, commit);
   const contract = validateContracts(selected);
+  const projection = new Map(selected.filter(entry => isRuntimeFile(entry.path)).map(entry => [entry.path, entry.bytes]));
+  const bundle = selected.filter(entry => entry.path.startsWith("codex-plugin/"));
+  if (bundle.length !== projection.size || bundle.some(entry => !projection.has(entry.path.slice(13)) || !projection.get(entry.path.slice(13)).equals(entry.bytes))) throw new Error("plugin directory is missing, extra, or out of sync");
   const canonicalTempParent = await realpath(os.tmpdir());
   const stateRoot = await mkdtemp(path.join(canonicalTempParent, "sol-luna-plugin-package-"));
   const stage = path.join(stateRoot, "content");
@@ -248,6 +304,11 @@ async function main(argv) {
     return index >= 0 ? argv[index + 1] : undefined;
   };
   try {
+    if (argv.includes("--sync") || argv.includes("--check")) {
+      const result = await syncPluginDirectory({source: value("source"), check: argv.includes("--check")});
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+      return;
+    }
     const result = await packagePlugin({ source: value("source"), out: value("out") });
     process.stdout.write(`${JSON.stringify({ out: result.out, version: result.version, registryId: result.registryId, sourceCommit: result.sourceCommit, fileCount: result.fileCount, bytes: result.bytes, zipSha256: result.zipSha256, manifestSha256: result.manifestSha256 })}\n`);
   } catch (error) {

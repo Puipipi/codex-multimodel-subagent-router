@@ -1,0 +1,7 @@
+interface:
+  display_name: "Sol 主控 · 多模型峰谷子代理"
+  short_description: "Sol 主控按峰谷调度 Luna、DeepSeek 与可配置 API 子代理"
+  default_prompt: "使用 $sol-luna-deepseek-router 按峰谷路由，并在 API 面板保存后显式应用配置；DeepSeek/API 子任务由 Sol 审阅结果。"
+
+policy:
+  allow_implicit_invocation: true

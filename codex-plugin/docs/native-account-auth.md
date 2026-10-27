@@ -1,0 +1,9 @@
+# Native DSH account authentication
+
+The native gateway reads `~/.dsh/.credentials.yaml` in process for each DeepSeek request. It prefers the DSH `records["deepseek-account-platform/default"]` grant when `kind` is `grant` and its payload has version `1`, a token, and issuer `https://platform.deepseek.com`. The grant token is sent only as `x-dsh-auth-token` to `https://api.deepseek.com`; the gateway rejects other origins and disables redirects for that request. It never sends the account token as a Bearer credential.
+
+If that account record is absent, the gateway uses the legacy `refs.DEEPSEEK_API_KEY` value as a Bearer credential. A present but malformed account record, unsupported record format, invalid token, or unexpected issuer fails closed and does not fall back to the API key. The file is reread before each DeepSeek request so switching accounts in DSH takes effect without restarting the gateway.
+
+Credential values remain in memory and are not copied to files, logs, gateway state, responses, or health output. Health reports only whether a credential could be read and its mode; it does not establish that the upstream service accepted it. `readDeepSeekKey` remains available for callers that specifically need the legacy API key.
+
+Local validation on 2026-10-17 used the currently signed-in DSH account through the installed gateway: the official Responses API returned HTTP 200, the tiny connectivity probe reported 45 total tokens, and that request used zero relay calls. The token was not printed. This result confirms account connectivity for that small request only; it does not show that native subagent delegation avoids GPT relay. The existing native P3 evidence still records two relay calls, and the plaintext path has not yet been isolated and verified. Health alone does not prove authentication. Desktop UI verification remains outstanding.

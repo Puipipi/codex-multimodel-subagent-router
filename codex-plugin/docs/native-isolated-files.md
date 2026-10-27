@@ -1,0 +1,5 @@
+# Isolated native files transaction
+
+This module prepares a plan for exactly three Codex home files: `config.toml`, `agents/native_deepseek.toml`, and `sol-luna-native-models.json`. It verifies the staged runtime, snapshots original bytes or absence, restores the previous root URL/catalog values from a valid legacy manifest, and builds a DeepSeek-only child catalog from `models_cache.json`. Existing role/catalog files are overwritten only when the config has this module's owned marker, the matching path is recorded in the legacy manifest, or the current bytes already equal the generated output.
+
+Apply rechecks the runtime and all file snapshots before writing, uses same-directory temporary files and atomic renames, and conditionally restores files after a partial failure. Rollback does not depend on the staged runtime still existing; it refuses the whole transaction if any managed file no longer matches the applied bytes. Other Codex files are untouched. This is a file transaction layer only; it does not activate the CLI, update environment variables, start a gateway, or restart Codex.
