@@ -667,6 +667,8 @@ footer p + p { margin-top: 3px; }
   let observer;
   function english(value) {
     if (Object.hasOwn(EN, value)) return EN[value];
+    const nativeAndSame = value.match(/^([^·]*。)( same (?:跟随当前聊天模型 [^·]*。|当前聊天模型未知，派发会明确失败。))$/);
+    if (nativeAndSame) return english(nativeAndSame[1]) + english(nativeAndSame[2]);
     for (const [pattern, replacement] of patterns) {
       if (pattern.test(value)) return value.replace(pattern, replacement);
     }
