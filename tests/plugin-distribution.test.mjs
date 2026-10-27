@@ -126,7 +126,10 @@ try {
   for (const name of [".codex-plugin/plugin.json", ".mcp.json", "hooks/hooks.json", "scripts/plugin-mcp.mjs", "scripts/route-hook.mjs", "SKILL.md", "LICENSE"]) assert.ok(zipMap.has(`codex-plugin/${name}`), `ZIP includes bundle ${name}`);
   const unpacked = path.join(root, "unpacked");
   await mkdir(unpacked);
-  execFileSync("tar", ["-xf", output, "-C", unpacked], {stdio: "pipe", windowsHide: true});
+  const extractCommand = 'Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:ROUTER_TEST_ZIP, $env:ROUTER_TEST_DEST)';
+  execFileSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(extractCommand, "utf16le").toString("base64")], {
+    stdio: "pipe", windowsHide: true, env: {...process.env, ROUTER_TEST_ZIP: output, ROUTER_TEST_DEST: unpacked},
+  });
   const unpackedRegistry = JSON.parse(await readFile(path.join(unpacked, ".agents/plugins/marketplace.json"), "utf8"));
   const installedRoot = path.resolve(unpacked, unpackedRegistry.plugins[0].source.path);
   const installedManifest = JSON.parse(await readFile(path.join(installedRoot, ".codex-plugin/plugin.json"), "utf8"));
