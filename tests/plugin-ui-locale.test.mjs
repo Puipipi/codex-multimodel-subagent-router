@@ -40,6 +40,18 @@ assert.equal(f.locale.translate('原生 Luna'), 'Native Luna');
 assert.equal(f.locale.translate('模型目录已确认（未调用）'), 'Model catalog confirmed (no model call)');
 assert.equal(f.locale.translate('读取本地连接日志'), 'Read local connection logs');
 assert.match(f.locale.translate('原生模型不受 API 兼容守卫影响；目录检查不代表实际调用成功。'), /independent of the API compatibility guard/);
+for (const [catalog, expected] of [
+  ['状态来自本地 Codex 模型目录；不会调用 API。', 'Status comes from the local Codex model catalog'],
+  ['选定原生模型不在当前目录：missing-model。派发会明确失败，不会替换模型。', 'Selected native models are absent'],
+]) {
+  const combined = `${catalog} same 跟随当前聊天模型 current-model。 · 原生模型不受 API 兼容守卫影响；目录检查不代表实际调用成功。`;
+  assert.match(f.locale.translate(combined), new RegExp(expected));
+  assert.match(f.locale.translate(combined), /same follows the current chat model current-model/);
+  assert.doesNotMatch(f.locale.translate(combined), /[\u4e00-\u9fff]/);
+  const unknown = `${catalog} same 当前聊天模型未知，派发会明确失败。 · 原生模型不受 API 兼容守卫影响；目录检查不代表实际调用成功。`;
+  assert.match(f.locale.translate(unknown), /current chat model is unknown; same-model dispatch will fail explicitly/);
+  assert.doesNotMatch(f.locale.translate(unknown), /[\u4e00-\u9fff]/);
+}
 assert.match(f.locale.translate('自动分工开关已关闭，因此未读取日志。未进行实时连接测试。'), /no logs were read/);
 assert.equal(f.locale.translate('与当前聊天相同的模型'), 'Same model as the current chat');
 assert.equal(f.locale.translate('来自上游的原始错误'), '来自上游的原始错误', 'unknown provider diagnostics remain verbatim');

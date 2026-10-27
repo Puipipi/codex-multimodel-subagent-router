@@ -8,7 +8,7 @@ One routing skill and an optional Codex plugin. Sol keeps the current conversati
 
 ## Status
 
-**This branch contains source version 0.12.5**. The maintained local deployment is installed and usable, with scoped verification of routing, settings UI, and native delegation. Historical reports retain their dated acceptance scope; local usability does not imply end-to-end verification of every custom API provider.
+**This branch contains source version 0.12.6**. The maintained local deployment is installed and usable, with scoped verification of routing, settings UI, and native delegation. Historical reports retain their dated acceptance scope; local usability does not imply end-to-end verification of every custom API provider.
 
 ## Download
 
