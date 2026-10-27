@@ -136,3 +136,11 @@ node .\tests\plugin-mcp.test.mjs
 ## 界面语言
 
 面板优先使用 MCP Apps `ui/initialize` 返回的 `hostContext.locale`，并监听 `ui/notifications/host-context-changed`。`zh` 语言使用简体中文，其他语言使用英文；宿主未提供 locale 时使用浏览器语言。切换只更新界面文本，不重新读取或保存设置，不重建编辑器，不修改输入值或原生执行器选择。用户命名与无法识别的上游诊断保留原文。
+
+## 0.12.5：原生执行器与 API 守卫分离
+
+用户关闭自动分工时，所有执行器仍停止新派发。API 兼容守卫停用时，仅阻止 API/DeepSeek；原生 Luna、`same`、`native:<slug>` 不依赖 API 补丁。固定、峰谷、一次性和聊天覆盖均先确定实际执行器，再应用 API 守卫；不重写兼容状态，也不自动替换失败的执行器。保存返回的状态包含守卫信息，避免保存后与刷新后的状态不一致。
+
+原生状态显示“模型目录已确认（未调用）”，只证明选定 slug 存在于本地目录。原“连接诊断”改为“本地连接日志诊断”，只读取当前聊天的近期有界错误分类，并非实时模型连接测试。用户开关关闭返回 `reason: routing_disabled`，本地日志缺失或不可读返回 `reason: local_logs_unavailable`；两者均不代表模型认证或连接失败。API 守卫不会阻止用户主动读取日志。
+
+`tests/plugin-native-guard.test.mjs` 覆盖真实路由、hook、native-agent CLI、用户关闭开关、API 阻断、混合峰谷及实际 UI 状态/诊断处理函数；不发起模型请求。

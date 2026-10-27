@@ -160,21 +160,15 @@ export async function decideRoute({
   const settings = routerSettings === undefined
     ? await loadRouterSettings(settingsPath)
     : validateRouterSettings(routerSettings);
-  const effectiveGuardStatus = settings.enabled === false
-    ? guardStatus
-    : guardStatus === undefined ? await readGuardStatus() : guardStatus;
-  if (!effectiveRouterEnabled(settings, effectiveGuardStatus)) {
-    const guarded = effectiveGuardStatus?.state === 'disabled';
+  if (settings.enabled === false) {
     return {
       phase: 'disabled',
-      source: guarded ? 'guard_disabled' : 'disabled',
+      source: 'disabled',
       executor: 'off',
       profileId: null,
       evaluatedAt: instant.toISOString(),
       timezone: CHINA_TIMEZONE,
-      reason: guarded
-        ? 'automatic child delegation is disabled by the lifecycle guard'
-        : 'automatic child delegation is disabled in router settings',
+      reason: 'automatic child delegation is disabled in router settings',
     };
   }
   if (executor !== undefined) {
@@ -226,6 +220,13 @@ export async function decideRoute({
     }
   }
   const resolved = resolveSelector(selector, settings);
+  if (resolved.executor === 'api' || resolved.executor === 'deepseek') {
+    const effectiveGuardStatus = guardStatus === undefined ? await readGuardStatus() : guardStatus;
+    if (!effectiveRouterEnabled(settings, effectiveGuardStatus, resolved.executor)) {
+      return {...plan, phase: 'disabled', source: 'guard_disabled', executor: 'off', profileId: null,
+        reason: 'API child delegation is disabled by the compatibility guard; native models remain available'};
+    }
+  }
   if (resolved.executor === 'native') {
     const catalog = await readNativeModels();
     if (!catalog.some(model => model?.value === resolved.model)) {

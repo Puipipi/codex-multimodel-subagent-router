@@ -136,8 +136,9 @@ async function main(argv) {
     ? path.join(apiDir, "router.json")
     : defaultRouterSettingsPath());
   const routerSettings = await loadRouterSettings(settingsPath);
-  const guardStatus = routerSettings.enabled ? await readUpgradeGuardStatus() : null;
-  if (!effectiveRouterEnabled(routerSettings, guardStatus)) throw new Error("Automatic child dispatch is disabled by router settings or the upgrade guard");
+  const nativeExecutor = executor.startsWith("native:") ? "native" : executor === "luna" || executor === "same" ? executor : null;
+  const guardStatus = routerSettings.enabled && !nativeExecutor ? await readUpgradeGuardStatus() : null;
+  if (!effectiveRouterEnabled(routerSettings, guardStatus, nativeExecutor)) throw new Error("Automatic child dispatch is disabled by router settings or the API compatibility guard");
   async function reserveGatewayDispatch(result, dispatchExecutor, profileId = null) {
     const parentThreadId = process.env.CODEX_THREAD_ID?.trim() || process.env.CODEX_SESSION_ID?.trim();
     if (!parentThreadId) throw new Error("A trusted CODEX_THREAD_ID or CODEX_SESSION_ID is required before gateway dispatch");

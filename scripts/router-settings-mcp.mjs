@@ -3,7 +3,6 @@ import path from 'node:path';
 import {
   createApiProfile,
   defaultRouterSettingsPath,
-  effectiveRouterEnabled,
   readRouterSettingsSnapshot,
   resolveApiCredential,
   saveRouterSettings,
@@ -335,13 +334,14 @@ export const ROUTER_SETTINGS_TOOLS = [
   },
   {
     name: 'router_connection_diagnostics',
-    title: '连接诊断',
+    title: '本地连接日志诊断',
     description: '用户明确点击后读取本机 Codex SQLite 日志中的有限错误分类，不读取消息正文，不联系模型或 API；自动分工关闭时不读取日志。',
     inputSchema: emptyInput,
     outputSchema: {
       type: 'object', additionalProperties: false,
       properties: {
         available: {type: 'boolean'}, rootCause: {type: 'string', enum: ['uncertain']},
+        reason: {type: 'string', enum: ['routing_disabled', 'local_logs_unavailable']},
         events: {type: 'array', items: {type: 'object', additionalProperties: false, properties: {
           timestampUtc: {type: 'string'}, target: {type: 'string'}, errorClass: {type: 'string'},
           retryNumber: {type: ['integer', 'null']}, httpStatus: {type: ['integer', 'null']},
@@ -766,9 +766,9 @@ export function createRouterSettingsService({
   }
   async function connectionDiagnostics(context = {}) {
     if (typeof context.threadId !== 'string' || !context.threadId.trim()) throw new Error('连接诊断需要可信的当前会话标识；未读取日志。');
-    const [current, guard] = await Promise.all([readRouterSettingsSnapshot(settingsPath), getGuardStatus()]);
-    if (!effectiveRouterEnabled(current.settings, guard)) {
-      return {available: false, rootCause: 'uncertain', events: []};
+    const current = await readRouterSettingsSnapshot(settingsPath);
+    if (current.settings.enabled === false) {
+      return {available: false, reason: 'routing_disabled', rootCause: 'uncertain', events: []};
     }
     let registeredChildThreadIds = [];
     try {
@@ -776,13 +776,14 @@ export function createRouterSettingsService({
         .map(task => task.child_thread_id)
         .filter(threadId => typeof threadId === 'string' && threadId.length > 0);
     } catch { /* Unreadable ownership state keeps events uncorrelated. */ }
-    return collectDiagnostics({
+    const result = await collectDiagnostics({
       codexHome: env.CODEX_HOME || path.join(os.homedir(), '.codex'),
       stateDir,
       enabled: true,
       parentThreadId: context.threadId ?? null,
       registeredChildThreadIds,
     });
+    return result.available ? result : {...result, reason: 'local_logs_unavailable'};
   }
   const capabilities = {applyApiConfiguration: applySupported};
   let applying = false;
@@ -894,7 +895,8 @@ export function createRouterSettingsService({
     if (current.sha256 !== expected) throw new Error('router settings changed since they were read; reload before updating');
     const saved = await saveRouterSettings(settingsPath, normalizeSettingsSelectors(args.settings), {expectedSha256: expected});
     let stopResult = null;
-    if (!saved.settings.enabled || (await getGuardStatus())?.state === 'disabled') {
+    const guardStatus = await getGuardStatus();
+    if (!saved.settings.enabled || guardStatus?.state === 'disabled') {
       stopResult = await stopRoutingIdleServices(saved.settings);
     }
     const models = await nativeModels();
@@ -903,7 +905,7 @@ export function createRouterSettingsService({
       stopResult?.message || (stopResult === false
         ? '设置已保存；后台空闲执行器停止未确认，生命周期状态需单独检查。'
         : '设置已保存。安装、重启和 API 验证状态由生命周期单独报告。'),
-      {...capabilities, nativeModelsAvailable: models.length > 0},
+      {...capabilities, nativeModelsAvailable: models.length > 0, guardStatus: guardStatus || {state: 'unmanaged'}},
       models,
       await currentMainModel(context),
     );
@@ -989,7 +991,7 @@ export function createRouterSettingsService({
       };
     const models = await nativeModels();
     const result = snapshotFor({settings: saved.settings, sha256: saved.sha256}, pending.message,
-      {...capabilities, nativeModelsAvailable: models.length > 0}, models, await currentMainModel(context));
+      {...capabilities, nativeModelsAvailable: models.length > 0, guardStatus: (await getGuardStatus()) || {state: 'unmanaged'}}, models, await currentMainModel(context));
     return {
       ...result,
       profileId,
