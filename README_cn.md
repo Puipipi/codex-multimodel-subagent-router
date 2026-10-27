@@ -8,9 +8,11 @@
 
 ## 状态
 
-**本分支源码版本为 0.12.4**。维护中的本地部署已安装并可用，路由、设置界面和原生分工已有明确范围内的验证。报告中的历史版本保留各自日期与验收范围；本地可用不代表所有自定义 API 提供方均已通过端到端验收。
+**本分支源码版本为 0.12.5**。维护中的本地部署已安装并可用，路由、设置界面和原生分工已有明确范围内的验证。报告中的历史版本保留各自日期与验收范围；本地可用不代表所有自定义 API 提供方均已通过端到端验收。
 
 ## 下载
+
+0.12.5 修复 API 兼容守卫误拦原生模型；用户关闭开关仍阻止所有自动分工。设置面板区分模型目录检查、本地连接日志诊断与真实调用；前两项不代表实时连接成功。
 
 [下载插件 ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/codex-multimodel-subagent-router.zip) · [SHA-256 校验值](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/SHA256SUMS.txt) · [源码 ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/archive/refs/heads/main.zip)
 

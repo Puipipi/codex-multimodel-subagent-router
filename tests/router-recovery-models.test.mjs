@@ -135,8 +135,8 @@ const guardDisabled = await decideRoute({
   guardStatus: {state: 'disabled', reason: 'guard repair required'},
   at: '2026-10-19T10:30:00+08:00',
 });
-equal(guardDisabled.executor, 'off', 'a disabled lifecycle guard blocks dispatch without rewriting user settings');
-equal(guardDisabled.source, 'guard_disabled', 'guard-driven disable remains distinguishable from the user setting');
+equal(guardDisabled.executor, 'same', 'an API compatibility failure does not block same-model native dispatch');
+equal(guardDisabled.native_spawn.model, 'gpt-6.1-sol', 'the native child preserves the exact parent model');
 
 const hookDir = await mkdtemp(path.join(os.tmpdir(), 'router-recovery-hook-off-'));
 try {

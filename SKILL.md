@@ -32,8 +32,12 @@ off, do not create or continue any automatic native or DSH delegation, even
 for a one-task override or scheduled route. Sol handles repository file work
 directly until the user turns routing back on. Do not bypass this switch through
 the legacy DSH tools. The settings panel remains available while routing is
-off. A guard-reported disabled state has the same effective behavior; a
-missing/unmanaged guard does not disable native Luna routing.
+off. An API compatibility guard failure blocks only API/DeepSeek executors.
+Native Luna, `same`, and `native:<slug>` remain available without a patched
+runtime, even when that guard is disabled or unreadable. Resolve the selected
+executor (including peak/valley and chat overrides) before applying the API
+guard. Never clear or rewrite the guard to enable native routing, and never
+silently replace a blocked API executor with a native one.
 The user-off setting lives only in router settings; never rewrite the C-owned
 upgrade status to represent user intent. A guard-reported compatibility
 failure remains intact. API/DeepSeek still require the later runtime gate to
@@ -53,8 +57,12 @@ owned bootstrap, clear only that `CODEX_CLI_PATH` value so the next launch
 resolves the official Codex app; preserve any later custom user value. The
 current process does not hot-switch, so restart may be required to use that
 official path. Applying an API profile remains a separate explicit action.
-The settings panel's “连接诊断” action reads only bounded local error classes
-when routing is enabled; it never runs on startup or contacts a provider.
+The settings panel's “本地连接日志诊断” action reads only bounded local error
+classes when the user routing switch is enabled, independently of the API
+compatibility guard. It never runs on startup or contacts a provider. A
+catalog check or a log read is not a live connection test or proof that a
+model call succeeded. A disabled user switch and unavailable local logs must
+report distinct reasons.
 
 Fixed and scheduled executors may select `same` or an exact `native:<slug>` in
 addition to the existing Luna, DeepSeek, and API profile choices. `same` means

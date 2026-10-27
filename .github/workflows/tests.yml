@@ -17,6 +17,7 @@ jobs:
       - run: node tests/dsh-mcp-client.test.mjs
       - run: node tests/native-api-settings.test.mjs
       - run: node tests/native-api-routing.test.mjs
+      - run: node tests/router-recovery-models.test.mjs
       - run: node tests/native-api-protocol.test.mjs
       - run: node tests/native-current-model.test.mjs
       - run: node tests/native-execution-lifecycle.test.mjs
@@ -89,6 +90,7 @@ jobs:
             'native-api-artifacts',
             'native-api-settings',
             'native-api-routing',
+            'router-recovery-models',
             'native-api-protocol',
             'native-api-install',
             'native-api-manager',

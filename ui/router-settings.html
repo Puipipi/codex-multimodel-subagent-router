@@ -286,8 +286,8 @@ footer p + p { margin-top: 3px; }
   <div id="host-warning" class="warning" role="alert" hidden></div>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
   <section class="block" aria-labelledby="diagnostics-title">
-    <div class="section-head"><div><h2 id="diagnostics-title">连接诊断</h2><p>仅点击后读取有限的本地错误分类，不调用模型或 API。</p></div>
-      <button id="connection-diagnostics" class="ghost small" type="button">运行连接诊断</button></div>
+    <div class="section-head"><div><h2 id="diagnostics-title">本地连接日志诊断</h2><p>只读取当前聊天的近期连接错误日志；不是实时连接测试，不调用模型或 API。</p></div>
+      <button id="connection-diagnostics" class="ghost small" type="button">读取本地连接日志</button></div>
     <output id="connection-diagnostics-result" class="status-detail" aria-live="polite"></output>
   </section>
 
@@ -624,7 +624,19 @@ footer p + p { margin-top: 3px; }
     "设置已保存。运行服务停止结果由后台生命周期状态确认；安装与 API 验证仍需单独报告。": "Settings saved. Background lifecycle status reports service cleanup; installation and API verification remain separate.",
     "配置已保存；新增角色尚需安装并完整重启 Codex；安装与验证状态以生命周期为准。": "Profile saved. New roles still require installation and a full Codex restart; check lifecycle status separately.",
     "标签或别名已保存；API 定义未变，本次未新增角色。安装与验证状态仍需单独确认。": "Label or aliases saved. The API definition is unchanged and no role was added. Installation and verification remain separate.",
-    "后台执行器停止失败；路由设置已保存，请在设置中重试。": "Background executor cleanup failed. Routing settings were saved; retry from settings."
+    "后台执行器停止失败；路由设置已保存，请在设置中重试。": "Background executor cleanup failed. Routing settings were saved; retry from settings.",
+    "本地连接日志诊断": "Local connection log diagnostics",
+    "只读取当前聊天的近期连接错误日志；不是实时连接测试，不调用模型或 API。": "Read recent connection error logs for this chat only. This is not a live connection test and makes no model or API calls.",
+    "读取本地连接日志": "Read local connection logs",
+    "模型目录已确认（未调用）": "Model catalog confirmed (no model call)",
+    "API 执行器已停用": "API executors disabled",
+    "API 兼容检查未通过，仅停用依赖补丁的 API/DeepSeek 执行器；原生模型仍可用。用户设置保持启用，请选择原生执行器或修复 API 运行时。": "API compatibility checks failed. Only patch-dependent API/DeepSeek executors are disabled; native models remain available. Routing is still enabled. Select a native executor or repair the API runtime.",
+    "原生模型不受 API 兼容守卫影响；目录检查不代表实际调用成功。": "Native models are independent of the API compatibility guard. Catalog checks do not verify a successful model call.",
+    "计划中的 DeepSeek 因 API 兼容检查未通过而停用；原生时段仍可派发。": "Scheduled DeepSeek is disabled by failed API compatibility checks. Native time windows remain available.",
+    "计划中的 API 执行器因兼容检查未通过而停用；原生模型时段仍可派发。逐个展开 API 配置查看其角色和网关状态。": "Scheduled API executors are disabled by failed compatibility checks. Native time windows remain available. Expand each API profile to inspect its role and gateway.",
+    "自动分工开关已关闭，因此未读取日志。未进行实时连接测试。": "Automatic delegation is off, so no logs were read. No live connection test was performed.",
+    "本地连接日志不可用（可能缺失、被占用或暂时无法读取）；不代表模型连接失败。未进行实时连接测试。": "Local connection logs are unavailable (missing, locked, or temporarily unreadable). This does not mean the model connection failed. No live connection test was performed.",
+    "未发现近期可分类的连接错误日志；未进行实时连接测试，不能据此确认连接成功。": "No recent classifiable connection error logs were found. No live connection test was performed; this does not verify a successful connection."
 };
   const patterns = [
     [/^别名 (.*)$/, "Alias $1"],
@@ -646,6 +658,7 @@ footer p + p { margin-top: 3px; }
       ["未应用：", "Not applied: "], ["应用失败：", "Apply failed: "],
       ["宿主未完成 MCP App 初始化：", "The host did not finish MCP App initialization: "],
       ["诊断失败：", "Diagnostics failed: "],
+      ["以下为近期本地日志记录，未进行实时连接测试：", "Recent local log records follow. No live connection test was performed:"],
     ].map(([prefix, replacement]) => [new RegExp("^" + prefix + "([\\s\\S]*)$"), replacement + "$1"]),
   ];
   let language = "en";
@@ -1003,28 +1016,29 @@ footer p + p { margin-top: 3px; }
     const gateway = byId("gateway-status");
     const verify = byId("verify-status");
     const guardDisabled = snapshot.capabilities?.guardStatus?.state === "disabled";
-    if (settings.enabled === false || guardDisabled) {
-      setStatusLabel("install-status", "自动分工");
-      setStatusLabel("gateway-status", "本地网关");
-      install.dataset.state = "off";
-      gateway.dataset.state = "unknown";
-      byId("install-state").textContent = "分工已关闭";
-      byId("gateway-state").textContent = "由生命周期确认";
-      byId("restart-state").textContent = "未知";
-      byId("restart-status").dataset.state = "unknown";
-      byId("verify-state").textContent = "未调用";
-      verify.dataset.state = "off";
-      byId("executor-status-detail").textContent = guardDisabled && settings.enabled !== false
-        ? "生命周期守卫已停用自动分工；用户设置仍保持启用。现有 child 与后台空闲执行器状态由生命周期单独报告。"
-        : "配置保留，新的自动子代理派发已关闭；已请求停用本插件拥有的后台计划任务，并在活动任务完成后停止空闲网关。";
-      return;
-    }
     let selectors = settings.mode === "fixed"
       ? [settings.fixedExecutor]
       : settings.mode === "scheduled"
         ? [settings.schedule?.peak, settings.schedule?.valley]
         : ["luna", "deepseek"];
     selectors = selectors.filter(Boolean);
+    const hasNative = selectors.some(selector => selector === "luna" || selector === "same" || selector.startsWith("native:"));
+    if (settings.enabled === false || (guardDisabled && !hasNative)) {
+      setStatusLabel("install-status", "自动分工");
+      setStatusLabel("gateway-status", "本地网关");
+      install.dataset.state = "off";
+      gateway.dataset.state = "unknown";
+      byId("install-state").textContent = settings.enabled === false ? "分工已关闭" : "API 执行器已停用";
+      byId("gateway-state").textContent = "由生命周期确认";
+      byId("restart-state").textContent = "未知";
+      byId("restart-status").dataset.state = "unknown";
+      byId("verify-state").textContent = "未调用";
+      verify.dataset.state = "off";
+      byId("executor-status-detail").textContent = guardDisabled && settings.enabled !== false
+        ? "API 兼容检查未通过，仅停用依赖补丁的 API/DeepSeek 执行器；原生模型仍可用。用户设置保持启用，请选择原生执行器或修复 API 运行时。"
+        : "配置保留，新的自动子代理派发已关闭；已请求停用本插件拥有的后台计划任务，并在活动任务完成后停止空闲网关。";
+      return;
+    }
     const profiles = Object.values(settings.profiles || {});
     const apiProfiles = selectors.map(selector => profiles.find(profile =>
       profile.profileId === selector || profile.aliases?.includes(selector))).filter(Boolean);
@@ -1042,24 +1056,26 @@ footer p + p { margin-top: 3px; }
       const currentMainModel = selectors.includes("same") ? snapshot.currentMainModel : null;
       setStatusLabel("install-status", "当前原生执行器");
       setStatusLabel("gateway-status", "本地网关");
-      install.dataset.state = (needsCatalog && snapshot.capabilities?.nativeModelsAvailable !== true)
+      install.dataset.state = (needsCatalog && (snapshot.capabilities?.nativeModelsAvailable !== true || missingNative.length > 0))
         || (selectors.includes("same") && !currentMainModel?.model) ? "unknown" : "on";
       gateway.dataset.state = hasDeepseekGateway ? "unknown" : "off";
       byId("install-state").textContent = selectors.includes("same")
         ? (currentMainModel?.model ? `跟随 ${currentMainModel.model}` : "当前聊天模型未知")
         : needsCatalog
-          ? (snapshot.capabilities?.nativeModelsAvailable === true && missingNative.length === 0 ? "本地目录可用" : "目录未知或模型缺失")
+          ? (snapshot.capabilities?.nativeModelsAvailable === true && missingNative.length === 0 ? "模型目录已确认（未调用）" : "目录未知或模型缺失")
           : "原生执行器";
       byId("gateway-state").textContent = hasDeepseekGateway ? "随 DeepSeek 路由" : "不需要";
       byId("restart-state").textContent = "不需要 API 角色";
       byId("restart-status").dataset.state = "off";
       byId("verify-state").textContent = "未调用";
       verify.dataset.state = "off";
-      byId("executor-status-detail").textContent = needsCatalog
+      const detail = needsCatalog
         ? `${missingNative.length ? `选定原生模型不在当前目录：${missingNative.join(", ")}。派发会明确失败，不会替换模型。` : "状态来自本地 Codex 模型目录；不会调用 API。"}${currentMainModel?.model ? ` same 跟随当前聊天模型 ${currentMainModel.model}。` : selectors.includes("same") ? " same 当前聊天模型未知，派发会明确失败。" : ""}`
         : selectors.includes("same")
           ? (currentMainModel?.model ? `same 将为当前聊天模型 ${currentMainModel.model} 创建独立 child；API 角色安装状态不适用。` : "无法读取当前聊天模型；same 派发会明确失败，不使用全局默认模型。")
           : "当前路由使用原生执行器；API 角色安装状态不适用。";
+      byId("executor-status-detail").textContent = detail + " · 原生模型不受 API 兼容守卫影响；目录检查不代表实际调用成功。"
+        + (guardDisabled && hasDeepseekGateway ? " · 计划中的 DeepSeek 因 API 兼容检查未通过而停用；原生时段仍可派发。" : "");
       return;
     }
     setStatusLabel("install-status", "API 角色状态");
@@ -1072,7 +1088,9 @@ footer p + p { margin-top: 3px; }
     byId("restart-status").dataset.state = "unknown";
     byId("verify-state").textContent = "未验证";
     verify.dataset.state = "off";
-    byId("executor-status-detail").textContent = "计划中包含 API profile；逐个展开 API 配置查看其角色和网关状态。自动峰谷或原生模型选择不由 API profile 数量判定。";
+    byId("executor-status-detail").textContent = guardDisabled
+      ? "计划中的 API 执行器因兼容检查未通过而停用；原生模型时段仍可派发。逐个展开 API 配置查看其角色和网关状态。"
+      : "计划中包含 API profile；逐个展开 API 配置查看其角色和网关状态。自动峰谷或原生模型选择不由 API profile 数量判定。";
   }
 
   async function loadExecutorStatus(profileId) {
@@ -1606,11 +1624,16 @@ footer p + p { margin-top: 3px; }
     output.textContent = "正在读取本地诊断…";
     try {
       const result = await callTool("router_connection_diagnostics", {});
-      if (!result.available) { output.textContent = "本地诊断暂不可用；根因仍不确定。"; return; }
+      if (!result.available) {
+        output.textContent = result.reason === "routing_disabled"
+          ? "自动分工开关已关闭，因此未读取日志。未进行实时连接测试。"
+          : "本地连接日志不可用（可能缺失、被占用或暂时无法读取）；不代表模型连接失败。未进行实时连接测试。";
+        return;
+      }
       const events = Array.isArray(result.events) ? result.events : [];
       output.textContent = events.length
-        ? events.map(event => `${event.timestampUtc} · ${event.errorClass}${event.httpStatus ? ` · HTTP ${event.httpStatus}` : ""}${event.requestBytes ? ` · ${event.requestBytes} bytes` : ""}`).join("\n")
-        : "未找到可分类的近期连接错误；根因仍不确定。";
+        ? "以下为近期本地日志记录，未进行实时连接测试：\n" + events.map(event => `${event.timestampUtc} · ${event.errorClass}${event.httpStatus ? ` · HTTP ${event.httpStatus}` : ""}${event.requestBytes ? ` · ${event.requestBytes} bytes` : ""}`).join("\n")
+        : "未发现近期可分类的连接错误日志；未进行实时连接测试，不能据此确认连接成功。";
     } catch (error) {
       output.textContent = `诊断失败：${messageOf(error)}`;
     }

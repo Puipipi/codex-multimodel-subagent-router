@@ -29,8 +29,9 @@ export function createDefaultRouterSettings() {
   };
 }
 
-export function effectiveRouterEnabled(settings, guardStatus = null) {
-  return settings?.enabled !== false && guardStatus?.state !== 'disabled';
+export function effectiveRouterEnabled(settings, guardStatus = null, executor = null) {
+  const native = executor === 'native' || executor === 'same' || executor === 'luna';
+  return settings?.enabled !== false && (native || guardStatus?.state !== 'disabled');
 }
 
 function sorted(value) {

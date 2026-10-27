@@ -8,9 +8,11 @@ One routing skill and an optional Codex plugin. Sol keeps the current conversati
 
 ## Status
 
-**This branch contains source version 0.12.4**. The maintained local deployment is installed and usable, with scoped verification of routing, settings UI, and native delegation. Historical reports retain their dated acceptance scope; local usability does not imply end-to-end verification of every custom API provider.
+**This branch contains source version 0.12.5**. The maintained local deployment is installed and usable, with scoped verification of routing, settings UI, and native delegation. Historical reports retain their dated acceptance scope; local usability does not imply end-to-end verification of every custom API provider.
 
 ## Download
+
+Version 0.12.5 keeps native models available when the API compatibility guard disables API executors. The user off switch still blocks all delegation. Settings distinguish a local catalog check, local log diagnostics, and an actual model call; neither local check proves a working connection.
 
 [Download the plugin ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/codex-multimodel-subagent-router.zip) · [SHA-256 checksums](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/SHA256SUMS.txt) · [Source ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/archive/refs/heads/main.zip)
 
