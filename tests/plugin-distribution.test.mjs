@@ -89,6 +89,16 @@ function readZipManifest(zipPath) {
   return execFileSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "manifest", "-Zip", zipPath], { encoding: "utf8", windowsHide: true }).trim();
 }
 try {
+  const linkedRoot = path.join(root, "linked-root");
+  const external = path.join(root, "external-sentinel");
+  await mkdir(linkedRoot); await mkdir(external);
+  await writeFile(path.join(linkedRoot, "SKILL.md"), "project file");
+  await writeFile(path.join(external, "SKILL.md"), "sentinel");
+  git(linkedRoot, "init", "--quiet");
+  git(linkedRoot, "add", "SKILL.md");
+  await symlink(external, path.join(linkedRoot, "codex-plugin"), "junction");
+  for (const check of [false, true]) await assert.rejects(() => syncPluginDirectory({source: linkedRoot, check}), /regular directory/);
+  assert.equal(await readFile(path.join(external, "SKILL.md"), "utf8"), "sentinel", "junction target is never modified");
   const source = await createFixture("source repo 空格");
   await syncPluginDirectory({source, check: true});
   const bundlePath = path.join(source, "codex-plugin", "SKILL.md");

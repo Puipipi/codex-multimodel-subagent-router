@@ -107,6 +107,12 @@ export async function syncPluginDirectory({source, check = false} = {}) {
     expected.set(relative, await readFile(path.join(root, ...relative.split("/"))));
   }
   const target = path.join(root, "codex-plugin");
+  try {
+    const targetInfo = await lstat(target);
+    if (targetInfo.isSymbolicLink() || !targetInfo.isDirectory()) throw new Error("plugin directory must be a regular directory");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   async function walk(directory, prefix = "") {
     let items;
     try { items = await readdir(directory, {withFileTypes: true}); }
