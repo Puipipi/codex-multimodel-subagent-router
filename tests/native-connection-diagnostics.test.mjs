@@ -64,6 +64,10 @@ try {
 
   const again = await collectConnectionDiagnostics({ codexHome: root, stateDir, now: fixedNow + 1_000, enabled: true, parentThreadId: parent });
   eq(again.events.length, 0, "cursor prevents duplicate rows");
+  const history = await collectConnectionDiagnostics({ codexHome: root, stateDir, now: fixedNow + 2_000, enabled: true, parentThreadId: parent, includeHistory: true });
+  eq(history.events.length, 12, "recent records remain visible on repeated reads without duplication");
+  const expired = await collectConnectionDiagnostics({ codexHome: root, stateDir, now: fixedNow + 73 * 60 * 60 * 1000, enabled: true, parentThreadId: parent, includeHistory: true });
+  eq(expired.events.length, 0, "records outside the recent window expire");
   eq(again.rootCause, "uncertain", "missing terminal response never implies recovery or a root cause");
   const missing = await collectConnectionDiagnostics({ codexHome: path.join(root, "absent"), stateDir, now: fixedNow, enabled: true });
   eq(missing.available, false, "missing database is explicitly unavailable");

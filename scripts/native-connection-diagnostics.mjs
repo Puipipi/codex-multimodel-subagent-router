@@ -91,20 +91,20 @@ async function atomicWrite(stateFile, snapshot) {
 }
 
 /** Read and classify a bounded batch of Rust log rows; raw log text never leaves this function. */
-export async function collectConnectionDiagnostics({ codexHome, stateDir, now = Date.now(), enabled = false, parentThreadId = null, registeredChildThreadIds = [] } = {}) {
+export async function collectConnectionDiagnostics({ codexHome, stateDir, now = Date.now(), enabled = false, parentThreadId = null, registeredChildThreadIds = [], includeHistory = false } = {}) {
   if (!enabled) return safeFailure();
   if (!codexHome || !stateDir || !Number.isFinite(Number(now))) return safeFailure();
   const dir = path.resolve(stateDir);
   const stateFile = path.join(dir, `connection-diagnostics-${ownerHash(parentThreadId)}.json`);
   const lockFile = path.join(dir, `connection-diagnostics-${ownerHash(parentThreadId)}.lock`);
   try {
-    return await withFileLock(lockFile, () => collectLocked({ codexHome, stateFile, now, parentThreadId, registeredChildThreadIds }), { timeoutMs: LOCK_TIMEOUT_MS, staleMs: 60_000 });
+    return await withFileLock(lockFile, () => collectLocked({ codexHome, stateFile, now, parentThreadId, registeredChildThreadIds, includeHistory }), { timeoutMs: LOCK_TIMEOUT_MS, staleMs: 60_000 });
   } catch {
     return safeFailure();
   }
 }
 
-async function collectLocked({ codexHome, stateFile, now, parentThreadId, registeredChildThreadIds }) {
+async function collectLocked({ codexHome, stateFile, now, parentThreadId, registeredChildThreadIds, includeHistory }) {
   const dbPath = path.join(codexHome, "logs_2.sqlite");
   const prior = await loadState(stateFile);
   let db;
@@ -133,7 +133,7 @@ async function collectLocked({ codexHome, stateFile, now, parentThreadId, regist
       : db.prepare(`SELECT ${select} FROM logs WHERE rowid > ? AND ts >= ? AND (${targetClause})${threadClause} ORDER BY rowid ASC LIMIT ${MAX_ROWS}`).all(previousCursor, floorSec, ...targetParams, ...scopedThreadIds);
     const events = rows.map((row) => makeEvent(row, parentThreadId, registeredChildThreadIds)).filter(Boolean);
     const priorEvents = initializeFromRecent ? [] : (prior?.events ?? []).filter((event) => !scopedThreadIds.length || event.correlation !== "other_or_unknown");
-    const allEvents = [...priorEvents, ...events].slice(-MAX_EVENTS);
+    const allEvents = [...priorEvents, ...events].filter((event) => Date.parse(event.timestampUtc) >= Number(now) - WINDOW_MS).slice(-MAX_EVENTS);
     const nextCursor = initializeFromRecent || rows.length < MAX_ROWS
       ? Number(maxRow)
       : Number(rows.at(-1)._rowid);
@@ -145,7 +145,7 @@ async function collectLocked({ codexHome, stateFile, now, parentThreadId, regist
       events: allEvents,
     };
     await atomicWrite(stateFile, snapshot);
-    return { available: true, rootCause: "uncertain", events };
+    return { available: true, rootCause: "uncertain", events: includeHistory ? allEvents : events };
   } catch {
     return safeFailure();
   } finally {
