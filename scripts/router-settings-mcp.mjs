@@ -780,6 +780,7 @@ export function createRouterSettingsService({
       codexHome: env.CODEX_HOME || path.join(os.homedir(), '.codex'),
       stateDir,
       enabled: true,
+      includeHistory: true,
       parentThreadId: context.threadId ?? null,
       registeredChildThreadIds,
     });
