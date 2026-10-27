@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/scripts/route-hook.mjs\"",
+            "timeout": 10,
+            "additionalContextLimit": 2000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/scripts/route-hook.mjs\"",
+            "timeout": 10,
+            "additionalContextLimit": 2000
+          }
+        ]
+      }
+    ]
+  }
+}

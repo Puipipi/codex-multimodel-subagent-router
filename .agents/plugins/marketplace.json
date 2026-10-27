@@ -8,7 +8,7 @@
       "name": "sol-luna-deepseek-router",
       "source": {
         "source": "local",
-        "path": "./"
+        "path": "./codex-plugin"
       },
       "policy": {
         "installation": "AVAILABLE",

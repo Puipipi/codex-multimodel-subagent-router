@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "sol-luna-deepseek-router": {
+      "command": "node",
+      "args": [
+        "scripts/plugin-mcp.mjs"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "PATH",
+        "PATHEXT",
+        "SystemRoot",
+        "ComSpec",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "CODEX_HOME",
+        "USERPROFILE",
+        "TEMP",
+        "TMP",
+        "SOL_LUNA_PLUGIN_STATE",
+        "SOL_LUNA_NPX_CLI",
+        "SOL_LUNA_NATIVE_INSTALL_JOURNAL",
+        "SOL_LUNA_NATIVE_API_VERSION_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS"
+      ],
+      "tool_timeout_sec": 86400
+    }
+  }
+}

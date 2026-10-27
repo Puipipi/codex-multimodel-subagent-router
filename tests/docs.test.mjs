@@ -23,7 +23,7 @@ assert.equal(marketplace.name, 'sol-luna', 'the repo marketplace has a stable po
 assert.equal(marketplace.plugins.length, 1, 'the repo marketplace lists one routing plugin');
 assert.equal(marketplace.plugins[0].name, 'sol-luna-deepseek-router', 'the marketplace plugin matches the manifest name');
 assert.equal(marketplace.plugins[0].source.source, 'local', 'the marketplace plugin is local');
-assert.equal(marketplace.plugins[0].source.path, './', 'the plugin source stays inside the marketplace root');
+assert.equal(marketplace.plugins[0].source.path, './codex-plugin', 'the plugin source stays inside the marketplace root');
 assert.doesNotMatch(marketplace.plugins[0].source.path, /^(?:[A-Za-z]:[\\/]|\\\\)/, 'the marketplace source is not an absolute path');
 assert.equal(marketplace.plugins[0].policy.installation, 'AVAILABLE', 'the marketplace installation policy is explicit');
 assert.equal(marketplace.plugins[0].policy.authentication, 'ON_INSTALL', 'the marketplace auth policy is explicit');

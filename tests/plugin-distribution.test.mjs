@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { packagePlugin } from "../scripts/package-plugin.mjs";
+import { packagePlugin, syncPluginDirectory } from "../scripts/package-plugin.mjs";
 
 if (process.platform !== "win32") {
   console.log("SKIP: plugin ZIP packaging uses Windows PowerShell/.NET; the Windows job runs the real archive tests.");
@@ -20,10 +20,10 @@ const powershell = process.env.POWERSHELL_EXE || "powershell.exe";
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8" }).trim();
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const manifest = {
-  name: "sol-luna-deepseek-router", version: "0.12.7", mcpServers: "./.mcp.json",
+  name: "sol-luna-deepseek-router", version: "0.12.8", mcpServers: "./.mcp.json",
 };
 const marketplace = {
-  name: "fixture-registry", plugins: [{ name: manifest.name, source: { source: "local", path: "./" } }],
+  name: "fixture-registry", plugins: [{ name: manifest.name, source: { source: "local", path: "./codex-plugin" } }],
 };
 const mcp = { mcpServers: { [manifest.name]: { command: "node", args: ["scripts/plugin-mcp.mjs"], cwd: "." } } };
 const files = new Map([
@@ -72,6 +72,8 @@ async function createFixture(name, overrides = {}, omit = []) {
   git(source, "config", "user.name", "Fixture Builder");
   git(source, "config", "user.email", "fixture@example.invalid");
   git(source, "add", "--all");
+  await syncPluginDirectory({source});
+  git(source, "add", "codex-plugin");
   git(source, "commit", "--quiet", "-m", "distribution fixture");
   await writeFile(path.join(source, ".env.local"), "UNTRACKED=must-not-ship");
   await writeFile(path.join(source, "scripts", "untracked-helper.mjs"), "untracked generated file");
@@ -87,17 +89,54 @@ function readZipManifest(zipPath) {
   return execFileSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "manifest", "-Zip", zipPath], { encoding: "utf8", windowsHide: true }).trim();
 }
 try {
+  const linkedRoot = path.join(root, "linked-root");
+  const external = path.join(root, "external-sentinel");
+  await mkdir(linkedRoot); await mkdir(external);
+  await writeFile(path.join(linkedRoot, "SKILL.md"), "project file");
+  await writeFile(path.join(external, "SKILL.md"), "sentinel");
+  git(linkedRoot, "init", "--quiet");
+  git(linkedRoot, "add", "SKILL.md");
+  await symlink(external, path.join(linkedRoot, "codex-plugin"), "junction");
+  for (const check of [false, true]) await assert.rejects(() => syncPluginDirectory({source: linkedRoot, check}), /regular directory/);
+  assert.equal(await readFile(path.join(external, "SKILL.md"), "utf8"), "sentinel", "junction target is never modified");
   const source = await createFixture("source repo 空格");
+  await syncPluginDirectory({source, check: true});
+  const bundlePath = path.join(source, "codex-plugin", "SKILL.md");
+  const original = await readFile(bundlePath);
+  await writeFile(bundlePath, "drift");
+  await assert.rejects(() => syncPluginDirectory({source, check: true}), /out of sync/);
+  await writeFile(bundlePath, original);
+  await writeFile(path.join(source, "codex-plugin", "extra"), "extra");
+  await assert.rejects(() => syncPluginDirectory({source, check: true}), /extra/);
+  await rm(path.join(source, "codex-plugin", "extra"));
+  await rm(bundlePath);
+  await assert.rejects(() => syncPluginDirectory({source, check: true}), /missing/);
+  await writeFile(bundlePath, original);
+  await syncPluginDirectory({source, check: true});
   const outputDir = path.join(root, "external distributions 文件夹");
   const output = path.join(outputDir, "router candidate.zip");
   const result = await packagePlugin({ source, out: output });
-  assert.equal(result.version, "0.12.7");
+  assert.equal(result.version, "0.12.8");
   assert.equal(result.registryId, "fixture-registry");
   assert.equal(result.sourceCommit, git(source, "rev-parse", "HEAD"));
   assert.ok(result.fileCount >= 15, "runtime inventory is nonempty and includes required modules");
   assert.ok(result.bytes > 0, "the output is a real nonempty ZIP");
   const zipEntries = await inspectZip(output);
   const zipMap = new Map(zipEntries.map((entry) => [entry.path, entry]));
+  for (const name of [".codex-plugin/plugin.json", ".mcp.json", "hooks/hooks.json", "scripts/plugin-mcp.mjs", "scripts/route-hook.mjs", "SKILL.md", "LICENSE"]) assert.ok(zipMap.has(`codex-plugin/${name}`), `ZIP includes bundle ${name}`);
+  const unpacked = path.join(root, "unpacked");
+  await mkdir(unpacked);
+  const extractCommand = 'Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:ROUTER_TEST_ZIP, $env:ROUTER_TEST_DEST)';
+  execFileSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(extractCommand, "utf16le").toString("base64")], {
+    stdio: "pipe", windowsHide: true, env: {...process.env, ROUTER_TEST_ZIP: output, ROUTER_TEST_DEST: unpacked},
+  });
+  const unpackedRegistry = JSON.parse(await readFile(path.join(unpacked, ".agents/plugins/marketplace.json"), "utf8"));
+  const installedRoot = path.resolve(unpacked, unpackedRegistry.plugins[0].source.path);
+  const installedManifest = JSON.parse(await readFile(path.join(installedRoot, ".codex-plugin/plugin.json"), "utf8"));
+  const installedMcp = JSON.parse(await readFile(path.join(installedRoot, installedManifest.mcpServers), "utf8"));
+  for (const name of [installedMcp.mcpServers[manifest.name].args[0], "scripts/route-hook.mjs", "SKILL.md", "LICENSE"]) {
+    assert.deepEqual(await readFile(path.join(installedRoot, name)), await readFile(path.join(source, "codex-plugin", name)), `unpacked reference ${name} matches source bundle`);
+  }
   assert.ok(zipMap.has("README_cn.md"), "the directly downloadable ZIP includes its Chinese guide");
   const manifestEntry = zipMap.get("package-manifest.json");
   assert.ok(manifestEntry, "archive contains package-manifest.json");
