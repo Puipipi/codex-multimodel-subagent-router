@@ -4,4 +4,4 @@ The active canonical skill is `~/.codex/skills/codex-multimodel-subagent-router`
 
 Use the generated plugin bundle as the migration source. The [identity migration tool](identity-migration.md) stages SKILL.pending.md and activates it only after disabling the old plugin and renaming the old discovery entry to SKILL.legacy-disabled.md. Keep the old directory and scripts in place for in-flight absolute references. Do not copy, move or reset the legacy LocalAppData state root.
 
-For local source lookup, scripts/router-identity.mjs prefers the new canonical directory, with old-directory fallback solely for source compatibility. Source lookup never changes backend, provider, model or user settings.
+Runtime source remains bound to the executing module root (or an explicit test/dependency override). A current new plugin cache uses its own source; in-flight references to old scripts continue to use the old source. Renaming does not introduce another source resolver or change backend selection.

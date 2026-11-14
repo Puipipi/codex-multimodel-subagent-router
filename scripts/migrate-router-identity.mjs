@@ -87,7 +87,8 @@ async function loadJournal(file) {
 async function cas(file,expected,bytes) {
   await regular(file);
   if(digest(await readFile(file))!==expected) throw new Error('CAS conflict: config changed; no overwrite');
-  // Replacement is same-volume; recheck immediately before rename under our migration lock.
+  // Same-volume replacement and last-moment byte check are optimistic only.
+  // This lock does not serialize Codex/editor writes; run maintenance without concurrent config writers.
   const temporary=file+'.router-identity-next';
   await writeFile(temporary,bytes,{flag:'wx',mode:0o600});
   try {
@@ -110,7 +111,7 @@ export async function prepareIdentityMigration({bundle,skillsRoot,configFile,jou
     await regular(oldSkill,true);await regular(path.join(oldSkill,'SKILL.md'));
     if(!await missing(newSkill)||!await missing(path.join(oldSkill,'SKILL.legacy-disabled.md'))) throw new Error('skill destination conflict');
     const files=await tree(bundle);
-    if(files.some(f=>f.path.startsWith('codex-plugin/')||f.path.startsWith('skills/'))) throw new Error('bundle contains duplicate skill subtree');
+    if(files.some(f=>f.path.startsWith('codex-plugin/')||f.path.startsWith('skills/')||(f.path!=='SKILL.md' && path.posix.basename(f.path).toLowerCase()==='skill.md'))) throw new Error('bundle contains duplicate skill subtree');
     if(!files.some(f=>f.path==='SKILL.md') || !files.some(f=>f.path==='scripts/route.mjs')) throw new Error('incomplete canonical skill bundle');
     const manifest=JSON.parse(await readFile(path.join(bundle,'.codex-plugin','plugin.json'),'utf8'));
     if(manifest.name!==ROUTER_ID || manifest.skills!==undefined) throw new Error('wrong migration plugin bundle');
@@ -161,6 +162,7 @@ export async function activateIdentityMigration({journalFile,installedPlugin,exp
     if(j.phase!=='begun') throw new Error('migration must be begun; rollback partial operations before retry');
     await verifySkills(j,false);
     const installedFiles=await tree(path.resolve(installedPlugin));
+    if(installedFiles.some(f=>f.path!=='SKILL.md' && path.posix.basename(f.path).toLowerCase()==='skill.md')) throw new Error('installed plugin contains duplicate skill discovery entries');
     // CLI-owned cache may carry metadata; all bundle runtime files must be byte-identical.
     const installed=new Map(installedFiles.map(f=>[f.path,f.sha256]));
     if(j.files.some(f=>installed.get(f.path)!==f.sha256)) throw new Error('installed plugin does not match prepared bundle');

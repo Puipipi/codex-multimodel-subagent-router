@@ -128,5 +128,22 @@ try {
   await assert.rejects(activateIdentityMigration({...f,installedPlugin:f.bundle,expectedConfigSha256:sha(changed)}),/unexpected fields/);
   assert.equal(await readFile(f.configFile,'utf8'),changed);
  }
+ {
+  const f=await fixture('nested-bundle-skill');
+  await mkdir(path.join(f.bundle,'foo'));
+  await writeFile(path.join(f.bundle,'foo','SKILL.md'),'duplicate discovery');
+  await assert.rejects(prepareIdentityMigration(f),/duplicate skill subtree/);
+  assert.deepEqual(await discovered(f),[LEGACY_STORAGE_ID]);
+  assert.equal(await readFile(f.configFile,'utf8'),f.config);
+ }
+ {
+  const f=await fixture('extra-installed-skill');
+  await prepareIdentityMigration(f);await beginIdentityMigration(f);
+  const expectedConfigSha256=await install(f);
+  await mkdir(path.join(f.bundle,'extra'));
+  await writeFile(path.join(f.bundle,'extra','SKILL.md'),'extra cache discovery');
+  await assert.rejects(activateIdentityMigration({...f,installedPlugin:f.bundle,expectedConfigSha256}),/duplicate skill discovery/);
+  await rollbackIdentityMigration({...f,expectedConfigSha256});
+ }
  console.log('PASS isolated identity migration: single discovery, state preservation, conflict, partial failure and rollback');
 }finally{await rm(root,{recursive:true,force:true});}

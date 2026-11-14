@@ -30,7 +30,7 @@ $installedRevision = (Get-FileHash -LiteralPath $cfg -Algorithm SHA256).Hash.ToL
 node scripts/migrate-router-identity.mjs activate --journal <private-dir>/identity.json --installed-plugin <actual-new-plugin-cache> --expected-config-sha256 $installedRevision
 ```
 
-begin 已禁旧后再进行官方安装，若该命令失败，原位核对 config/hash 后执行 rollback。安装命令超时不等于失败，先确认进程/安装结果，不能盲目重复 add。工具的 byte CAS 在本插件迁移锁内做写前复核；官方 CLI 或其他编辑器必须在阶段间串行操作，不并发编辑 config。
+begin 已禁旧后再进行官方安装，若该命令失败，原位核对 config/hash 后执行 rollback。安装命令超时不等于失败，先确认进程/安装结果，不能盲目重复 add。工具的 byte CAS 在本插件迁移锁内做写前复核，但该锁不是宿主共享锁，最后读取与 rename 之间仍有外部写入窗口，不能保证跨进程原子 compare-and-swap。官方 CLI 或其他编辑器必须在阶段间串行操作；迁移期间暂停其他 config 写入。
 
 ```powershell
 # 正常 activate 后，或工具内部部分失败后：
