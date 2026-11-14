@@ -37,6 +37,10 @@ assert.match(read('agents/openai.yaml'),/default_prompt:.*\$codex-multimodel-sub
 assert.doesNotMatch(read('agents/openai.yaml'),/保存后显式应用/);
 assert.equal(manifest.skills,undefined);
 assert.ok(!existsSync(new URL('../skills/',import.meta.url)));
+const migration=read('docs/identity-migration.md');
+assert.ok(migration.indexOf('codex plugin marketplace add <repo-root>')<migration.indexOf('$revision ='),'register marketplace before freezing revision');
+assert.ok(migration.indexOf('$revision =')<migration.indexOf('node scripts/migrate-router-identity.mjs prepare'),'freeze config after source registration');
+assert.ok(migration.indexOf('node scripts/migrate-router-identity.mjs begin')<migration.indexOf('codex plugin add codex-multimodel-subagent-router@'),'disable old plugin before installing new plugin');
 const hooks=JSON.parse(read('hooks/hooks.json'));
 for(const event of ['UserPromptSubmit','PreToolUse']) assert.equal(hooks.hooks[event][0].hooks[0].command,'node "${PLUGIN_ROOT}/scripts/route-hook.mjs"');
 // Every local markdown link introduced by the new on-demand entrypoints resolves in source.

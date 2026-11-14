@@ -8,7 +8,7 @@
 
 `scripts/migrate-router-identity.mjs` 只进行本地文件迁移；不会启动网关、Apply API、调用模型、构建/patch CLI 或写 auth。prepare 从生成的 plugin bundle 准备新 canonical 文件，入口暂存为 SKILL.pending.md；拒绝覆盖既有目录、符号链接/reparse point 和重复 codex-plugin/skills 子树。journal 仅保存路径、文件 hash、两个 owned plugin 表及 config hash，不保存其余 config、auth、profile 或凭据。
 
-begin 以 config 字节 SHA-256 比较后将旧 plugin 设为 disabled。官方 CLI 随后负责 marketplace/cache 注册：0.167 的 plugin add 会启用新 plugin，且没有 --disabled / plugin disable；所以必须先 begin，不能先 add 再禁旧。始终至多一个 enabled plugin。activate 只接受调用者明确读回的当前 config hash、无外部字段变化的两个 owned 表，以及与准备 bundle 逐文件一致的实际安装 cache；先让两个 plugin disabled，切换唯一 SKILL 发现入口，再启用新 plugin（继承原旧插件开关）。新 hook trust 不继承为已验收。
+先用官方 CLI 注册新 marketplace 来源，再读 config revision 并 prepare；marketplace add 只注册来源，不启用 plugin，但会写入 marketplaces 表，必须在 foreign hash 快照之前完成。begin 以 config 字节 SHA-256 比较后将旧 plugin 设为 disabled。官方 CLI 随后负责新 plugin/cache 安装：0.167 的 plugin add 会启用新 plugin，且没有 --disabled / plugin disable；所以必须先 begin，不能先 add 再禁旧。始终至多一个 enabled plugin。activate 只接受调用者明确读回的当前 config hash、无外部字段变化的两个 owned 表，以及与准备 bundle 逐文件一致的实际安装 cache；先让两个 plugin disabled，切换唯一 SKILL 发现入口，再启用新 plugin（继承原旧插件开关）。新 hook trust 不继承为已验收。
 
 rollback 在已记录的 config revision 上禁用两个 plugin，恢复旧 SKILL 和旧 owned 表；新文件变回 pending，cache/脚本原样保留。若官方安装后尚未 activate，rollback 需传当前明确读回 hash，工具还会校验非 owned 字段没有变化。未知并发改动会拒绝覆盖；先人工核对，再恢复，不提供强制覆盖选项。部分失败保留 journal，按同一 rollback 恢复；不自动重试安装或后端。
 
@@ -19,11 +19,13 @@ rollback 在已记录的 config revision 上禁用两个 plugin，恢复旧 SKIL
 ```powershell
 $cfg = Join-Path $env:CODEX_HOME 'config.toml'
 # 未设置 CODEX_HOME 时，显式指定实际 Codex home 下的 config.toml。
+# 先注册来源：此命令写 marketplaces 表，不启用新 plugin。
+codex plugin marketplace add <repo-root>
+# 确认成功后再冻结 config revision；不能把 marketplace add 放到 prepare/begin 之后。
 $revision = (Get-FileHash -LiteralPath $cfg -Algorithm SHA256).Hash.ToLowerInvariant()
 node scripts/migrate-router-identity.mjs prepare --bundle <repo-root>/codex-plugin --skills-root <codex-home>/skills --config $cfg --journal <private-dir>/identity.json --expected-config-sha256 $revision
 node scripts/migrate-router-identity.mjs begin --journal <private-dir>/identity.json
 # 读回旧 plugin 已 disabled；有错误就停并 rollback。
-codex plugin marketplace add <repo-root>
 codex plugin add codex-multimodel-subagent-router@codex-multimodel-subagent-router
 # 有界等待 CLI 完成，观察退出码并定位其真实新 cache，不能手工伪造 cache 注册。
 $installedRevision = (Get-FileHash -LiteralPath $cfg -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -43,4 +45,4 @@ node scripts/migrate-router-identity.mjs rollback --journal <private-dir>/identi
 
 ## 离线证明
 
-`node tests/router-identity-migration.test.mjs` 在独立临时目录验证：新 plugin 尚未注册时准备、先禁旧后注册新、唯一 SKILL、旧 scripts/state 保持、原开关继承、CAS/目标/cache 冲突、三个中途失败和回滚。它模拟官方 CLI 的本地 config 注册结果，不是官方安装或外部调用验收。
+`node tests/router-identity-migration.test.mjs` 在独立临时目录验证：marketplace 来源已注册且新 plugin 尚未注册时准备、保留 marketplaces 表、先禁旧后注册新、唯一 SKILL、旧 scripts/state 保持、原开关继承、CAS/目标/cache 冲突、三个中途失败和回滚。它模拟官方 CLI 的本地 config 注册结果，不是官方安装或外部调用验收。

@@ -25,7 +25,7 @@
   "interface": {
     "displayName": "Codex 主控 · 多模型峰谷子代理",
     "shortDescription": "Codex 主控按峰谷选择原生模型与 API 子代理，保留可信归属和租约",
-    "longDescription": "Source contracts support fixed and peak/valley selection of Luna, same, exact native models, isolated native_deepseek with its own provider and catalog, and API profiles. API profiles are immutable; credentials use a DeepSeek account or manual env/file references. API panel save is separate from explicit Apply. First-version API children disable built-in web search. Native routing is independent of the API compatibility guard. Current DeepSeek/API external calls and candidate MCP/GUI acceptance remain unverified. DSH is explicit legacy only. Installation identity changes preserve legacy storage and protocol identity.",
+    "longDescription": "Source contracts support fixed and peak/valley selection of Luna, same, exact native models, isolated native_deepseek with its own provider and catalog, and API profiles. API profiles are immutable; credentials use a DeepSeek account or manual env/file references. API panel save is separate from explicit Apply. First-version API children disable built-in web search. Native routing is independent of the API compatibility guard. Official 0.167 isolated installation, identity cutover/rollback and MCP enumeration/static resources were verified for this candidate; hooks remained untrusted. Daily-host cutover, live GUI and DeepSeek/API external calls remain separate unverified acceptance steps at the dated baseline. DSH is explicit legacy only. Installation identity changes preserve legacy storage and protocol identity.",
     "developerName": "Puipipi",
     "category": "Developer Tools",
     "capabilities": [

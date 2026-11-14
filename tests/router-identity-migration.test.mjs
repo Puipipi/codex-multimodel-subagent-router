@@ -20,7 +20,8 @@ async function fixture(name,oldEnabled=true,crlf=false) {
  await writeFile(path.join(bundle,'.codex-plugin','plugin.json'),JSON.stringify({name:ROUTER_ID,version:'0.13.0'}));
  await writeFile(path.join(bundle,'scripts','route.mjs'),'source');
  await writeFile(path.join(bundle,'SKILL.md'),'new skill');
- let config='model = "keep-exact-model"\n# credential reference stays private\n[plugins."other@registry"]\nenabled = true\n\n[plugins.'+JSON.stringify(LEGACY_PLUGIN_KEY)+']\nenabled = '+oldEnabled+'\n';
+ const marketplace='[marketplaces.'+ROUTER_ID+']\nsource_type = "local"\nsource = "fixture-source"\n\n';
+ let config=marketplace+'model = "keep-exact-model"\n# credential reference stays private\n[plugins."other@registry"]\nenabled = true\n\n[plugins.'+JSON.stringify(LEGACY_PLUGIN_KEY)+']\nenabled = '+oldEnabled+'\n';
  if(crlf) config=config.replaceAll('\n','\r\n');
  await writeFile(configFile,config);
  const state=path.join(dir,LEGACY_STORAGE_ID,'native-api','router.json');
@@ -49,6 +50,7 @@ try {
   const journal=await readFile(f.journalFile,'utf8');
   assert.ok(!journal.includes('keep-exact-model'),'journal excludes unrelated config/model');
   assert.ok(!journal.includes('credential reference'),'journal excludes unrelated comments');
+  assert.ok(!journal.includes('fixture-source'),'journal excludes marketplace source values');
   await beginIdentityMigration(f);
   const expectedConfigSha256=await install(f);
   await activateIdentityMigration({...f,installedPlugin:f.bundle,expectedConfigSha256});

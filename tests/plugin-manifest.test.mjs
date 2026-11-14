@@ -63,7 +63,7 @@ equal(manifest.interface.category, 'Developer Tools', 'the category is present')
 ok(Array.isArray(manifest.interface.capabilities) && manifest.interface.capabilities.includes('Write'), 'the capabilities include write');
 ok(Array.isArray(manifest.interface.defaultPrompt) && manifest.interface.defaultPrompt.length <= 3, 'at most three starter prompts are declared');
 doesNotMatch(JSON.stringify(manifest), /\[TODO:/, 'the manifest has no placeholder');
-doesNotMatch(JSON.stringify(manifest), /hooks/i, 'the manifest does not claim hooks owned by another worker');
+ok(!Object.hasOwn(manifest, 'hooks'), 'the manifest does not declare a hooks pointer; trust evidence may be described');
 
 const servers = mcp.mcpServers;
 ok(servers && typeof servers === 'object', '.mcp.json declares mcpServers');
