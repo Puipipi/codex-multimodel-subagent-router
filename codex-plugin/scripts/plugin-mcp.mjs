@@ -25,7 +25,7 @@ import {
   OwnershipStore, WorkspaceLeases, TERMINAL_STATUSES, canonicalWorkspace, hashThread, normalizeWorkspace, resolveStateDir, workspaceKey,
 } from './plugin-state.mjs';
 
-const VERSION = '0.12.8';
+const VERSION = '0.13.0';
 const PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25']);
 const PASSIVE_STATUSES = new Set([...TERMINAL_STATUSES]);
 const LIST_STATUSES = new Set(['starting', 'running', 'interrupting', 'idle', 'completed', 'interrupted', 'error', 'context_exhausted', 'closed']);
@@ -644,7 +644,7 @@ export function createPluginMcp({
               },
             },
           },
-          serverInfo: {name: 'sol-luna-deepseek-router', version: VERSION, title: 'Sol Luna DeepSeek Router'},
+          serverInfo: {name: 'codex-multimodel-subagent-router', version: VERSION, title: 'Codex 主控 · 多模型峰谷子代理'},
           instructions: 'Every DSH tools/call must carry the trusted Codex request _meta.threadId; this server refuses to act without it. Router settings tools are direct, app-visible configuration calls and do not require a model turn. One chat owns each DSH agent and dsh_list is filtered to that chat. Retain agent ids and use dsh_wait; do not duplicate a start after a timeout. dsh_trace returns a read-only loopback URL with a short-lived access ticket, never a credential. External DSH agents are not native Codex children; the trace is the truthful external event view. Turning routing off rejects new automatic and DSH dispatch, disables verified plugin-owned scheduled tasks, stops idle gateways after active work finishes, and clears CODEX_CLI_PATH only when it still exactly matches this plugin’s install record; a custom user path is preserved. Current Codex does not hot-switch and may need a restart to use the official path. API profile Apply, full restart, and live provider verification remain separate actions.',
         },
       };

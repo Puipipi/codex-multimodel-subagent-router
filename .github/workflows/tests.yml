@@ -27,6 +27,8 @@ jobs:
       - run: node tests/native-upgrade-guard.test.mjs
       - run: node tests/native-api-artifacts.test.mjs
       - run: node tests/docs.test.mjs
+      - run: node tests/router-identity.test.mjs
+      - run: node tests/router-identity-migration.test.mjs
       - run: node scripts/patch-backend-windows.test.mjs
       - name: Plugin tests (only when present)
         run: |
@@ -65,6 +67,8 @@ jobs:
             'native-gateway',
             'native-credentials',
             'native-gateway-account-auth',
+            'router-identity',
+            'router-identity-migration',
             'native-state',
             'native-agent',
             'native-current-model',

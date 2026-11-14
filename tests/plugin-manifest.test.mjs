@@ -15,14 +15,14 @@ const pluginDoc = read('PLUGIN.md');
 const openaiYaml = read('agents/openai.yaml');
 const wrapper = read('scripts/plugin-mcp.mjs');
 
-equal(manifest.name, 'sol-luna-deepseek-router', 'the manifest name matches the plugin folder');
-equal(marketplace.interface.displayName, 'Sol 主控 · 多模型峰谷子代理', 'the marketplace display name is unified');
-equal(marketplace.name, 'sol-luna', 'the marketplace registry name is stable');
-match(openaiYaml, /display_name: "Sol 主控 · 多模型峰谷子代理"/, 'the skill UI display name is unified');
-match(openaiYaml, /default_prompt: "[^"]*\$sol-luna-deepseek-router/, 'the skill default prompt names the canonical skill');
+equal(manifest.name, 'codex-multimodel-subagent-router', 'the manifest name matches the plugin folder');
+equal(marketplace.interface.displayName, 'Codex 主控 · 多模型峰谷子代理', 'the marketplace display name is unified');
+equal(marketplace.name, 'codex-multimodel-subagent-router', 'the marketplace registry name is stable');
+match(openaiYaml, /display_name: "Codex 主控 · 多模型峰谷子代理"/, 'the skill UI display name is unified');
+match(openaiYaml, /default_prompt: "[^"]*\$codex-multimodel-subagent-router/, 'the skill default prompt names the canonical skill');
 match(openaiYaml, /policy:\s*\n\s*allow_implicit_invocation: true/, 'the existing skill invocation policy is preserved');
 match(manifest.version, /^\d+\.\d+\.\d+$/, 'the manifest uses strict semver');
-equal(manifest.version, '0.12.8', 'the plugin manifest is the 0.12.8 candidate');
+equal(manifest.version, '0.13.0', 'the plugin manifest is the 0.13.0 candidate');
 for (const file of [
   'scripts/native-current-model.mjs',
   'scripts/native-execution-lifecycle.mjs',
@@ -46,7 +46,7 @@ equal(manifest.mcpServers, './.mcp.json', 'the manifest points at the MCP compan
 ok(!Object.hasOwn(manifest, 'skills'), 'the plugin does not declare a second scheduling skill');
 ok(!existsSync(new URL('../skills/', import.meta.url)), 'the duplicate bundled skills directory is absent');
 ok(existsSync(new URL('../SKILL.md', import.meta.url)), 'the root canonical standalone skill remains');
-equal(manifest.interface.displayName, 'Sol 主控 · 多模型峰谷子代理', 'the display name is unified');
+equal(manifest.interface.displayName, 'Codex 主控 · 多模型峰谷子代理', 'the display name is unified');
 ok(manifest.interface.shortDescription.length >= 25 && manifest.interface.shortDescription.length <= 64,
   'the short description is within the UI limit');
 ok(manifest.interface.longDescription.length > 50, 'the long description is present');
@@ -67,7 +67,7 @@ doesNotMatch(JSON.stringify(manifest), /hooks/i, 'the manifest does not claim ho
 
 const servers = mcp.mcpServers;
 ok(servers && typeof servers === 'object', '.mcp.json declares mcpServers');
-const server = servers['sol-luna-deepseek-router'];
+const server = servers['codex-multimodel-subagent-router'];
 ok(server, 'the expected MCP server is configured');
 equal(server.command, 'node', 'the MCP server runs under node');
 deepEqualArray(server.args, ['scripts/plugin-mcp.mjs'], 'the MCP server launches the plugin wrapper');

@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "sol-luna-deepseek-router": {
+    "codex-multimodel-subagent-router": {
       "command": "node",
       "args": [
         "scripts/plugin-mcp.mjs"

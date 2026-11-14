@@ -1,5 +1,5 @@
 <!-- agent-procedures-project:begin -->
-## 本项目（sol-luna-deepseek-router）
+## 本项目（codex-multimodel-subagent-router）
 
 - 项目库：`procedures/`；中心库：`procedures/central/`（junction → `~/.agent-procedures/cards`）。
 - 项目特定（项目名、ID、哈希表、数据表、绝对路径、游戏/模组专属版本）只写项目库。

@@ -1,11 +1,11 @@
 {
-  "name": "sol-luna",
+  "name": "codex-multimodel-subagent-router",
   "interface": {
-    "displayName": "Sol 主控 · 多模型峰谷子代理"
+    "displayName": "Codex 主控 · 多模型峰谷子代理"
   },
   "plugins": [
     {
-      "name": "sol-luna-deepseek-router",
+      "name": "codex-multimodel-subagent-router",
       "source": {
         "source": "local",
         "path": "./codex-plugin"

@@ -1,3 +1,7 @@
 # Canonical skill deployment
 
-Install the canonical skill from the repository root, keeping `SKILL.md`, `agents/`, `scripts/`, and referenced `docs/` together. Exclude the root `codex-plugin/` directory when copying into `~/.codex/skills/sol-luna-deepseek-router`: it is a generated plugin projection containing a copy of `SKILL.md`, which Codex may discover as a second skill. Keep `codex-plugin/` intact in plugin marketplace releases; it is the marketplace plugin source.
+The active canonical skill is `~/.codex/skills/codex-multimodel-subagent-router`. Keep SKILL.md, agents/, scripts/, references/ and required docs/ together. Exclude the generated codex-plugin/ subtree; its SKILL.md would create duplicate discovery.
+
+Use the generated plugin bundle as the migration source. The [identity migration tool](identity-migration.md) stages SKILL.pending.md and activates it only after disabling the old plugin and renaming the old discovery entry to SKILL.legacy-disabled.md. Keep the old directory and scripts in place for in-flight absolute references. Do not copy, move or reset the legacy LocalAppData state root.
+
+For local source lookup, scripts/router-identity.mjs prefers the new canonical directory, with old-directory fallback solely for source compatibility. Source lookup never changes backend, provider, model or user settings.

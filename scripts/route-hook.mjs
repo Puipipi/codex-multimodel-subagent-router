@@ -92,9 +92,9 @@ export function notificationKey(route) {
 export function buildNotification(route, at) {
   if (route.executor === 'off') {
     if (route.source === 'guard_disabled') {
-      return `[sol-luna-deepseek-router] API 兼容检查未通过，本轮 API/DeepSeek 子代理不可用；原生模型仍可用。不得自动替换执行器，当前任务由主智能体处理。`;
+      return `[codex-multimodel-subagent-router] API 兼容检查未通过，本轮 API/DeepSeek 子代理不可用；原生模型仍可用。不得自动替换执行器，当前任务由主智能体处理。`;
     }
-    return `[sol-luna-deepseek-router] 已关闭自动子代理分工；Sol 将自行处理本轮任务。已运行任务不会被中断。`;
+    return `[codex-multimodel-subagent-router] 已关闭自动子代理分工；主智能体将自行处理本轮任务。已运行任务不会被中断。`;
   }
   const reason = trimReason(route.reason);
   const schedule = route.phase === 'unknown'
@@ -121,7 +121,7 @@ export function buildNotification(route, at) {
           ? 'fixed executor selection; the peak/valley calendar is not used'
           : 'automatic schedule';
   const timezone = route.timezone || 'Asia/Shanghai';
-  return `[sol-luna-deepseek-router] Schedule: ${schedule}. Configured executor status: ${executor} (${source}). Evaluated at ${at.toISOString()} (${timezone}). This is status context only; native child chats must not start another child. Already running tasks are not interrupted; the notice repeats only after the effective schedule, executor, or API profile changes.`;
+  return `[codex-multimodel-subagent-router] Schedule: ${schedule}. Configured executor status: ${executor} (${source}). Evaluated at ${at.toISOString()} (${timezone}). This is status context only; native child chats must not start another child. Already running tasks are not interrupted; the notice repeats only after the effective schedule, executor, or API profile changes.`;
 }
 
 /**

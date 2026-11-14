@@ -14,6 +14,14 @@ const ROOT_FILES = new Set([
   "README.md", "README_cn.md", "SKILL.md", "PLUGIN.md", "LICENSE",
 ]);
 const GUIDE_DOCS = new Set([
+  "docs/native-deepseek-acceptance-2026-10-17.md", "docs/native-formal-install-2026-10-18.md",
+  "docs/native-stable-gateway-acceptance-2026-10-18.md", "docs/native-desktop-acceptance-0.10.5-2026-10-18.md",
+  "docs/native-plugin-candidate-0.10.5-2026-10-18.md", "docs/native-real-multichat-acceptance-2026-10-18.md",
+  "docs/native-live-route-hook-acceptance-2026-10-18.md", "docs/native-formal-fault-acceptance-2026-10-18.md",
+  "docs/native-api-role-registration-0.11.2-2026-10-19.md", "docs/native-api-catalog-instructions-0.11.3-2026-10-19.md",
+  "docs/native-api-agent-message-0.11.4-2026-10-19.md",
+  "references/execution.md", "references/capabilities.md", "references/history/README.md",
+  "docs/identity-migration.md", "docs/skill-deployment.md",
   "docs/plugin-distribution.md", "docs/native-account-auth.md", "docs/native-api-executors.md", "docs/native-catalog.md",
   "docs/native-connection-diagnostics.md", "docs/native-isolated-cli-build.md", "docs/native-isolated-files.md",
   "docs/native-isolated-install.md", "docs/native-runtime-env.md", "docs/native-timeout.md",
@@ -75,7 +83,7 @@ function parseManifest(bytes, relative) {
 function validateContracts(entries) {
   const byPath = new Map(entries.map((entry) => [entry.path, entry.bytes]));
   const plugin = parseManifest(byPath.get(".codex-plugin/plugin.json"), ".codex-plugin/plugin.json");
-  if (plugin.name !== "sol-luna-deepseek-router" || !/^\d+\.\d+\.\d+$/.test(plugin.version ?? "") || plugin.mcpServers !== "./.mcp.json") {
+  if (plugin.name !== "codex-multimodel-subagent-router" || !/^\d+\.\d+\.\d+$/.test(plugin.version ?? "") || plugin.mcpServers !== "./.mcp.json") {
     throw new Error("unsupported plugin manifest contract");
   }
   const registry = parseManifest(byPath.get(".agents/plugins/marketplace.json"), ".agents/plugins/marketplace.json");

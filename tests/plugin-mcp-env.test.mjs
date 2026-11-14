@@ -74,7 +74,7 @@ const settings = {
 };
 await saveRouterSettings(settingsFile, settings);
 const manifestConfig = JSON.parse(await readFile(path.join(root, ".mcp.json"), "utf8"));
-const allowlist = manifestConfig.mcpServers["sol-luna-deepseek-router"].env_vars;
+const allowlist = manifestConfig.mcpServers["codex-multimodel-subagent-router"].env_vars;
 for (const key of ["CODEX_HOME", "SOL_LUNA_NATIVE_INSTALL_JOURNAL", "SOL_LUNA_NATIVE_API_VERSION_DIR"]) {
   assert.ok(allowlist.includes(key), `${key} must be in the canonical MCP env allowlist`);
 }
