@@ -1,6 +1,6 @@
 {
   "name": "codex-multimodel-subagent-router",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Codex-led native and API subagent routing with immutable ownership, workspace leases, explicit compatibility gates, and no silent backend substitution.",
   "author": {
     "name": "Puipipi",

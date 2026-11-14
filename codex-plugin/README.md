@@ -1,6 +1,6 @@
 # Codex Multimodel Subagent Router
 
-**Codex 主控 · 多模型峰谷子代理** keeps the current conversation and main model while selecting a native or explicitly configured API child. The active plugin, marketplace, MCP server and standalone skill use `codex-multimodel-subagent-router` (0.13.0 candidate).
+**Codex 主控 · 多模型峰谷子代理** keeps the current conversation and main model while selecting a native or explicitly configured API child. The active plugin, marketplace, MCP server and standalone skill use `codex-multimodel-subagent-router` (0.13.1 candidate).
 
 Use `$codex-multimodel-subagent-router`. Ordinary Q&A stays with the lead. File search, edits, debugging and verification follow the configured route; the lead reviews the actual diff and evidence. Manual choice, sticky chat selection, fixed/scheduled routing and exact native models keep their existing semantics. A blocked executor is reported; no silent backend substitution occurs.
 

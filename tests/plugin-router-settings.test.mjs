@@ -90,6 +90,7 @@ class StdioClient {
 const env = {
   ...process.env,
   LOCALAPPDATA: temp,
+  CODEX_HOME: path.join(temp, "codex-home"),
   SOL_LUNA_PLUGIN_STATE: path.join(temp, "plugin-state"),
   DSH_HOME: path.join(temp, "dsh"),
   MIMO_API_KEY: "env-secret-never-returned",

@@ -211,6 +211,7 @@ export const ROUTER_SETTINGS_TOOLS = [
             enabled: {type: 'boolean'},
             mode: {type: 'string', enum: ['auto', 'fixed', 'scheduled']},
             fixedExecutor: {type: 'string'},
+            computerUseExecutor: {type: 'string', description: 'inherit or native:<exact-slug>; computer-use routing only. Catalog presence does not certify computer-use capability.'},
             peak: {type: 'string'},
             valley: {type: 'string'},
           },
@@ -472,6 +473,7 @@ function valuesFor(settings) {
     enabled: settings.enabled !== false,
     mode: settings.mode,
     fixedExecutor: settings.mode === 'fixed' ? settings.fixedExecutor ?? '' : '',
+    computerUseExecutor: settings.computerUseExecutor ?? 'inherit',
     peak: settings.schedule?.peak ?? 'luna',
     valley: settings.schedule?.valley ?? 'deepseek',
   };
@@ -511,6 +513,11 @@ function settingsReadResult(settings, nativeModels = []) {
           enum: enumValues,
           description: '仅固定模式使用。空值表示尚未选择。',
         },
+        computerUseExecutor: {
+          type: 'string', title: '电脑操作模型',
+          enum: [...new Set(['inherit', ...nativeModels.map(model => `native:${model.value}`), settings.computerUseExecutor ?? 'inherit'])],
+          description: '仅电脑操作任务使用；inherit 继承普通路由。目录可选不代表已验证电脑操作能力。',
+        },
         peak: {
           type: 'string',
           title: '高峰执行器',
@@ -524,7 +531,7 @@ function settingsReadResult(settings, nativeModels = []) {
           description: '仅自定义峰谷模式使用。',
         },
       },
-      required: ['enabled', 'mode', 'fixedExecutor', 'peak', 'valley'],
+      required: ['enabled', 'mode', 'fixedExecutor', 'computerUseExecutor', 'peak', 'valley'],
     },
     values: valuesFor(settings),
     layout: [
@@ -534,6 +541,7 @@ function settingsReadResult(settings, nativeModels = []) {
         items: [
           {kind: 'property', property: 'mode'},
           {kind: 'property', property: 'fixedExecutor'},
+          {kind: 'property', property: 'computerUseExecutor'},
           {kind: 'property', property: 'peak'},
           {kind: 'property', property: 'valley'},
         ],
@@ -838,7 +846,7 @@ export function createRouterSettingsService({
 
   async function updateSettingsLocked(args) {
     exactObject(args, new Set(['set', 'expectedSha256']), 'router_settings_update arguments');
-    const set = exactObject(args.set, new Set(['enabled', 'mode', 'fixedExecutor', 'peak', 'valley']), 'set');
+    const set = exactObject(args.set, new Set(['enabled', 'mode', 'fixedExecutor', 'computerUseExecutor', 'peak', 'valley']), 'set');
     if (!Object.keys(set).length) throw new Error('set must contain at least one setting.');
     const expected = args.expectedSha256 === undefined ? undefined : requireHash(args.expectedSha256, 'expectedSha256');
     const current = await readRouterSettingsSnapshot(settingsPath);
@@ -851,6 +859,7 @@ export function createRouterSettingsService({
       if (!['auto', 'fixed', 'scheduled'].includes(set.mode)) throw new Error('mode must be auto, fixed, or scheduled.');
       next.mode = set.mode;
     }
+    if (set.computerUseExecutor !== undefined) next.computerUseExecutor = set.computerUseExecutor;
     if (set.fixedExecutor !== undefined) {
       if (typeof set.fixedExecutor !== 'string') throw new Error('fixedExecutor must be a selector string.');
       if (next.mode !== 'fixed') throw new Error('固定执行器仅在“固定执行器”模式生效；请同时切换模式。');

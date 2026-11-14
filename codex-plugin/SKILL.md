@@ -11,6 +11,8 @@ metadata:
 
 先运行安装目录中的 `node scripts/route.mjs --json`，按返回的有效执行器和状态决定是否派发。一次性选择优先于会话选择，会话选择优先于配置日历；fixed/scheduled、`luna`、`same`、`native:<slug>` 与不可变 API profile 均保留原有解析。默认日历为 2026 年 Asia/Shanghai 工作日峰谷规则，日历与价格规则不是实时价格查询。
 
+涉及 Windows/浏览器实际交互的委派，先运行 `node scripts/route.mjs --task-kind computer-use --json`，按返回的精确 `native_spawn` 派发普通原生 child；该 child 仍遵守 computer-use skill 和用户权限。专用 `computerUseExecutor` 默认为 `inherit`；只影响电脑任务，目录可选不代表电脑操作能力已验收。
+
 ## 五个不变量
 
 1. **模型选择**：原生 Luna 从当前 catalog 解析；`same` 使用当前会话精确模型；`native:<slug>` 必须存在。API 使用不可变 profile ID。不可用就报告，不猜模型、不静默切换 backend、账号或 provider；DSH 仅显式 legacy。

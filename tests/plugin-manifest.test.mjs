@@ -22,7 +22,7 @@ match(openaiYaml, /display_name: "Codex 主控 · 多模型峰谷子代理"/, 't
 match(openaiYaml, /default_prompt: "[^"]*\$codex-multimodel-subagent-router/, 'the skill default prompt names the canonical skill');
 match(openaiYaml, /policy:\s*\n\s*allow_implicit_invocation: true/, 'the existing skill invocation policy is preserved');
 match(manifest.version, /^\d+\.\d+\.\d+$/, 'the manifest uses strict semver');
-equal(manifest.version, '0.13.0', 'the plugin manifest is the 0.13.0 candidate');
+equal(manifest.version, '0.13.1', 'the plugin manifest is the 0.13.1 candidate');
 for (const file of [
   'scripts/native-current-model.mjs',
   'scripts/native-execution-lifecycle.mjs',

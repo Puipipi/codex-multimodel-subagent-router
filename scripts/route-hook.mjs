@@ -7,18 +7,15 @@
  *   calls a model, or touches the network.
  * - It evaluates the published schedule at hook time. There is no timer, so an
  *   idle chat is never woken and no stale backlog is queued.
- * - It injects `additionalContext` only on the first observed state for a chat
- *   and when the effective schedule/executor changes. A per-chat, atomically
- *   written state file plus a short-lived lock deduplicates concurrent hooks.
+ * - It adds one short delegation reminder per host turn_id, independently of
+ *   route changes. UserPromptSubmit normally wins; PreToolUse can fill a missed
+ *   submission. Legacy payloads without turn_id retain change-only notices.
+ *   Atomic per-session state and a lock deduplicate concurrent events.
  *
- * Identity limitations (important):
- * - Codex hook payloads provide `session_id` and `model`, but not a reliable
- *   "main thread vs subagent" role field. Native Luna subagent turns use a
- *   model name containing `luna`, so those turns are suppressed. A main chat
- *   intentionally running a Luna model is therefore also silent. If a host
- *   omits `model`, or names a child model differently, a child session could
- *   receive a notice. State is keyed by the hook `session_id`, so one session
- *   can never consume another session's notification.
+ * Identity limitations:
+ * - A nonempty host agent_id identifies a native child, including default-role
+ *   and same-model children. Explicit legacy child roles remain supported;
+ *   model names alone never establish child identity.
  * - Manual route overrides are stored by route.mjs under the ID passed with
  *   `--session` (commonly `CODEX_THREAD_ID`). Hook `session_id` is not proven
  *   to be the same value on every Codex build. Override lookup therefore
@@ -96,32 +93,17 @@ export function buildNotification(route, at) {
     }
     return `[codex-multimodel-subagent-router] 已关闭自动子代理分工；主智能体将自行处理本轮任务。已运行任务不会被中断。`;
   }
-  const reason = trimReason(route.reason);
-  const schedule = route.phase === 'unknown'
-    ? `unknown${reason ? ` (${reason})` : ''}`
-    : `${route.phase}${reason ? ` (${reason})` : ''}`;
-  const executor = route.executor === 'deepseek'
-    ? 'native DeepSeek gateway'
-    : route.executor === 'api'
-      ? `native API profile ${route.profileLabel || route.profileId || 'unknown'}`
-      : route.executor === 'same'
-        ? `current chat model ${route.native_spawn?.model || 'unknown'}`
-        : route.executor === 'native'
-          ? `Codex model ${route.native_spawn?.model || 'unknown'}`
-          : route.executor === 'luna'
-            ? 'native Luna'
-            : 'native executor';
-  const source = route.source === 'session_override'
-    ? 'sticky chat override; it outranks the automatic schedule'
-    : route.source === 'one_time_override'
-      ? 'one-time explicit override'
-      : route.source === 'calendar_missing'
-        ? 'conservative fallback because the holiday calendar is missing'
-        : route.source === 'fixed'
-          ? 'fixed executor selection; the peak/valley calendar is not used'
-          : 'automatic schedule';
-  const timezone = route.timezone || 'Asia/Shanghai';
-  return `[codex-multimodel-subagent-router] Schedule: ${schedule}. Configured executor status: ${executor} (${source}). Evaluated at ${at.toISOString()} (${timezone}). This is status context only; native child chats must not start another child. Already running tasks are not interrupted; the notice repeats only after the effective schedule, executor, or API profile changes.`;
+  const executor = route.executor === 'api'
+    ? `API ${route.profileLabel || route.profileId || 'unknown'}`
+    : route.executor === 'deepseek' ? 'DeepSeek gateway'
+      : route.executor === 'luna' ? 'Luna'
+        : route.native_spawn?.model || route.executor;
+  return `[codex-multimodel-subagent-router] 路由：${route.phase}；执行器：${executor}；来源：${route.source}。${trimReason(route.reason)}`;
+
+}
+
+export function buildDelegationReminder() {
+  return '项目批量搜索/读取/修改/测试先 route 并委派；主控只管规则、拆分、关键 diff/证据审阅。电脑操作先 route --task-kind computer-use。问答、用户关闭/待命优先；child 不递归。软提示，不自动 spawn。';
 }
 
 /**
@@ -129,6 +111,7 @@ export function buildNotification(route, at) {
  * model. Suppress only explicit role evidence from the hook payload.
  */
 export function isChildExecutor(input, apiProfiles = {}) {
+  if (typeof input?.agent_id === 'string' && input.agent_id.trim()) return true;
   for (const key of ['agent_type', 'agent_role', 'subagent_type']) {
     const value = input?.[key];
     if (typeof value === 'string' && (/luna|deepseek|subagent/i.test(value) || /^native_api_[a-f0-9]{24}$/.test(value))) return true;
@@ -262,14 +245,21 @@ export async function handleHook({
     routerSettings: settings,
   });
   const key = notificationKey(route);
+  // Persist a digest rather than the raw host turn identifier. No synthetic
+  // turn IDs: legacy PreToolUse events must not each become a new turn.
+  const turnId = typeof input?.turn_id === 'string' ? input.turn_id.trim() : '';
+  const turnKey = turnId ? createHash('sha256').update(turnId).digest('hex') : null;
+  const needsReminder = state => route.executor !== 'off'
+    && (turnKey ? state?.lastReminderTurnKey !== turnKey : !state);
+  const needsNotice = state => state?.lastNotifiedKey !== key || needsReminder(state);
   const directory = resolveHookStateDir(hookStateDir);
   await mkdir(directory, { recursive: true });
   const file = path.join(directory, stateFileName(sessionId));
 
-  // Fast path: most PreToolUse calls see no phase/executor change and should
+  // Fast path: most PreToolUse calls see no turn or route change and should
   // not contend for the write lock at all.
   const fastState = await readState(file);
-  if (fastState?.lastNotifiedKey === key) return { output: null, reason: 'unchanged', route };
+  if (!needsNotice(fastState)) return { output: null, reason: 'unchanged', route };
 
   const lockPath = `${file}.lock`;
   if (!await acquireLock(lockPath)) return { output: null, reason: 'busy', route };
@@ -277,12 +267,17 @@ export async function handleHook({
     // Re-check after acquiring the lock: another hook may have just written
     // the same state while this process was waiting.
     const previous = await readState(file);
-    if (previous?.lastNotifiedKey === key) return { output: null, reason: 'unchanged', route };
+    if (!needsNotice(previous)) return { output: null, reason: 'unchanged', route };
 
-    const additionalContext = buildNotification(route, at);
+    const parts = [];
+    if (previous?.lastNotifiedKey !== key) parts.push(buildNotification(route, at));
+    if (needsReminder(previous)) parts.push(buildDelegationReminder());
+    const additionalContext = parts.join('\n');
     const state = {
       version: STATE_VERSION,
       lastNotifiedKey: key,
+      lastReminderTurnKey: needsReminder(previous) && turnKey
+        ? turnKey : previous?.lastReminderTurnKey || null,
       lastNotifiedAt: at.toISOString(),
       lastPhase: route.phase,
       lastExecutor: route.executor,

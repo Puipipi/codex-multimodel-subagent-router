@@ -265,11 +265,11 @@ const peakRoute = {
 };
 const peakAt = new Date(`2026-10-19T09:00:00.000${shanghai}`);
 const peakNotice = buildNotification(peakRoute, peakAt);
-ok(peakNotice.includes('Schedule: peak'), 'notice names the peak phase');
+ok(peakNotice.includes('路由：peak'), 'notice names the peak phase');
 ok(peakNotice.includes('weekday DeepSeek peak-price window'), 'notice carries the schedule reason');
-ok(peakNotice.includes('native Luna'), 'peak notice names native Luna');
-ok(peakNotice.includes('automatic schedule'), 'peak notice names the schedule source');
-ok(peakNotice.includes(peakAt.toISOString()), 'notice includes the evaluated instant');
+ok(peakNotice.includes('Luna'), 'peak notice names native Luna');
+ok(peakNotice.includes('schedule'), 'peak notice names the schedule source');
+ok(peakNotice.length < 300, 'route notice stays compact');
 equal(notificationKey(peakRoute), 'peak|luna|schedule', 'notification key is stable');
 ok(notificationKey({ ...peakRoute, phase: 'valley' }) !== notificationKey(peakRoute), 'phase changes the key');
 ok(notificationKey({ ...peakRoute, source: 'session_override' }) !== notificationKey(peakRoute), 'source changes the key');
@@ -281,9 +281,9 @@ const fixedRoute = {
   timezone: 'Asia/Shanghai',
 };
 const fixedNotice = buildNotification(fixedRoute, peakAt);
-ok(fixedNotice.includes('Schedule: fixed'), 'fixed notice names the fixed phase');
-ok(fixedNotice.includes('fixed executor selection'), 'fixed notice explains the fixed source');
-ok(!fixedNotice.includes('automatic schedule'), 'fixed notice must not claim an automatic schedule');
+ok(fixedNotice.includes('路由：fixed'), 'fixed notice names the fixed phase');
+ok(fixedNotice.includes('fixed'), 'fixed notice explains the fixed source');
+ok(!fixedNotice.includes('schedule'), 'fixed notice must not claim an automatic schedule');
 ok(fixedNotice.includes('calendar not consulted'), 'fixed notice explains that the calendar is unused');
 equal(isChildExecutor({ model: 'gpt-6-luna' }), false, 'a Luna model name alone does not identify a child');
 equal(isChildExecutor({ model: 'deepseek/deepseek-flash' }), false, 'a DeepSeek model name alone does not identify a child');
@@ -326,11 +326,11 @@ try {
   let result = await callHook({
     sessionId, now: `2026-10-19T08:59:59.999${shanghai}`, hookStateDir: boundaryDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: valley'), 'before-peak valley notice');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：valley'), 'before-peak valley notice');
   result = await callHook({
     sessionId, now: `2026-10-19T09:00:00.000${shanghai}`, hookStateDir: boundaryDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: peak'), 'peak boundary notice');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：peak'), 'peak boundary notice');
   result = await callHook({
     sessionId, now: `2026-10-19T09:30:00.000${shanghai}`, hookStateDir: boundaryDir,
   });
@@ -338,7 +338,7 @@ try {
   result = await callHook({
     sessionId, now: `2026-10-19T12:00:00.000${shanghai}`, hookStateDir: boundaryDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: valley'), 'noon valley notice');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：valley'), 'noon valley notice');
   result = await callHook({
     sessionId, now: `2026-10-19T13:59:59.999${shanghai}`, hookStateDir: boundaryDir,
   });
@@ -346,17 +346,17 @@ try {
   result = await callHook({
     sessionId, now: `2026-10-19T14:00:00.000${shanghai}`, hookStateDir: boundaryDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: peak'), 'afternoon peak notice');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：peak'), 'afternoon peak notice');
   result = await callHook({
     sessionId, now: `2026-10-19T18:00:00.000${shanghai}`, hookStateDir: boundaryDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: valley'), 'evening valley notice');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：valley'), 'evening valley notice');
 
   const preTool = await callHook({
     sessionId: 'boundary-pre', event: 'PreToolUse', now: `2026-10-19T10:30:00${shanghai}`, hookStateDir: boundaryDir,
   });
   equal(preTool.output?.hookSpecificOutput.hookEventName, 'PreToolUse', 'PreToolUse output names its event');
-  ok(preTool.output?.hookSpecificOutput.additionalContext.includes('Schedule: peak'), 'PreToolUse gets the current route');
+  ok(preTool.output?.hookSpecificOutput.additionalContext.includes('路由：peak'), 'PreToolUse gets the current route');
   assert.deepEqual(Object.keys(preTool.output).sort(), ['hookSpecificOutput'], 'output has only the hook-specific envelope');
   checks += 1;
   const preToolAgain = await callHook({
@@ -408,9 +408,9 @@ try {
     routerSettings: fixedSettings(fixedA.profileId),
   });
   const firstNotice = result.output?.hookSpecificOutput.additionalContext || '';
-  ok(firstNotice.includes('Schedule: fixed'), 'fixed mode initial notice names the fixed schedule');
+  ok(firstNotice.includes('路由：fixed'), 'fixed mode initial notice names the fixed schedule');
   ok(firstNotice.includes(fixedA.profileId), 'fixed mode notice names the effective profile');
-  ok(!firstNotice.includes('automatic schedule'), 'fixed mode notice never claims an automatic schedule');
+  ok(!firstNotice.includes('schedule'), 'fixed mode notice never claims an automatic schedule');
   ok(firstNotice.includes('calendar not consulted'), 'fixed mode notice explains the calendar is unused');
 
   result = await handleHook({
@@ -431,7 +431,7 @@ try {
   });
   const changedNotice = result.output?.hookSpecificOutput.additionalContext || '';
   ok(changedNotice.includes(fixedB.profileId), 'a changed fixed profile is announced');
-  ok(!changedNotice.includes('automatic schedule'), 'a changed fixed profile still avoids the automatic wording');
+  ok(!changedNotice.includes('schedule'), 'a changed fixed profile still avoids the automatic wording');
 
   result = await handleHook({
     input: inputFor(sessionId),
@@ -455,7 +455,7 @@ try {
   let result = await callHook({
     sessionId: 'weekend-chat', now: `2026-10-17T10:00:00${shanghai}`, hookStateDir: calendarDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: valley'), 'weekend valley notice');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：valley'), 'weekend valley notice');
   result = await callHook({
     sessionId: 'weekend-chat', now: `2026-10-17T11:00:00${shanghai}`, hookStateDir: calendarDir,
   });
@@ -464,18 +464,18 @@ try {
   result = await callHook({
     sessionId: 'holiday-chat', now: `2026-10-02T10:00:00${shanghai}`, hookStateDir: calendarDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: valley'), 'holiday valley notice');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：valley'), 'holiday valley notice');
   ok(result.output?.hookSpecificOutput.additionalContext.includes('Chinese public holiday'), 'holiday reason included');
 
   result = await callHook({
     sessionId: 'unknown-calendar-chat', now: `2027-10-04T10:00:00${shanghai}`, hookStateDir: calendarDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: unknown'), 'unknown calendar phase notice');
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('conservative fallback'), 'unknown calendar fallback explained');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：unknown'), 'unknown calendar phase notice');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('calendar_missing'), 'unknown calendar fallback explained');
   result = await callHook({
     sessionId: 'unknown-calendar-chat', now: `2027-10-04T12:00:00${shanghai}`, hookStateDir: calendarDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: valley'), 'unknown calendar enters known valley');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：valley'), 'unknown calendar enters known valley');
 } finally {
   await rm(calendarDir, { recursive: true, force: true });
 }
@@ -494,22 +494,22 @@ try {
   });
   const overrideAfter = await readFile(overridePath, 'utf8');
   equal(overrideAfter, overrideBefore, 'hook does not modify the manual override');
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('Schedule: peak'), 'manual override still reports the peak schedule');
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('native DeepSeek gateway'), 'manual DeepSeek override is effective');
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('sticky chat override'), 'manual override source is explained');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：peak'), 'manual override still reports the peak schedule');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('DeepSeek gateway'), 'manual DeepSeek override is effective');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('session_override'), 'manual override source is explained');
 
   await decideRoute({ at: peak, setSessionExecutor: 'luna', sessionId, stateDir: manualDir });
   result = await callHook({
     sessionId, now: peak, hookStateDir: manualHookDir, overrideStateDir: manualDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('native Luna'), 'manual Luna override is effective');
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('sticky chat override'), 'manual Luna override source is explained');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('Luna'), 'manual Luna override is effective');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('session_override'), 'manual Luna override source is explained');
 
   await decideRoute({ at: peak, resetSession: true, sessionId, stateDir: manualDir });
   result = await callHook({
     sessionId, now: peak, hookStateDir: manualHookDir, overrideStateDir: manualDir,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('automatic schedule'), 'reset restores the automatic schedule');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('schedule'), 'reset restores the automatic schedule');
   result = await callHook({
     sessionId, now: peak, hookStateDir: manualHookDir, overrideStateDir: manualDir,
   });
@@ -525,7 +525,7 @@ try {
     sessionId: hookKey, now: peak, hookStateDir: manualHookDir,
     overrideStateDir: manualDir, overrideSessionId: routeKey,
   });
-  ok(result.output?.hookSpecificOutput.additionalContext.includes('sticky chat override'), 'override lookup can use a separate chat key');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('session_override'), 'override lookup can use a separate chat key');
   const splitState = JSON.parse(await readFile(stateFile(manualHookDir, hookKey), 'utf8'));
   equal(splitState.lastSource, 'session_override', 'hook state is still keyed by the hook session');
 } finally {
@@ -647,7 +647,7 @@ try {
     scriptPath: path.join(pluginScripts, 'route-hook.mjs'), cwd: unrelated,
   });
   equal(result.status, 0, 'copied plugin hook exits zero from an unrelated cwd');
-  ok(result.stdout.includes('Schedule: valley'), 'copied plugin hook resolves route.mjs beside itself');
+  ok(result.stdout.includes('路由：valley'), 'copied plugin hook resolves route.mjs beside itself');
   result = await runHookProcess({
     input: inputFor('space-chat'), stateDir, overrideStateDir: overrideDir, now,
     scriptPath: path.join(pluginScripts, 'route-hook.mjs'), cwd: unrelated,
@@ -660,7 +660,7 @@ try {
     commandTemplate: hookCommand,
   });
   equal(shell.status, 0, 'quoted shell command exits zero from an unrelated cwd');
-  ok(shell.stdout.includes('Schedule: valley'), 'quoted shell command reaches the hook');
+  ok(shell.stdout.includes('路由：valley'), 'quoted shell command reaches the hook');
   shell = await runHookThroughShell({
     input: shellInput, pluginRoot, cwd: unrelated, stateDir, overrideStateDir: overrideDir, now,
     commandTemplate: hookCommand,
@@ -689,7 +689,7 @@ try {
   assert.deepEqual(Object.keys(parsed.hookSpecificOutput).sort(), ['additionalContext', 'hookEventName'], 'CLI hook envelope has the documented fields');
   checks += 1;
   equal(parsed.hookSpecificOutput.hookEventName, 'UserPromptSubmit', 'CLI output names the event');
-  ok(parsed.hookSpecificOutput.additionalContext.includes('Schedule: valley'), 'CLI output carries the route');
+  ok(parsed.hookSpecificOutput.additionalContext.includes('路由：valley'), 'CLI output carries the route');
 
   result = await runHookProcess({
     input, stateDir: cliDir, now: `2026-10-19T12:00:00${shanghai}`, stdin: true,
@@ -719,7 +719,7 @@ try {
   });
   equal(result.status, 0, 'env override hook exits zero');
   const parsed = JSON.parse(result.stdout.trim());
-  ok(parsed.hookSpecificOutput.additionalContext.includes('sticky chat override'), 'CLI uses inherited CODEX_THREAD_ID for override lookup');
+  ok(parsed.hookSpecificOutput.additionalContext.includes('session_override'), 'CLI uses inherited CODEX_THREAD_ID for override lookup');
   const stored = JSON.parse(await readFile(stateFile(envHookDir, hookKey), 'utf8'));
   equal(stored.lastSource, 'session_override', 'env override is reflected in the route');
 } finally {
@@ -745,6 +745,56 @@ try {
   equal(stored.lastPhase, 'valley', 'concurrent hooks persist the winning route');
 } finally {
   await rm(raceDir, { recursive: true, force: true });
+}
+
+// Host turn IDs drive reminders independently of the route, across both events.
+const turnDir = await mkdtemp(path.join(os.tmpdir(), 'route-hook-turn-'));
+try {
+  const now = new Date(`2026-10-19T12:00:00${shanghai}`);
+  const invoke = (turnId, event = 'UserPromptSubmit', extra = {}, settings) => handleHook({
+    input: { ...inputFor('turn-chat', event), turn_id: turnId, ...extra },
+    now, hookStateDir: turnDir, overrideStateDir: isolatedOverrideDir,
+    routerSettings: settings,
+  });
+  await writeFile(stateFile(turnDir, 'turn-chat'), JSON.stringify({version: 1, lastNotifiedKey: 'valley|deepseek|schedule'}));
+  let result = await invoke('turn-1');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('先 route'), 'first turn receives delegation reminder');
+  ok(!result.output.hookSpecificOutput.additionalContext.includes('路由：'), 'legacy state without reminder field gets reminder even when route is unchanged');
+  ok(result.output.hookSpecificOutput.additionalContext.includes('route --task-kind computer-use'), 'computer use has its own route lookup');
+  equal((await invoke('turn-1', 'PreToolUse')).output, null, 'submission suppresses same-turn tool reminder');
+  equal((await invoke('turn-1')).output, null, 'duplicate submission stays silent');
+  result = await invoke('turn-2');
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('先 route'), 'second turn reminds despite unchanged route');
+  ok(!result.output.hookSpecificOutput.additionalContext.includes('路由：'), 'unchanged route omits full status');
+  result = await invoke('turn-3', 'PreToolUse');
+  ok(result.output, 'tool event fills missing submission');
+  equal((await invoke('turn-3')).output, null, 'late submission does not duplicate tool fallback');
+  const concurrent = await Promise.all(Array.from({ length: 10 }, (_, index) =>
+    invoke('turn-4', index % 2 ? 'PreToolUse' : 'UserPromptSubmit')));
+  equal(concurrent.filter(item => item.output).length, 1, 'concurrent same-turn events emit exactly one reminder');
+  result = await invoke('turn-4', 'PreToolUse', {}, {schemaVersion: 1, mode: 'fixed', fixedExecutor: 'luna'});
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：fixed'), 'route change still reports within same turn');
+  ok(!result.output.hookSpecificOutput.additionalContext.includes('先 route'), 'route change does not repeat same-turn reminder');
+  for (const model of ['gpt-6.1-sol', 'gpt-6-luna']) {
+    result = await invoke('child-turn', 'PreToolUse', {agent_id: 'native-child-id', agent_type: 'default', model});
+    equal(result.reason, 'child_executor', 'agent_id suppresses default-role child regardless of model');
+  }
+  equal(isChildExecutor({agent_id: ' ', agent_type: 'default'}), false, 'empty child ID alone does not identify a child');
+  const off = {schemaVersion: 1, enabled: false, mode: 'fixed', fixedExecutor: 'luna'};
+  result = await invoke('off-turn', 'UserPromptSubmit', {}, off);
+  ok(result.output?.hookSpecificOutput.additionalContext.includes('已关闭'), 'off change reports status');
+  ok(!result.output.hookSpecificOutput.additionalContext.includes('先 route'), 'off does not request delegation');
+  equal((await invoke('off-turn-2', 'UserPromptSubmit', {}, off)).output, null, 'off remains silent across turns');
+  const legacyInput = {...inputFor('legacy-turn-chat'), turn_id: undefined};
+  const legacy = event => handleHook({input: {...legacyInput, hook_event_name: event}, now,
+    hookStateDir: turnDir, overrideStateDir: isolatedOverrideDir});
+  ok((await legacy('UserPromptSubmit')).output, 'legacy payload gets initial context');
+  equal((await legacy('UserPromptSubmit')).output, null, 'legacy submission conservatively deduplicates');
+  equal((await legacy('PreToolUse')).output, null, 'legacy tools do not create synthetic turns');
+  const stored = await readFile(stateFile(turnDir, 'turn-chat'), 'utf8');
+  ok(!stored.includes('turn-4'), 'raw host turn ID is not persisted');
+} finally {
+  await rm(turnDir, {recursive: true, force: true});
 }
 
 // Bad input and unavailable state must fail open, not block the turn.

@@ -146,7 +146,7 @@ async function writeOverride(sessionId, executor, stateDir) {
 }
 
 export async function decideRoute({
-  at = new Date(), executor, setSessionExecutor, mainModel, trustedMainModel = mainModel,
+  at = new Date(), taskKind = 'generic', executor, setSessionExecutor, mainModel, trustedMainModel = mainModel,
   explicitMainModel, currentModelThreadId, guardStatus,
   resetSession = false, sessionId, stateDir, routerSettings, settingsPath,
   readNativeModels = readNativeModelOptions, currentModelResolver = resolveCurrentMainModel,
@@ -171,6 +171,7 @@ export async function decideRoute({
       reason: 'automatic child delegation is disabled in router settings',
     };
   }
+  if (!['generic', 'computer-use'].includes(taskKind)) throw new Error('--task-kind must be generic or computer-use');
   if (executor !== undefined) {
     try { resolveSelector(executor, settings); }
     catch { throw new Error('--executor must be luna, deepseek, or a configured API profile/alias'); }
@@ -211,6 +212,10 @@ export async function decideRoute({
     selector = executor;
     source = 'one_time_override';
     reason = `one-time explicit executor override: ${executor}`;
+  } else if (taskKind === 'computer-use' && settings.computerUseExecutor !== 'inherit') {
+    selector = settings.computerUseExecutor;
+    source = 'computer_use';
+    reason = 'dedicated computer-use native model selection';
   } else {
     const sticky = await readOverride(sessionId, stateDir, settings);
     if (sticky) {
@@ -220,6 +225,9 @@ export async function decideRoute({
     }
   }
   const resolved = resolveSelector(selector, settings);
+  if (taskKind === 'computer-use' && !['native', 'luna', 'same'].includes(resolved.executor)) {
+    throw new Error('Computer-use task requires a native Codex executor; selected API/DeepSeek executor is unavailable for computer use');
+  }
   if (resolved.executor === 'api' || resolved.executor === 'deepseek') {
     const effectiveGuardStatus = guardStatus === undefined ? await readGuardStatus() : guardStatus;
     if (!effectiveRouterEnabled(settings, effectiveGuardStatus, resolved.executor)) {
@@ -260,7 +268,7 @@ export async function decideRoute({
 }
 
 function usage() {
-  return `Usage: node scripts/route.mjs [options]\n\nOptions:\n  --at ISO_DATE                    Evaluate a test or supplied instant\n  --executor SELECTOR             One-task override: luna, deepseek, same, native:<slug>, profile ID, or alias\n  --main-model MODEL               Explicit fallback; live chat metadata takes precedence\n  --session ID                     Chat-specific state key (not a prompt or secret)\n  --set-session-executor SELECTOR  luna, deepseek, same, native:<slug>, profile ID/alias, or auto\n  --settings PATH                  Router settings JSON (default: plugin LocalAppData path)\n  --reset-session                  Clear this chat's sticky override\n  --state-dir PATH                 State root (tests only; default is per-user LocalAppData)\n  --json                           Print one JSON result\n`;
+  return `Usage: node scripts/route.mjs [options]\n\nOptions:\n  --task-kind KIND                generic (default) or computer-use\n  --at ISO_DATE                    Evaluate a test or supplied instant\n  --executor SELECTOR             One-task override: luna, deepseek, same, native:<slug>, profile ID, or alias\n  --main-model MODEL               Explicit fallback; live chat metadata takes precedence\n  --session ID                     Chat-specific state key (not a prompt or secret)\n  --set-session-executor SELECTOR  luna, deepseek, same, native:<slug>, profile ID/alias, or auto\n  --settings PATH                  Router settings JSON (default: plugin LocalAppData path)\n  --reset-session                  Clear this chat's sticky override\n  --state-dir PATH                 State root (tests only; default is per-user LocalAppData)\n  --json                           Print one JSON result\n`;
 }
 
 async function main(argv) {
@@ -271,7 +279,7 @@ async function main(argv) {
     if (arg === '--json') { json = true; continue; }
     if (arg === '--help' || arg === '-h') { process.stdout.write(usage()); return; }
     const fields = {
-      '--at': 'at', '--executor': 'executor', '--main-model': 'explicitMainModel',
+      '--at': 'at', '--task-kind': 'taskKind', '--executor': 'executor', '--main-model': 'explicitMainModel',
       '--session': 'sessionId', '--set-session-executor': 'setSessionExecutor',
       '--state-dir': 'stateDir', '--settings': 'settingsPath',
     };

@@ -14,6 +14,7 @@ jobs:
           node-version: 24
       - run: node tests/route.test.mjs
       - run: node tests/route-hook.test.mjs
+      - run: node tests/computer-use-routing.test.mjs
       - run: node tests/dsh-mcp-client.test.mjs
       - run: node tests/native-api-settings.test.mjs
       - run: node tests/native-api-routing.test.mjs
@@ -95,6 +96,7 @@ jobs:
             'native-api-settings',
             'native-api-routing',
             'router-recovery-models',
+            'computer-use-routing',
             'native-api-protocol',
             'native-api-install',
             'native-api-manager',

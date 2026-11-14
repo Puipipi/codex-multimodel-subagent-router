@@ -331,6 +331,12 @@ footer p + p { margin-top: 3px; }
       <p class="hint">高峰和低谷只读取这一对选择；固定模式不使用它们。</p>
     </fieldset>
 
+    <fieldset class="block" id="computer-use-block">
+      <legend>电脑操作模型</legend>
+      <label class="field"><span>模型</span><select id="computer-use-executor"></select></label>
+      <p class="hint" id="computer-use-hint">仅电脑操作任务使用；继承普通路由或选择当前目录中的原生模型。目录可选不代表已验证电脑操作能力。</p>
+    </fieldset>
+
     <div class="actions">
       <button id="save-route" type="submit" class="primary">保存路由</button>
       <button id="reload-route" type="button" class="ghost" hidden>重新载入</button>
@@ -455,6 +461,12 @@ footer p + p { margin-top: 3px; }
 (() => {
   "use strict";
   const EN = {
+    "所选电脑操作模型不在当前目录中；派发会明确失败，请重新选择。": "The selected computer-use model is missing from the current catalog. Dispatch will fail explicitly; select another model.",
+    "电脑操作模型": "Computer-use model",
+    "继承普通路由": "Inherit general routing",
+    "仅电脑操作任务使用；继承普通路由或选择当前目录中的原生模型。目录可选不代表已验证电脑操作能力。": "For computer-use tasks only: inherit general routing or select a native model from the current catalog. Catalog presence does not certify computer-use capability.",
+    "模型目录为空；可保留继承普通路由，暂时无法选择专用模型。": "The model catalog is empty. Keep general routing; a dedicated model cannot be selected yet.",
+
     "模型目录不可用或所选模型缺失，无法委派。": "The model catalog is unavailable or the selected model is missing; delegation cannot proceed.",
     "当前聊天模型未知，无法委派。": "The current chat model is unknown; delegation cannot proceed.",
     "这是已保存配置。只检查本地配置，不发送模型请求。": "This is the saved configuration. Only local configuration is checked; no model request is sent.",
@@ -1155,8 +1167,18 @@ footer p + p { margin-top: 3px; }
     const options = Array.isArray(snapshot.selectors) ? snapshot.selectors : [];
     for (const input of modeInputs) input.checked = input.value === settings.mode;
     fillSelect(byId("fixed-executor"), options, settings.fixedExecutor || "", "选择执行器");
+    const computerModels = (snapshot.nativeModels || []).map(model => ({value: `native:${model.value}`, title: model.title || model.label || model.value, kind: "native"}));
+    fillSelect(byId("computer-use-executor"), [{value: "inherit", title: "继承普通路由"}, ...computerModels], settings.computerUseExecutor || "inherit");
+    byId("computer-use-hint").textContent = computerModels.length
+      ? "仅电脑操作任务使用；继承普通路由或选择当前目录中的原生模型。目录可选不代表已验证电脑操作能力。"
+      : "模型目录为空；可保留继承普通路由，暂时无法选择专用模型。";
     fillSelect(byId("peak-executor"), options, settings.schedule?.peak || "luna");
     fillSelect(byId("valley-executor"), options, settings.schedule?.valley || "deepseek");
+    const computerSelection = settings.computerUseExecutor || "inherit";
+    if (computerSelection !== "inherit" && !computerModels.some(model => model.value === computerSelection)) {
+      byId("computer-use-executor").selectedOptions[0].disabled = true;
+      byId("computer-use-hint").textContent = "所选电脑操作模型不在当前目录中；派发会明确失败，请重新选择。";
+    }
     renderMode();
     renderProfiles(settings.profiles || {});
     const contextNote = byId("context-window-note");
@@ -1417,6 +1439,7 @@ footer p + p { margin-top: 3px; }
       ...state.snapshot.settings,
       profiles: {...(state.snapshot.settings.profiles || {})},
       enabled: byId("router-enabled").checked,
+      computerUseExecutor: byId("computer-use-executor").value || "inherit",
       mode,
     };
     if (mode === "fixed") {
@@ -1652,6 +1675,7 @@ footer p + p { margin-top: 3px; }
     markDirty();
   }));
   byId("fixed-executor").addEventListener("change", markDirty);
+  byId("computer-use-executor").addEventListener("change", markDirty);
   byId("peak-executor").addEventListener("change", markDirty);
   byId("valley-executor").addEventListener("change", markDirty);
   byId("router-enabled").addEventListener("change", markDirty);
