@@ -269,7 +269,20 @@ export async function handleHook({
   if (!needsNotice(fastState)) return { output: null, reason: 'unchanged', route };
 
   const lockPath = `${file}.lock`;
-  if (!await acquireLock(lockPath)) return { output: null, reason: 'busy', route };
+  let acquired;
+  try {
+    acquired = await acquireLock(lockPath);
+  } catch (error) {
+    // A Windows contender may see EPERM while the completed writer deletes
+    // its lock, then ENOENT on stat. Only committed notification state can
+    // confirm that this event needs no work; other permission errors survive.
+    if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error.code)) {
+      const settledState = await readState(file).catch(() => null);
+      if (!needsNotice(settledState)) return { output: null, reason: 'unchanged', route };
+    }
+    throw error;
+  }
+  if (!acquired) return { output: null, reason: 'busy', route };
   try {
     // Re-check after acquiring the lock: another hook may have just written
     // the same state while this process was waiting.

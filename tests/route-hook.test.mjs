@@ -769,6 +769,8 @@ try {
   result = await invoke('turn-3', 'PreToolUse');
   ok(result.output, 'tool event fills missing submission');
   equal((await invoke('turn-3')).output, null, 'late submission does not duplicate tool fallback');
+  // Bounded replay of the Windows open/delete race seen in CI. This raises
+  // reproduction probability; it does not deterministically inject EPERM.
   for (const raceTurn of ['turn-race-1', 'turn-race-2', 'turn-4']) {
     const concurrent = await Promise.all(Array.from({ length: 10 }, (_, index) =>
       invoke(raceTurn, index % 2 ? 'PreToolUse' : 'UserPromptSubmit')));
