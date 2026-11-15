@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtemp,mkdir,readFile,writeFile,rm,readdir} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,writeFile,rm,readdir,realpath} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {prepareIdentityMigration,beginIdentityMigration,activateIdentityMigration,rollbackIdentityMigration} from '../scripts/migrate-router-identity.mjs';
 import {ROUTER_ID,LEGACY_STORAGE_ID,PLUGIN_KEY,LEGACY_PLUGIN_KEY} from '../scripts/router-identity.mjs';
 
-const root=await mkdtemp(path.join(os.tmpdir(),'router-identity-migration-'));
+// Windows CI may expose an 8.3 TEMP path; fixtures must use its canonical
+// directory so the production migration path guard remains strict.
+const root=await mkdtemp(path.join(await realpath(os.tmpdir()),'router-identity-migration-'));
 const sha=s=>createHash('sha256').update(s).digest('hex');
 async function fixture(name,oldEnabled=true,crlf=false) {
  const dir=path.join(root,name),skillsRoot=path.join(dir,'skills'),bundle=path.join(dir,'bundle');
