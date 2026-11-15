@@ -769,9 +769,11 @@ try {
   result = await invoke('turn-3', 'PreToolUse');
   ok(result.output, 'tool event fills missing submission');
   equal((await invoke('turn-3')).output, null, 'late submission does not duplicate tool fallback');
-  const concurrent = await Promise.all(Array.from({ length: 10 }, (_, index) =>
-    invoke('turn-4', index % 2 ? 'PreToolUse' : 'UserPromptSubmit')));
-  equal(concurrent.filter(item => item.output).length, 1, 'concurrent same-turn events emit exactly one reminder');
+  for (const raceTurn of ['turn-race-1', 'turn-race-2', 'turn-4']) {
+    const concurrent = await Promise.all(Array.from({ length: 10 }, (_, index) =>
+      invoke(raceTurn, index % 2 ? 'PreToolUse' : 'UserPromptSubmit')));
+    equal(concurrent.filter(item => item.output).length, 1, 'concurrent same-turn events emit exactly one reminder');
+  }
   result = await invoke('turn-4', 'PreToolUse', {}, {schemaVersion: 1, mode: 'fixed', fixedExecutor: 'luna'});
   ok(result.output?.hookSpecificOutput.additionalContext.includes('路由：fixed'), 'route change still reports within same turn');
   ok(!result.output.hookSpecificOutput.additionalContext.includes('先 route'), 'route change does not repeat same-turn reminder');

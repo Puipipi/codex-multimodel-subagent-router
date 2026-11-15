@@ -176,7 +176,11 @@ async function acquireLock(lockPath) {
       }
       return true;
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      // Windows may report an existing/delete-pending lock as EPERM/EACCES
+      // instead of EEXIST. Treat it as contention only if stat confirms the
+      // lock; an absent path or a real permission error must still surface.
+      const windowsContention = process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error.code);
+      if (error.code !== 'EEXIST' && !windowsContention) throw error;
       try {
         const info = await stat(lockPath);
         if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
@@ -184,7 +188,10 @@ async function acquireLock(lockPath) {
           continue;
         }
       } catch (statError) {
-        if (statError.code === 'ENOENT') continue;
+        if (statError.code === 'ENOENT') {
+          if (windowsContention) throw error;
+          continue;
+        }
         throw statError;
       }
       if (Date.now() >= deadline) return false;

@@ -1,8 +1,14 @@
-# 安装身份迁移与回滚（0.13.0 候选）
+# 安装身份迁移与回滚（0.13.1）
 
 仅本插件的安装与显示身份改为 `codex-multimodel-subagent-router` / “Codex 主控 · 多模型峰谷子代理”。registry、插件 key、MCP key 和 canonical skill 目录一致。旧 `sol-luna-deepseek-router` 是持久存储/协议兼容身份，不是待清理的数据目录。
 
 保留所有旧 state 路径、settings、profile IDs/roles、ownership/租约、child/model/provider 绑定、nonce、schemas、managed markers、scheduler task、env/header keys。不复制或双写 state，不重新计算任何身份，不修改模型选择、API guard、用户开关、凭据或 runtime。旧 cache 不删除，旧 skill 目录和 scripts 保留；只把旧 SKILL.md 改为 SKILL.legacy-disabled.md。
+
+## 选择安装路径
+
+首次安装且没有启用旧标识时，按 [README](../README_cn.md) 的新标识命令安装。旧 `sol-luna-deepseek-router@sol-luna` 已启用时必须按下文先禁旧、再安装新插件；单独 `plugin add` 不会自动禁旧。下文迁移 helper 同时切换旧独立 Skill，要求旧 `<codex-home>/skills/sol-luna-deepseek-router/SKILL.md` 存在；若只有旧插件而无旧独立 Skill，不要伪造 Skill 或运行 helper。先在实际 Codex home 的 `config.toml` 中仅把 `[plugins."sol-luna-deepseek-router@sol-luna"]` 下的 `enabled = true` 改成 `enabled = false`，保留其余内容与旧 cache；用 `codex plugin list --json` 读回旧标识 disabled 后，再使用首次安装路径。当前官方 CLI 没有 `plugin disable` 子命令；不要误用旧标识的 add。
+
+已使用新标识但更换解压路径时，先用官方 `codex plugin marketplace remove codex-multimodel-subagent-router` 移除旧来源注册，再 `marketplace add <新解压根目录>`、`plugin add codex-multimodel-subagent-router@codex-multimodel-subagent-router`。官方 0.169 隔离实测该操作保留旧/新缓存和旧插件 disabled 状态；不是卸载插件。若继续原目录，可直接更新该目录后 add，无需换来源。迁移 begin/activate 期间不要变更来源；所有来源变更必须先于 prepare 的 config hash 快照。
 
 ## 工具边界
 

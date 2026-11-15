@@ -18,14 +18,20 @@ Old 0.10/0.11 installation, authorization, fault and acceptance records remain i
 
 Install the standalone skill at `~/.codex/skills/codex-multimodel-subagent-router`, keeping scripts and references together. Exclude `codex-plugin/` from canonical skill deployment to avoid duplicate discovery. The optional plugin has no `skills/` directory or manifest `skills` entry; marketplace source is its generated `codex-plugin/` projection.
 
-For a fresh local marketplace installation:
+Download the current [ZIP](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/codex-multimodel-subagent-router.zip) and [SHA256SUMS.txt](https://github.com/Puipipi/codex-multimodel-subagent-router/releases/latest/download/SHA256SUMS.txt), verify the hash and extract the ZIP to a persistent directory. Use the extracted root containing `.agents/plugins/marketplace.json`; its plugin source is `./codex-plugin`. Both manifests must show `codex-multimodel-subagent-router` version `0.13.1`.
+
+**Fresh installation only** (no enabled `sol-luna-deepseek-router@sol-luna`):
 
 ```powershell
 codex plugin marketplace add <repo-root>
 codex plugin add codex-multimodel-subagent-router@codex-multimodel-subagent-router
 ```
 
-Existing installations must use the [identity migration and rollback guide](docs/identity-migration.md). Never install two enabled routing plugins or discover two canonical skills. The old skill directory keeps its scripts for in-flight absolute references; only its SKILL discovery entry is disabled. Old cache is retained.
+**Upgrading from 0.12.8 / the old identity:** use the [identity migration and rollback guide](docs/identity-migration.md) before running `plugin add`. The fresh-install commands do not disable an existing old plugin. The guide disables old first, installs new and switches the unique skill; old cache/scripts remain.
+
+**Updating an already renamed installation:** keep its registered extraction path, replace the extracted files with the verified new ZIP, then run `codex plugin add codex-multimodel-subagent-router@codex-multimodel-subagent-router`. If using a different extraction path, first run `codex plugin marketplace remove codex-multimodel-subagent-router`, then the two fresh-install commands above with the new root. Official 0.169 isolated checks confirmed marketplace removal retains plugin cache and leaves the old identity disabled. Do not run `plugin remove` or re-add the old identity. Check `codex plugin list --json`: new identity must be enabled at 0.13.1, old identity absent or disabled. Review new hooks through the official `/hooks` path; trust is never automatic.
+
+Existing old-identity installations must use the [identity migration and rollback guide](docs/identity-migration.md). Never install two enabled routing plugins or discover two canonical skills. The old skill directory keeps its scripts for in-flight absolute references; only its SKILL discovery entry is disabled. Old cache is retained.
 
 The durable `sol-luna-deepseek-router` state root and all protocol/schema, profile/role, ownership, lease, nonce, managed marker, task, env and header identities remain unchanged. No state copy, double write, rehash or model/guard/user-switch change is part of this rename.
 
